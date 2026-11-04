@@ -8,7 +8,7 @@ Trebell Native owns the model and tool loop, with an emphasis on verified engine
 
 ## Download
 
-Get the desktop application from [GitHub Releases](https://github.com/tanishqbaweja/TrebCode/releases/latest).
+Download the [release build](https://github.com/tanishqbaweja/TrebCode/releases/latest) for your operating system and install it. (Windows has been tested end to end; macOS and Linux have not been tested end to end.)
 
 | System | Download | Install |
 | --- | --- | --- |
@@ -22,13 +22,16 @@ The release title and download names are unnumbered. Packages are unsigned; macO
 
 Git is recommended for repository features. Development tools used by a project must be installed on the machine or selected environment. Desktop downloads include the application runtime; building from source additionally requires Node.js and npm.
 
-## First use
+## Setup guide
 
-1. Launch Trebell Code and open a project folder.
-2. Choose **Trebell Native** and a model provider in **Settings → Agents & models**.
-3. Add your provider API key, then select an available model in the composer.
-4. Describe the work, choose the permission mode, and send the task.
-5. Review changes in Files, Diff, and Git; use the terminal and Browser to verify the result.
+After installing the release build:
+
+1. Launch Trebell Code.
+2. Open an existing project folder, or choose an empty folder for a new project.
+3. Open **Settings → Agents & models**, choose **Trebell Native**, and select your model provider.
+4. Add your provider API key, then select an available model in the composer. You need your own provider account and API access.
+5. Describe the work, choose the permission mode, and send the task.
+6. Review changes in Files, Diff, and Git; use the terminal and Browser to run the project's commands and verify the result.
 
 Trebell Native supports OpenAI, Anthropic, Google Gemini, xAI, the Meta Model API, and configured compatible providers. Each provider uses your own account and key. An environment variable such as `OPENAI_API_KEY` or `META_API_KEY` can be used instead of a saved key. Model availability depends on that provider and account.
 
@@ -148,3 +151,5 @@ Provider credentials belong in the application settings or supported environment
 Offline tests use synthetic credentials, never account keys. Source history is checked with Gitleaks before release builds. Do not put real credentials into fixtures or issue reports.
 
 Report reproducible problems through [GitHub Issues](https://github.com/tanishqbaweja/TrebCode/issues), including your operating system, harness/provider, reproduction steps, and sanitized logs. Never include API keys or private project contents.
+
+The narration in the demo video uses text-to-speech.
