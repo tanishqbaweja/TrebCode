@@ -152,4 +152,6 @@ Offline tests use synthetic credentials, never account keys. Source history is c
 
 Report reproducible problems through [GitHub Issues](https://github.com/tanishqbaweja/TrebCode/issues), including your operating system, harness/provider, reproduction steps, and sanitized logs. Never include API keys or private project contents.
 
+## Demo Video
+
 The narration in the demo video uses text-to-speech.
