@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir,writeFile } from "node:fs/promises";
+import { mkdir,readFile,writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join,resolve } from "node:path";
 import { _electron as electron,expect } from "@playwright/test";
@@ -19,6 +19,10 @@ state.updateSettings({onboardingComplete:true,agentRuntime:"native",agentRuntime
   defaultWorkspaceMode:"current",autoPull:false,agentRuntimeInstances:["codex","claude","cursor","grok","opencode","antigravity","muse"].map(kind=>({
     id:kind+"-default",kind,displayName:kind,enabled:true,binaryPath:join(root,"unavailable",kind),homePath:join(root,"runtime-homes",kind),
   }))});state.close();
+// Let the packaged backend supply the mode; do not seed the host checkout's default into this profile.
+const stateFile=join(home,"ui-state.json"),savedState=JSON.parse(await readFile(stateFile,"utf8"));
+delete savedState.settings.appearanceMode;
+await writeFile(stateFile,JSON.stringify(savedState,null,2));
 const executablePath=resolve(process.env.TREBELL_SMOKE_EXECUTABLE||process.argv[2]||"");
 if(executablePath===resolve(""))throw new Error("Set TREBELL_SMOKE_EXECUTABLE to the packaged application executable.");
 let app,page;
@@ -28,6 +32,8 @@ try{
   page=await app.firstWindow({timeout:60_000});page.setDefaultTimeout(15_000);
   page.on("pageerror",error=>errors.push(error.message));
   await expect(page.getByTestId("composer")).toBeVisible({timeout:60_000});
+  const packagedState=await (await page.request.get(new URL("/api/state",page.url()).href)).json();
+  assert.equal(packagedState.settings.appearanceMode,"light","The packaged backend must supply the light default.");
   await expect(page.locator("html")).toHaveAttribute("data-mode","light");
   const packaged=await app.evaluate(({app})=>({packaged:app.isPackaged,path:app.getAppPath()}));
   assert.equal(packaged.packaged,true);assert.match(packaged.path,/app\.asar$/);
