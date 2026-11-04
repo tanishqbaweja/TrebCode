@@ -1,0 +1,149 @@
+import React,{useEffect,useMemo,useRef,useState} from "react";
+import { HelpCircle, Paperclip, X } from "lucide-react";
+import { answeringClick } from "../approval-utils.js";
+import { ignorePressRest } from "./ThreadSidebar.jsx";
+
+// Modal focus: move focus into the dialog when it opens and keep Tab/Shift+Tab inside it, so keyboard users cannot
+// reach (and activate) controls behind the backdrop. Focus that sits inside another open modal is left alone, the questions the
+// app asks in its own <dialog> (Rename, Link pull request) among them.
+function useModalFocus(ref,active,focusOnOpen=true){
+  useEffect(()=>{
+    const node=ref.current;if(!active||!node)return;
+    if(focusOnOpen&&!node.contains(document.activeElement))node.focus({preventScroll:true});
+    const onKey=event=>{
+      if(event.key!=="Tab"||event.defaultPrevented)return;
+      const current=document.activeElement,owner=current?.closest?.('[aria-modal="true"],dialog[open]');
+      if(owner&&owner!==node)return;
+      const items=[...node.querySelectorAll("button,input,select,textarea,a[href],[tabindex]")].filter(item=>item.tabIndex>=0&&!item.disabled&&item.getClientRects().length);
+      if(!items.length){event.preventDefault();node.focus();return}
+      const first=items[0],last=items[items.length-1];
+      if(!node.contains(current)||current===node){event.preventDefault();(event.shiftKey?last:first).focus()}
+      else if(event.shiftKey&&current===first){event.preventDefault();last.focus()}
+      else if(!event.shiftKey&&current===last){event.preventDefault();first.focus()}
+    };
+    document.addEventListener("keydown",onKey,true);
+    return()=>document.removeEventListener("keydown",onKey,true);
+  },[ref,active,focusOnOpen]);
+}
+
+// Escape answers the dialog as its Cancel does, with the keyboard in it or on the page behind it, but not in another open modal (the
+// app's own <dialog> questions keep their Escape). Only a press of its own counts, so the next question, which comes up in its place,
+// waits for the person: a held key's repeats, a press within the double-click time (500 ms) of the Escape before it, and one within
+// that time of this dialog coming up (the second Escape of two that answered an app request shown first, or one pressed for what was
+// there before) answer nothing. The Escape it takes goes no further, as the palette's and the menus' do: a shortcut bound to Escape
+// does not run too once the last request is answered.
+let lastEscape=-1e9;
+function useEscapeToCancel(ref,active,cancelRef){
+  useEffect(()=>{
+    const node=ref.current;if(!active||!node)return;
+    const shownAt=performance.now();
+    const onKey=event=>{
+      if(event.key!=="Escape"||event.defaultPrevented)return;
+      const owner=document.activeElement?.closest?.('[aria-modal="true"],dialog[open]');
+      if(owner&&owner!==node)return;
+      event.preventDefault();event.stopPropagation();
+      const again=event.repeat||event.timeStamp-lastEscape<500||event.timeStamp-shownAt<500;lastEscape=event.timeStamp;
+      if(!again)cancelRef.current?.(event);
+    };
+    document.addEventListener("keydown",onKey,true);
+    return()=>document.removeEventListener("keydown",onKey,true);
+  },[ref,active,cancelRef]);
+}
+
+// Browser uploads are stored as "<timestamp>-<hash>-<name>"; show the original name, like the composer shelf does.
+function attachmentName(path){
+  const name=String(path||"").split(/[\\/]/).pop()||"attachment";
+  return name.replace(/^\d{10,}-[0-9a-f]{8}-(?=.)/i,"");
+}
+// A long name lost its end (and so its extension) to the chip's ellipsis; keep a short extension visible after it.
+function attachmentParts(path){
+  const name=attachmentName(path),dot=name.lastIndexOf(".");
+  return dot>0&&name.length-dot<=10?[name.slice(0,dot),name.slice(dot)]:[name,""];
+}
+
+// A press answers the question, or takes a file away, once, as a queued follow-up's buttons run: the rest of it (the second click of
+// a double click, Enter held) does nothing, so it never lands on what comes under the pointer once the dialog or the file has gone:
+// a word of the page behind, which it would select, or the next file's ×, which would take that file away too. A double click whose
+// pointer moved a few pixels is two clicks of their own to the browser, so a file's × also takes only a click aimed at its file
+// (answeringClick), as Submit and Cancel do.
+function pressOnce(event){if(event.target.closest("button"))ignorePressRest(!event.detail)}
+
+// A choice answers with its value where the agent gives one (Antigravity's option id), so two choices of one name stay apart, and with
+// its name otherwise.
+function choiceValue(option){return String(option?.value||option?.label||"")}
+
+// threadLabel names the task that asked when it is not the open thread; waiting counts the questions after this one.
+export default function QuestionModal({request,threadLabel="",waiting=0,onSubmit,onCancel,pickFiles}){
+  const questions=request?.params?.questions||[];
+  const initial=useMemo(()=>Object.fromEntries(questions.map(q=>[q.id,[]])),[request]);
+  const [answers,setAnswers]=useState(initial);
+  const [filesByQuestion,setFilesByQuestion]=useState(()=>Object.fromEntries(questions.map(q=>[q.id,[]])));
+  const [busy,setBusy]=useState("");
+  const [submitError,setSubmitError]=useState("");
+  const [attachError,setAttachError]=useState("");
+  const dialogRef=useRef(null),cancelRef=useRef(null);
+  // Each question gets a modal of its own (App keys it by the request), so the next one starts from a clean slate and with the focus
+  // on the dialog, not on the button that answered the one before: a second Enter, or the second click of a double click
+  // (answeringClick), answers nothing.
+  useEffect(()=>{if(submitError||attachError)dialogRef.current?.querySelector(".inline-error")?.scrollIntoView?.({block:"nearest"})},[submitError,attachError]);
+  useModalFocus(dialogRef,Boolean(request));
+  useEscapeToCancel(dialogRef,Boolean(request),cancelRef);
+  if(!request)return null;
+  const fileCount=Object.values(filesByQuestion).reduce((sum,items)=>sum+(items?.length||0),0);
+  // A part is answered by a choice, words of the person's own or a file. Submit waits for every part (one the harness marks optional
+  // excepted), since an empty answer would go to the agent as if it were the person's.
+  const unanswered=questions.some(q=>q.required!==false&&!(answers[q.id]||[]).some(value=>String(value).trim())&&!(filesByQuestion[q.id]||[]).length);
+  // The files a pick uploads go with this question's answer as they are taken (keep), so one refused from the same pick (too large,
+  // an upload that failed) is said beside the files that did go, as the composer keeps what it took.
+  async function attach(questionId){
+    if(fileCount>=100)return;
+    setBusy(questionId);setAttachError("");
+    const keep=picked=>{
+      if(!picked?.length)return;
+      setFilesByQuestion(prev=>{
+        const room=Math.max(0,100-Object.values(prev).reduce((sum,items)=>sum+(items?.length||0),0));
+        const next=[...new Set([...(prev[questionId]||[]),...picked.slice(0,room)])];
+        return {...prev,[questionId]:next};
+      });
+    };
+    try{await pickFiles?.(Math.max(0,100-fileCount),keep)}
+    catch(error){setAttachError("Could not attach files: "+(error?.message||String(error)))}
+    finally{setBusy("")}
+  }
+  async function cancel(event){
+    if(busy||!answeringClick(event))return;
+    setAttachError("");setSubmitError("");setBusy("cancel");
+    try{await onCancel?.()}
+    catch(error){setSubmitError(error?.message||String(error))}
+    finally{setBusy("")}
+  }
+  cancelRef.current=cancel;
+  function chooseOption(q,choice){
+    setAnswers(prev=>{
+      const current=prev[q.id]||[];
+      if(q.allowMultiple){const selected=current.includes(choice)?current.filter(value=>value!==choice):[...current,choice];return {...prev,[q.id]:selected}}
+      return {...prev,[q.id]:[choice]};
+    });
+  }
+  function setCustom(q,value){
+    setAnswers(prev=>{
+      const current=(prev[q.id]||[]).filter(answer=>q.options?.some(option=>choiceValue(option)===answer));
+      return {...prev,[q.id]:value?[...current,value]:current};
+    });
+  }
+  return <div className="modal-backdrop"><div className="question-modal" role="dialog" aria-modal="true" aria-labelledby="question-modal-title" ref={dialogRef} tabIndex={-1} onClick={pressOnce}>
+    <div className="modal-head"><div><span className="modal-head-icon"><HelpCircle size={16}/></span><strong id="question-modal-title">Agent needs input</strong></div><button className="modal-close" onClick={cancel} disabled={Boolean(busy)} aria-label="Close question" title="Close question"><X size={16}/></button></div>
+    {threadLabel&&<p className="question-thread" data-testid="question-thread">Waiting in {threadLabel}</p>}
+    {questions.map(q=><div className="question-block" key={q.id}><label>{q.header&&<small>{q.header}</small>}<strong>{q.question}</strong></label>
+      {q.options?.length>0&&<div className={"question-options"+(q.allowMultiple?" multiple":"")}>{q.options.map(opt=><button className={answers[q.id]?.includes(choiceValue(opt))?"active":""} aria-pressed={Boolean(answers[q.id]?.includes(choiceValue(opt)))} key={choiceValue(opt)} onClick={()=>chooseOption(q,choiceValue(opt))}>{opt.label}{opt.description&&<span>{opt.description}</span>}</button>)}</div>}
+      {/* A question only its own choices answer (allowCustomAnswer false) takes no words or files of the person's own. */}
+      {(q.allowCustomAnswer!==false||!q.options?.length)&&<>
+      <input className="tb-input" placeholder="Custom answer…" value={answers[q.id]?.find(a=>!q.options?.some(o=>choiceValue(o)===a))||""} onChange={e=>setCustom(q,e.target.value)}/>
+      <div className="question-files">{(filesByQuestion[q.id]||[]).map(path=>{const [stem,ext]=attachmentParts(path);return <span key={path} title={path}><Paperclip size={11}/><em>{stem}</em>{ext&&<em className="question-file-ext">{ext}</em>}<button type="button" title="Remove attachment" onClick={event=>answeringClick(event)&&setFilesByQuestion(prev=>({...prev,[q.id]:(prev[q.id]||[]).filter(item=>item!==path)}))}><X size={11}/></button></span>})}<button type="button" className="tb-btn tb-btn--sm question-attach" onClick={()=>attach(q.id)} disabled={busy===q.id||fileCount>=100}><Paperclip size={13}/> {busy===q.id?"Choosing…":"Attach files"}</button></div>
+      </>}
+    </div>)}
+    {attachError&&<div className="inline-error" role="alert">{attachError}</div>}
+    {submitError&&<div className="inline-error" role="alert">{submitError}</div>}
+    <div className="modal-actions"><span>{[fileCount?`${fileCount}/100 attached`:"",waiting>0?`${waiting} more waiting`:""].filter(Boolean).join(" · ")}</span><button className="tb-btn" onClick={cancel} disabled={Boolean(busy)}>{busy==="cancel"?"Cancelling…":"Cancel"}</button><button className="tb-btn tb-btn--primary primary" disabled={Boolean(busy)||unanswered} title={unanswered?"Answer every question to submit":undefined} onClick={async event=>{if(!answeringClick(event))return;setAttachError("");setSubmitError("");setBusy("submit");try{await onSubmit(answers,filesByQuestion)}catch(error){setSubmitError(error?.message||String(error))}finally{setBusy("")}}}>{busy==="submit"?"Submitting…":"Submit"}</button></div>
+  </div></div>;
+}

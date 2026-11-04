@@ -1,0 +1,514 @@
+// A harness's status check (AgentRuntimeManager probe) as Settings, a harness switch and a chat start read it:
+// - each CLI's --version gets its own time budget (Claude Code 30 s, OpenCode 10 s, the others 6 s), and on this machine one that runs
+//   out of time or exits with an error reads installed, never "not installed" (only a command that is not there does);
+// - Claude Code, Cursor, Grok and Antigravity may then start; an OpenCode is not ready without its version, which picks the client
+//   that talks to it; each of these answers is kept for a minute, as a ready one is, so a hung CLI costs its wait once a minute; and
+//   Codex's account read, which has 25 s of its own, decides after a check that ran out of time (one that exited with an error is
+//   not ready);
+// - Grok's checks run with its updater off, and its sessions keep their environment;
+// - a logged-out `grok models` is read once more, as Grok refreshes an expired token in the same process;
+// - a Claude Code profile with a custom API endpoint is not called signed out.
+// Stubbed process runners (the manager's runFn, a remote environment's executeArgv) and scripts of the test's own standing in for
+// Grok and for Codex's app-server: no real harness is started or signed in.
+import test from "node:test";
+import assert from "node:assert/strict";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WebSocket } from "ws";
+import { AgentRuntimeManager, parseGrokModelsAuth, withProbeAdvice } from "../src/agent-runtime-manager.mjs";
+import { AgentThreadStore } from "../src/agent-thread-store.mjs";
+import { attachAgentRelay } from "../src/agent-relay.mjs";
+import { createGuiServer } from "../src/gui-server.mjs";
+import { generateTextWithHarness } from "../src/harness-text-generation.mjs";
+import { TrebellStateStore } from "../src/trebell-state.mjs";
+import { GROK_MODELS_SIGNED_IN, GROK_MODELS_SIGNED_OUT } from "./fixtures/grok-cli-output.mjs";
+
+// What the manager's run() gives: an answer, a check it stopped at its timeout, and a command that exited with an error.
+const answered=stdout=>({ok:true,code:0,error:null,stdout,stderr:""});
+const TIMED_OUT=Object.freeze({ok:false,code:null,error:"probe timed out",stdout:"",stderr:""});
+const exited=(code,stderr)=>({ok:false,code,error:null,stdout:"",stderr});
+// A command that answers after ms: its answer within the timeout the manager gave it, and the timeout's answer past it.
+const after=(ms,answer,timeoutMs)=>ms<=timeoutMs?answer:TIMED_OUT;
+
+async function tempHome(t,name){
+  const home=await mkdtemp(join(tmpdir(),`trebell-status-${name}-`));
+  t.after(()=>rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250}));
+  return home;
+}
+// The settings the runtime manager and the relay read (and a harness switch writes), and the thread metadata the relay keeps.
+function memoryState(settings){
+  const meta=new Map();
+  return {settings:()=>({...settings}),updateSettings:patch=>{Object.assign(settings,patch);return {...settings}},threadMeta:id=>meta.get(id)||{},updateThreadMeta:(id,patch)=>{const next={...(meta.get(id)||{}),...patch};meta.set(id,next);return next},removeThreadMeta:id=>meta.delete(id)};
+}
+// A profile on this machine whose CLI answers through answer(args, options) (the manager's run() stubbed), its binary a file of the
+// test's own, as a real binary's version check is kept until it changes. calls: each launch with its timeout and environment.
+// now: the manager's clock (Date.now unless given).
+async function localHarness(t,kind,answer,{env={},instance={},now=undefined}={}){
+  const home=await tempHome(t,kind),binary=join(home,{cursor:"cursor-agent",antigravity:"agy"}[kind]||kind),calls=[];
+  await writeFile(binary,kind+" build 1");
+  const state=memoryState({agentRuntime:kind,agentRuntimeInstances:[{id:kind+"-default",kind,binaryPath:binary,environment:{},...instance}]});
+  const runFn=async(_command,args,options)=>{calls.push({args:args.join(" "),timeoutMs:options.timeoutMs,env:options.env});return answer(args,options)};
+  const manager=new AgentRuntimeManager({state,platform:"linux",env:{PATH:"/usr/bin",HOME:home,TREBELL_HOME:join(home,"trebell"),...env},runFn,...(now?{now}:{})});
+  return {manager,calls,home,state,instance:manager.instances().find(item=>item.id===kind+"-default")};
+}
+// A profile on an SSH host whose commands answer through executeArgv(command, args, timeoutMs); spawnArgv starts its long-lived
+// processes (Codex's app-server).
+function remoteHarness(executeArgv,spawnArgv=()=>{throw new Error("nothing is started on the host")}){
+  const profile={id:"ssh-status",type:"ssh",cwd:"/srv/app"},asked=[];
+  const environments={
+    get:id=>id===profile.id?profile:null,
+    executeArgv:async(_id,{command,args,timeoutMs})=>{asked.push({line:[command,...args].join(" "),timeoutMs});return executeArgv(command,args,timeoutMs)},
+    spawnArgv:(_id,options)=>spawnArgv(options),
+  };
+  const manager=new AgentRuntimeManager({state:{settings:()=>({activeEnvironmentId:profile.id})},environments,platform:"linux",env:{PATH:"/usr/bin",HOME:"/home/test"}});
+  return {manager,asked,profile};
+}
+
+// Re-pinned note: Claude Code's --version gets Trebell's own 30 s and Codex's account read 25 s now (they were 20 s each).
+test("Claude Code gets 30 s to answer --version: one that answers after 29 s reads ready",async t=>{
+  const fx=await localHarness(t,"claude",(args,{timeoutMs})=>args[0]==="--version"
+    ?after(29_000,answered("2.1.310 (Claude Code)\n"),timeoutMs)
+    :answered(JSON.stringify({loggedIn:true,authMethod:"claude.ai",apiProvider:"firstParty"})));
+  const status=await fx.manager.probe("claude");
+  assert.deepEqual([status.installed,status.available,status.authenticated,status.version],[true,true,true,"2.1.310 (Claude Code)"],status.message);
+  assert.deepEqual(fx.calls.map(call=>[call.args,call.timeoutMs]),[["--version",30_000],["auth status",8000]]);
+});
+
+// What each harness's check waits for, and the name its message gives the command. OpenCode, whose version picks its client, is
+// in the test after these.
+const BUDGETS=[["claude","Claude Code","claude",30],["cursor","Cursor","cursor-agent",6],["grok","Grok Build","grok",6],["antigravity","Antigravity","agy",6]];
+for(const [kind,name,command,seconds] of BUDGETS){
+  test(`${name} reads installed and may start when its --version never answers, says how long it waited, and costs that wait once a minute`,async t=>{
+    let clock=1_000_000;
+    const fx=await localHarness(t,kind,args=>args[0]==="--version"?TIMED_OUT:answered("unexpected"),{now:()=>clock});
+    const status=await fx.manager.probe(kind);
+    assert.deepEqual([status.installed,status.available,status.authenticated,status.version],[true,true,null,null]);
+    assert.equal(status.message,`${name} is installed but did not answer \`${command} --version\` within ${seconds} seconds.`);
+    assert.deepEqual(fx.calls.map(call=>[call.args,call.timeoutMs]),[["--version",seconds*1000]],"its sign-in is not read");
+    // The page load, Settings' 5-s poll and a chat start, which wait for the check, reuse its answer for a minute, as a ready one's.
+    clock+=59_000;
+    assert.equal((await fx.manager.probe(kind)).message,status.message);
+    assert.equal(fx.calls.length,1,"the next poll, page load or chat start did not wait for another check");
+    await fx.manager.setActive({runtime:kind});
+    assert.equal(fx.calls.length,2,"a switch to it asks again, and is not refused");
+    clock+=60_001;await fx.manager.probe(kind);
+    assert.equal(fx.calls.length,3,"after a minute the check asks again");
+  });
+}
+
+test("an OpenCode whose --version does not answer or fails is installed but not ready, as its version picks the client that talks to it",async t=>{
+  // An OpenCode 2.x (npm's @opencode/cli exe, which a cold start after a reboot keeps past 10 s) has a 2.x server that only the 2.x
+  // client speaks to; the relay, Git text and the model list choose that client by the version, so without one nothing starts.
+  let version=()=>TIMED_OUT;
+  const fx=await localHarness(t,"opencode",args=>args[0]==="--version"?version():answered("unexpected"));
+  const SLOW="OpenCode is installed but did not answer `opencode --version` within 10 seconds. Trebell Code needs its version (1.x or 2.x) to start it.";
+  const slow=await fx.manager.probe("opencode");
+  assert.deepEqual([slow.installed,slow.available,slow.versionCheckFailed,slow.version,slow.message],[true,false,true,null,SLOW]);
+  await assert.rejects(fx.manager.setActive({runtime:"opencode"}),error=>error.message===SLOW,"a switch to it is refused");
+  const listed=await fx.manager.models("opencode");
+  assert.deepEqual([listed.source,listed.error],["unavailable",SLOW],"no 1.x model catalog is read for it");
+  // A chat is refused with that answer, before any OpenCode client or server starts.
+  const threadStore=new AgentThreadStore({...process.env,TREBELL_HOME:join(fx.home,"trebell-home")});
+  const relay=await startRelay(t,{runtimeManager:fx.manager,threadStore,state:fx.state});
+  await assert.rejects(Promise.race([relay.rpc("thread/start",{cwd:fx.home}),new Promise((_resolve,reject)=>setTimeout(()=>reject(new Error("the start was not refused within 20 s")),20_000))]),error=>error.message===SLOW);
+  assert.deepEqual(fx.calls.map(call=>[call.args,call.timeoutMs]),Array(2).fill(["--version",10_000]),"the switch asked its version again, the model list and the chat took the answer kept for a minute, and nothing else ran");
+  // One that exits with an error, and a profile that uses an OpenCode server of its own, read the same.
+  version=()=>exited(1,"Error: Cannot find module '@opencode/cli-win32-x64'\n");
+  const failed=await fx.manager.probe("opencode",{fresh:true});
+  assert.deepEqual([failed.installed,failed.available,failed.message],[true,false,"OpenCode is installed but `opencode --version` exited with code 1: Error: Cannot find module '@opencode/cli-win32-x64'. Trebell Code needs its version (1.x or 2.x) to start it."]);
+  const external=await localHarness(t,"opencode",()=>TIMED_OUT,{instance:{serverUrl:"http://127.0.0.1:4096"}});
+  const served=await external.manager.probe("opencode");
+  assert.deepEqual([served.installed,served.available,served.message],[true,false,SLOW]);
+});
+
+test("an OpenCode whose --version did not answer costs that wait once a minute: the page load, Settings' poll, a chat start, Git text and the model list reuse its answer",async t=>{
+  // A hung `opencode --version` holds each check for its whole 10 s, and each of these callers waits for a check. They take the
+  // answer of the check they joined, or the one kept for a minute, as for the other harnesses. Settings' Refresh and a switch ask
+  // again at once, as does the first check a minute on.
+  let clock=1_000_000;
+  const fx=await localHarness(t,"opencode",args=>args[0]==="--version"?TIMED_OUT:answered("unexpected"),{now:()=>clock});
+  const SLOW="OpenCode is installed but did not answer `opencode --version` within 10 seconds. Trebell Code needs its version (1.x or 2.x) to start it.";
+  const [refreshed,polled]=await Promise.all([fx.manager.probe("opencode",{fresh:true}),fx.manager.probe("opencode")]);
+  assert.deepEqual([refreshed.message,polled.message,fx.calls.length],[SLOW,SLOW,1],"a poll that came while Settings' Refresh ran took the answer of its check");
+  clock+=59_000;
+  const shown=(await fx.manager.probe("opencode")).message,listed=(await fx.manager.models("opencode")).error;
+  const written=await generateTextWithHarness({runtimeManager:fx.manager,prompt:"Write a commit subject.",cwd:fx.home}).then(()=>"written",error=>error.message);
+  assert.deepEqual([shown,listed,written,fx.calls.length],[SLOW,SLOW,SLOW,1],"the page load, the poll, a chat start, the model list and Git text within the minute waited for no check");
+  clock+=1_001;await fx.manager.probe("opencode");
+  assert.equal(fx.calls.length,2,"a minute on, the check asks again");
+  await fx.manager.probe("opencode",{fresh:true});
+  assert.equal(fx.calls.length,3,"Settings' Refresh asks again within the minute");
+  assert.deepEqual(fx.calls.map(call=>[call.args,call.timeoutMs]),Array(3).fill(["--version",10_000]),"nothing but its version was asked");
+});
+
+async function freePort(){const server=createServer();await new Promise((resolve,reject)=>server.listen(0,"127.0.0.1",resolve).once("error",reject));const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port}
+test("through the GUI server, the page load and Settings' poll answer at once after an OpenCode's --version ran out of time, instead of each waiting 10 s for another check",async t=>{
+  // An OpenCode of the test's own whose --version never answers: each launch notes its arguments in a log, then waits until the check
+  // stops it. Its launcher has a folder of its own, as the folder of a launcher script is part of the binary its answer is kept for.
+  const home=await mkdtemp(join(tmpdir(),"trebell-status-opencode-reads-")),bin=join(home,"bin"),log=join(home,"launches.log"),windows=process.platform==="win32";
+  let gui=null;t.after(async()=>{await gui?.close();await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})});
+  const fixture=join(home,"opencode-hangs.mjs"),launcher=join(bin,windows?"opencode.cmd":"opencode");
+  await mkdir(bin);
+  await writeFile(fixture,String.raw`
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.TREBELL_STATUS_LOG,process.argv.slice(2).join(" ")+"\n");
+setInterval(()=>{},1000);
+`,"utf8");
+  await writeFile(launcher,windows?["@echo off",`"${process.execPath}" "${fixture}" %*`,""].join("\r\n"):`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`,"utf8");
+  if(!windows)await chmod(launcher,0o755);
+  const env={PATH:process.env.PATH,PATHEXT:process.env.PATHEXT,SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,COMSPEC:process.env.COMSPEC,TEMP:home,TMP:home,HOME:home,USERPROFILE:home,TREBELL_HOME:join(home,"trebell"),CODEX_HOME:join(home,"codex-home"),CLAUDE_CONFIG_DIR:join(home,"claude-config")};
+  new TrebellStateStore(env).updateSettings({agentRuntime:"opencode",agentRuntimeInstanceId:"opencode-default",agentRuntimeInstances:[{id:"opencode-default",kind:"opencode",binaryPath:launcher,environment:{TREBELL_STATUS_LOG:log}}]});
+  gui=await createGuiServer({port:await freePort(),mock:true,env});
+  const SLOW="OpenCode is installed but did not answer `opencode --version` within 10 seconds. Trebell Code needs its version (1.x or 2.x) to start it.";
+  const read=async path=>{const started=Date.now(),body=await (await fetch(gui.url+path)).json();return [body.agentRuntimeStatus?.message,Date.now()-started]};
+  assert.equal((await read("/api/bootstrap"))[0],SLOW,"the window's first load waited for the check");
+  for(const path of ["/api/runtime","/api/bootstrap","/api/runtime"]){
+    const [message,ms]=await read(path);
+    assert.equal(message,SLOW,path);
+    assert.ok(ms<5000,`${path} took ${ms} ms: it waited for another check`);
+  }
+  assert.deepEqual((await readFile(log,"utf8")).trim().split(/\r?\n/),["--version"],"one launch, which its check stopped");
+});
+
+test("a harness whose --version exits with an error reads installed and may start, with what it said",async t=>{
+  const fx=await localHarness(t,"cursor",()=>exited(1,"\u001b[31mError: Cannot find module 'index.js'\u001b[0m\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)\n"));
+  const status=await fx.manager.probe("cursor");
+  assert.deepEqual([status.installed,status.available,status.authenticated],[true,true,null]);
+  assert.equal(status.message,"Cursor is installed but `cursor-agent --version` exited with code 1: Error: Cannot find module 'index.js'");
+  assert.deepEqual(fx.calls.map(call=>call.args),["--version"]);
+  await fx.manager.probe("cursor");
+  assert.equal(fx.calls.length,1,"the answer is kept for a minute, as a ready one is");
+  await fx.manager.probe("cursor",{fresh:true});
+  assert.equal(fx.calls.length,2,"Settings' Refresh asks again");
+});
+
+test("only a command that is not there reads not installed; one that cannot start is installed but not ready",async t=>{
+  for(const [kind,result,message] of [
+    ["claude",{ok:false,code:null,error:"spawn C:\\tools\\claude.exe ENOENT",stdout:"",stderr:""},"Claude Code executable was not found."],
+    ["opencode",exited(1,"'opencode' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n"),"OpenCode executable was not found."],
+  ]){
+    const status=await (await localHarness(t,kind,()=>result)).manager.probe(kind);
+    assert.deepEqual([status.installed,status.available,status.message],[false,false,message],kind);
+  }
+  // A launcher Node cannot start is there, but cannot run until it is reinstalled or updated.
+  const launcher=await (await localHarness(t,"claude",()=>({ok:false,code:null,error:"spawn EINVAL",stdout:"",stderr:""}))).manager.probe("claude");
+  assert.deepEqual([launcher.installed,launcher.available,launcher.message],[true,false,"Claude Code launcher could not start on this system. Reinstall or update the CLI, then refresh."]);
+});
+
+test("a --version a signal stopped reads installed and may start, and what a CLI that ran printed never makes it not installed",async t=>{
+  const cases=[
+    // A crash, or the OOM killer, ends the check with a signal and no exit code.
+    ["claude",{ok:false,code:null,signal:"SIGKILL",error:null,stdout:"",stderr:""},[true,true,true,"Claude Code is installed but `claude --version` was stopped by SIGKILL."]],
+    // A CLI that ran and exited with an ENOENT of its own (a file it could not open) or a "command not found" of a command it ran.
+    ["claude",exited(1,"Error: ENOENT: no such file or directory, open '/home/me/.claude/settings.json'\n    at Object.openSync (node:fs:573:18)\n"),[true,true,true,"Claude Code is installed but `claude --version` exited with code 1: Error: ENOENT: no such file or directory, open '/home/me/.claude/settings.json'"]],
+    ["cursor",exited(1,"sh: 1: git: command not found\nError: could not read the repository\n"),[true,true,true,"Cursor is installed but `cursor-agent --version` exited with code 1: sh: 1: git: command not found"]],
+    // The command itself not being there: a shell's 127 (the spawn's ENOENT and cmd.exe's line are in the test above).
+    ["claude",exited(127,"/bin/sh: 1: claude: command not found\n"),[false,false,undefined,"Claude Code executable was not found."]],
+  ];
+  const read=[];
+  for(const [kind,result] of cases){const status=await (await localHarness(t,kind,()=>result)).manager.probe(kind);read.push([status.installed,status.available,status.versionCheckFailed,status.message])}
+  assert.deepEqual(read,cases.map(([,,expected])=>expected));
+});
+
+test("on a host a failed version check reads unavailable as before, with the budgets of this machine",async()=>{
+  // ssh's own failures (a host it cannot reach) end a check as a slow or failing CLI does, and are no answer of the harness's.
+  let answer={exitCode:null,timedOut:true,stdout:"",stderr:""};
+  const fx=remoteHarness(()=>answer);
+  const slow=await fx.manager.probe("claude");
+  assert.deepEqual([slow.installed,slow.available,slow.message],[false,false,"probe timed out"]);
+  answer={exitCode:255,stdout:"",stderr:"ssh: connect to host build-box port 22: Connection timed out\n"};
+  const unreachable=await fx.manager.probe("cursor");
+  assert.deepEqual([unreachable.installed,unreachable.available,unreachable.message],[false,false,"ssh: connect to host build-box port 22: Connection timed out"]);
+  answer={exitCode:127,stdout:"",stderr:"env: 'codex': No such file or directory\n"};
+  const codex=await fx.manager.probe("codex");
+  assert.deepEqual([codex.installed,codex.available],[false,false]);assert.match(codex.message,/^Codex CLI was not found\./);
+  assert.deepEqual(fx.asked.map(item=>[item.line,item.timeoutMs]),[["claude --version",30_000],["cursor-agent --version",6000],["codex --version",6000]]);
+});
+
+// A `codex app-server` as a signed-in Codex runs one, standing in for Codex here: a node script behind a launcher of the test's own,
+// which answers initialize (its version in its user agent) and account/read, and ends with its input.
+// account: what account/read answers with (null: a Codex with no sign-in, whose model provider needs OpenAI's).
+async function codexAppServerLauncher(home,{account={type:"chatgpt",planType:"plus"}}={}){
+  const windows=process.platform==="win32",fixture=join(home,"codex-app-server.mjs"),launcher=join(home,windows?"codex.cmd":"codex");
+  await writeFile(fixture,String.raw`
+import readline from "node:readline";
+readline.createInterface({input:process.stdin}).on("line",line=>{const m=JSON.parse(line);if(m.id===undefined)return;
+  const result=m.method==="initialize"?{userAgent:"codex_cli_rs/0.162.0 (fixture)"}:m.method==="account/read"?${JSON.stringify({account,requiresOpenaiAuth:true})}:{};
+  process.stdout.write(JSON.stringify({id:m.id,result})+"\n");
+});
+`,"utf8");
+  await writeFile(launcher,windows?["@echo off",`"${process.execPath}" "${fixture}" %*`,""].join("\r\n"):`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`,"utf8");
+  if(!windows)await chmod(launcher,0o755);
+  return launcher;
+}
+test("Codex gets 6 s to answer --version, as one that runs out of time leaves the answer to its account read, which has 25 s",async t=>{
+  const home=await tempHome(t,"codex"),binaryPath=await codexAppServerLauncher(home),calls=[];
+  let version=()=>TIMED_OUT;
+  const runFn=async(_command,args,{timeoutMs})=>{calls.push([args.join(" "),timeoutMs]);return version()};
+  const env={PATH:process.env.PATH,PATHEXT:process.env.PATHEXT,SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,COMSPEC:process.env.COMSPEC,TEMP:home,TMP:home,HOME:home,USERPROFILE:home,CODEX_HOME:join(home,"codex-home"),TREBELL_HOME:join(home,"trebell")};
+  const manager=new AgentRuntimeManager({state:memoryState({agentRuntimeInstances:[{id:"codex-default",kind:"codex",binaryPath}]}),env,runFn});
+  const status=await manager.probe("codex");
+  assert.deepEqual([status.installed,status.available,status.authenticated,status.version,status.message],[true,true,true,"0.162.0","Signed in with ChatGPT Plus"]);
+  assert.deepEqual(calls,[["--version",6000]],"a hung --version adds 6 s before the account read, not 20");
+  await manager.probe("codex");
+  assert.equal(calls.length,1,"the answer is kept for a minute: the next poll waits for no check");
+  // A Codex whose --version exits with an error is there, but not ready; one that is not there is not installed.
+  version=()=>exited(1,"error: unexpected argument found\n");
+  const failed=await manager.probe("codex",{fresh:true});
+  assert.deepEqual([failed.installed,failed.available,failed.message],[true,false,"error: unexpected argument found"]);
+  version=()=>({ok:false,code:null,error:"spawn codex ENOENT",stdout:"",stderr:""});
+  const missing=await manager.probe("codex",{fresh:true});
+  assert.deepEqual([missing.installed,missing.available],[false,false]);
+  assert.match(missing.message,/^Codex CLI was not found\./);
+});
+
+test("a Codex whose --version ran out of time and whose account read finds no sign-in is asked again at the next check",async t=>{
+  // Its answer is the account read's, which says sign-in is required: a sign-in in the person's own terminal shows at the next check.
+  const home=await tempHome(t,"codex-signed-out"),binaryPath=await codexAppServerLauncher(home,{account:null}),calls=[];
+  const runFn=async(_command,args)=>{calls.push(args.join(" "));return TIMED_OUT};
+  const env={PATH:process.env.PATH,PATHEXT:process.env.PATHEXT,SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,COMSPEC:process.env.COMSPEC,TEMP:home,TMP:home,HOME:home,USERPROFILE:home,CODEX_HOME:join(home,"codex-home"),TREBELL_HOME:join(home,"trebell")};
+  const manager=new AgentRuntimeManager({state:memoryState({agentRuntimeInstances:[{id:"codex-default",kind:"codex",binaryPath}]}),env,runFn});
+  const status=await manager.probe("codex");
+  assert.deepEqual([status.installed,status.available,status.authenticated,status.versionCheckFailed,status.message],[true,false,false,true,"Codex has no account signed in. Run codex login, then try again."]);
+  await manager.probe("codex");
+  assert.deepEqual(calls,["--version","--version"],"the next check asked again");
+});
+
+test("OpenCode gets 10 s to answer --version, in its status check and in its install plan",async()=>{
+  // An OpenCode behind a slow wrapper: its --version answers after 8 s.
+  const fx=remoteHarness((command,args,timeoutMs)=>{
+    if(command==="opencode"&&args[0]==="--version")return 8000<=timeoutMs?{exitCode:0,stdout:"1.14.25\n",stderr:""}:{exitCode:null,timedOut:true,stdout:"",stderr:""};
+    if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"2 credentials\n0 environment variables\n",stderr:""};
+    if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+    if(command==="npm"&&args[0]==="view")return {exitCode:0,stdout:"\"1.14.30\"\n",stderr:""};
+    return {exitCode:1,stdout:"",stderr:"unexpected command"};
+  });
+  const status=await fx.manager.probe("opencode");
+  assert.deepEqual([status.installed,status.available,status.version],[true,true,"1.14.25"],status.message);
+  const plan=await fx.manager.openCodeInstallPlan({environmentId:fx.profile.id});
+  assert.deepEqual([plan.installedVersion,plan.targetVersion],["1.14.25","1.14.30"]);
+  assert.deepEqual(fx.asked.filter(item=>item.line==="opencode --version").map(item=>item.timeoutMs),[10_000,10_000]);
+});
+
+test("an OpenCode update whose --version does not answer or fails installs nothing; only an OpenCode that is not there gets a fresh one",async()=>{
+  // Planned as if no OpenCode were there, an update of a 2.x or of one from OpenCode's own installer would put a separate 1.x
+  // beside it, which the next start prefers.
+  let version={exitCode:null,timedOut:true,stdout:"",stderr:""};
+  const fx=remoteHarness((command,args)=>{
+    if(command==="opencode"&&args[0]==="--version")return version;
+    if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+    if(command==="npm"&&args[0]==="view")return {exitCode:0,stdout:"\"1.14.30\"\n",stderr:""};
+    return {exitCode:1,stdout:"",stderr:"unexpected command"};
+  });
+  const refused=[];
+  for(const answer of [version,{exitCode:1,stdout:"",stderr:"Error: Cannot find module '@opencode/cli-linux-x64'\n"}]){
+    version=answer;
+    refused.push(await fx.manager.openCodeInstallPlan({environmentId:fx.profile.id}).then(plan=>`planned: ${plan.command} ${plan.args.join(" ")}`,error=>error.message));
+  }
+  assert.deepEqual(refused,[
+    "Trebell Code could not read the version of the OpenCode it would update: `opencode --version` did not answer within 10 seconds. Nothing was installed.",
+    "Trebell Code could not read the version of the OpenCode it would update: `opencode --version` exited with code 1: Error: Cannot find module '@opencode/cli-linux-x64'. Nothing was installed.",
+  ]);
+  assert.deepEqual(fx.asked.filter(item=>item.line.startsWith("npm")),[],"npm was not asked");
+  version={exitCode:127,stdout:"",stderr:"env: 'opencode': No such file or directory\n"};
+  const plan=await fx.manager.openCodeInstallPlan({environmentId:fx.profile.id});
+  assert.deepEqual([plan.installedVersion,plan.command,plan.args],[null,"npm",["install","-g","--allow-scripts=opencode-ai","opencode-ai@1.14.30"]]);
+});
+
+test("Grok's version and sign-in checks run with its updater off, and its sessions keep their environment",async t=>{
+  const fx=await localHarness(t,"grok",args=>answered(args[0]==="models"?GROK_MODELS_SIGNED_IN:"grok 1.0.41\n"));
+  const status=await fx.manager.probe("grok");
+  assert.equal(status.authenticated,true);
+  assert.deepEqual(fx.calls.map(call=>[call.args,call.env.GROK_DISABLE_AUTOUPDATER]),[["--version","1"],["models","1"]]);
+  assert.equal(fx.manager.childEnv(fx.instance).GROK_DISABLE_AUTOUPDATER,undefined,"what sessions, Git text and the sign-in terminal run with");
+  assert.equal(fx.calls[0].env.HOME,fx.manager.childEnv(fx.instance).HOME,"the rest of the environment is the profile's");
+  // Another harness's checks get nothing of Grok's.
+  const claude=await localHarness(t,"claude",args=>answered(args[0]==="auth"?JSON.stringify({loggedIn:true}):"2.1.310 (Claude Code)\n"));
+  await claude.manager.probe("claude");
+  assert.deepEqual(claude.calls.map(call=>"GROK_DISABLE_AUTOUPDATER" in call.env),[false,false]);
+});
+
+test("Grok's model listing runs with its updater off too",async t=>{
+  const home=await tempHome(t,"grok-acp"),fixture=join(home,"grok.mjs"),log=join(home,"launches.jsonl"),windows=process.platform==="win32";
+  // Grok as far as its checks and its listing go: each launch logs its arguments and the updater switch it was given.
+  await writeFile(fixture,String.raw`
+import { appendFileSync } from "node:fs";
+import readline from "node:readline";
+const args=process.argv.slice(2),send=message=>process.stdout.write(JSON.stringify(message)+"\n");
+appendFileSync(process.env.TREBELL_STATUS_LOG,JSON.stringify({args,updater:process.env.GROK_DISABLE_AUTOUPDATER??null})+"\n");
+if(args[0]==="--version")process.stdout.write("grok 1.0.41-fixture\n");
+else if(args[0]==="models")process.stdout.write(${JSON.stringify(GROK_MODELS_SIGNED_IN)});
+else readline.createInterface({input:process.stdin}).on("line",line=>{const m=JSON.parse(line);
+  if(m.method==="initialize")send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:1,agentCapabilities:{},_meta:{modelState:{currentModelId:"grok-4.7",availableModels:[{modelId:"grok-4.7",name:"Grok 4.7"}]}}}});
+  else if(m.id!=null)send({jsonrpc:"2.0",id:m.id,result:{}});
+});
+`,"utf8");
+  const launcher=join(home,windows?"grok.cmd":"grok");
+  await writeFile(launcher,windows?["@echo off",`"${process.execPath}" "${fixture}" %*`,""].join("\r\n"):`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`,"utf8");
+  if(!windows)await chmod(launcher,0o755);
+  const env={PATH:process.env.PATH,PATHEXT:process.env.PATHEXT,SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,COMSPEC:process.env.COMSPEC,TEMP:home,TMP:home,HOME:home,USERPROFILE:home,TREBELL_HOME:join(home,"trebell")};
+  const settings={agentRuntimeInstances:[{id:"grok-default",kind:"grok",binaryPath:launcher,environment:{TREBELL_STATUS_LOG:log}}]};
+  const manager=new AgentRuntimeManager({state:{settings:()=>settings},env});
+  const listed=await manager.models("grok");
+  assert.equal(listed.error,undefined);assert.deepEqual(listed.models,["grok-4.7"]);
+  const launches=(await readFile(log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+  assert.deepEqual(launches.map(item=>[item.args[0]==="--version"||item.args[0]==="models"?item.args[0]:"agent stdio",item.updater]),[["--version","1"],["models","1"],["agent stdio","1"]]);
+});
+
+test("a logged-out `grok models` is read once more, and the second answer decides unless it says nothing",async t=>{
+  for(const [answers,expected,calls] of [
+    // An access token that has just expired: Grok prints the logged-out line, then refreshes it.
+    [["Not authenticated. Run grok login.\n",GROK_MODELS_SIGNED_IN],[true,true,"Ready"],2],
+    [["Not logged in\n","Not logged in\n"],[false,false,"Grok Build has no account signed in. Run grok login, then try again."],2],
+    // A second read that times out keeps the first answer.
+    [["Not logged in\n",null],[false,false,"Grok Build has no account signed in. Run grok login, then try again."],2],
+    [[GROK_MODELS_SIGNED_IN],[true,true,"Ready"],1],
+  ]){
+    const left=[...answers];
+    const fx=await localHarness(t,"grok",args=>{if(args[0]!=="models")return answered("grok 1.0.41\n");const next=left.shift();return next==null?TIMED_OUT:answered(next)});
+    const status=await fx.manager.probe("grok");
+    assert.deepEqual([status.available,status.authenticated,status.message],expected,answers.join(" then "));
+    assert.equal(fx.calls.filter(call=>call.args==="models").length,calls,answers.join(" then "));
+  }
+  // An XAI_API_KEY in Trebell's environment says nothing of a Grok on Sign in: its own login is read, and the key reaches no check.
+  const around=await localHarness(t,"grok",args=>args[0]==="models"?answered("Not logged in\n"):answered("grok 1.0.41\n"),{env:{XAI_API_KEY:"xai-test-not-a-key"}});
+  const own=await around.manager.probe("grok");
+  assert.deepEqual([own.available,own.authenticated,own.authMethod],[false,false,"sign-in"]);
+  assert.deepEqual(around.calls.map(call=>[call.args,call.env.XAI_API_KEY]),[["--version",undefined],["models",undefined],["models",undefined]]);
+  // A profile set to its API key is ready on the xAI key without asking Grok's own sign-in.
+  const keyed=await localHarness(t,"grok",args=>args[0]==="models"?answered("Not logged in\n"):answered("grok 1.0.41\n"),{env:{XAI_API_KEY:"xai-test-not-a-key"},instance:{auth:"api-key"}});
+  const status=await keyed.manager.probe("grok");
+  assert.deepEqual([status.available,status.authenticated,status.authMethod],[true,true,"api-key"]);
+  assert.deepEqual(keyed.calls.map(call=>[call.args,call.env.XAI_API_KEY]),[["--version","xai-test-not-a-key"]]);
+});
+
+// The whole of what Grok Build 1.0.41's `grok models` prints (tests/fixtures/grok-cli-output.mjs): its sign-in line decides, and the
+// model list under it changes nothing, whichever sign-in the line names.
+test("Grok Build's own `grok models` output reads as signed in or signed out, its model list aside",()=>{
+  assert.equal(parseGrokModelsAuth(GROK_MODELS_SIGNED_IN),true);
+  assert.equal(parseGrokModelsAuth(GROK_MODELS_SIGNED_OUT),false);
+  assert.equal(parseGrokModelsAuth(GROK_MODELS_SIGNED_IN.replace("grok.com","Northwind SSO")),true,"a sign-in an administrator gave its own label");
+  assert.equal(parseGrokModelsAuth(GROK_MODELS_SIGNED_IN.slice(GROK_MODELS_SIGNED_IN.indexOf("\n")+1)),null,"the model list alone says nothing of the sign-in");
+});
+
+test("a Claude Code profile with a custom API endpoint is not called signed out; one on Anthropic's own API is",async t=>{
+  const signedOut=args=>args[0]==="auth"?{...exited(1,""),stdout:JSON.stringify({loggedIn:false,authMethod:"none",apiProvider:"firstParty"})}:answered("2.1.310 (Claude Code)\n");
+  const CUSTOM="Claude Code sends its requests to this profile's own API endpoint, which holds the credentials. A session checks them when it starts.";
+  const ADVICE="Claude Code has no account signed in. Run `claude auth login`, then try again.";
+  for(const [where,options,expected] of [
+    ["ANTHROPIC_BASE_URL from Trebell's own environment",{env:{ANTHROPIC_BASE_URL:"https://proxy.example"}},[true,null,CUSTOM]],
+    ["the profile's own ANTHROPIC_BASE_URL",{instance:{environment:{ANTHROPIC_BASE_URL:"http://localhost:4000/v1"}}},[true,null,CUSTOM]],
+    ["Anthropic's own API",{env:{ANTHROPIC_BASE_URL:"https://api.anthropic.com"}},[false,false,ADVICE]],
+    ["a value that is no http(s) URL",{env:{ANTHROPIC_BASE_URL:"proxy.example"}},[false,false,ADVICE]],
+    ["no endpoint",{},[false,false,ADVICE]],
+  ]){
+    const fx=await localHarness(t,"claude",signedOut,options);
+    const status=await fx.manager.probe("claude");
+    assert.deepEqual([status.available,status.authenticated,status.message],expected,where);
+    if(expected[1]===null)assert.deepEqual([status.account.type,status.account.label,status.account.loggedIn],["ownEndpoint","Own API endpoint",false],where);
+  }
+  // A profile on a host runs with the host's own variables, which this machine's ANTHROPIC_BASE_URL says nothing of.
+  const remote=remoteHarness((command,args)=>args[0]==="auth"?{exitCode:1,stdout:JSON.stringify({loggedIn:false,authMethod:"none"}),stderr:""}:{exitCode:0,stdout:"2.1.310 (Claude Code)\n",stderr:""});
+  remote.manager.env.ANTHROPIC_BASE_URL="https://proxy.example";
+  const host=await remote.manager.probe("claude");
+  assert.deepEqual([host.available,host.authenticated],[false,false]);
+});
+
+test("a Claude Code profile with a custom API endpoint keeps its answer for a minute, as a ready one, instead of asking at every poll",async t=>{
+  // Only a session can check the endpoint's credentials, so `claude auth status` (a Claude Code launch) has nothing new to say.
+  let clock=1_000_000;
+  const fx=await localHarness(t,"claude",args=>args[0]==="auth"?{...exited(1,""),stdout:JSON.stringify({loggedIn:false,authMethod:"none",apiProvider:"firstParty"})}:answered("2.1.311 (Claude Code)\n"),{env:{ANTHROPIC_BASE_URL:"https://gateway.example"},now:()=>clock});
+  const first=await fx.manager.probe("claude");
+  assert.deepEqual([first.available,first.authenticated,first.account.type],[true,null,"ownEndpoint"]);
+  for(const step of [5_000,5_000,49_000]){clock+=step;await fx.manager.probe("claude")}
+  assert.deepEqual(fx.calls.map(call=>call.args),["--version","auth status"],"Settings' 5-s poll, the page load and chat starts reused it");
+  clock+=1_001;await fx.manager.probe("claude");
+  assert.deepEqual(fx.calls.map(call=>call.args),["--version","auth status","auth status"],"a minute on it is read again");
+});
+
+// The relay over its socket, as a window speaks to it: rpc requests, and a send settled as turn/completed reports it.
+async function startRelay(t,options){
+  const server=createServer((_req,res)=>{res.writeHead(404);res.end()}),relay=attachAgentRelay(server,{version:"test",...options});
+  await new Promise((resolve,reject)=>server.listen(0,"127.0.0.1",resolve).once("error",reject));
+  const ws=new WebSocket("ws://127.0.0.1:"+server.address().port+"/api/agent/ws");await new Promise((resolve,reject)=>{ws.once("open",resolve);ws.once("error",reject)});
+  let id=0;const seen=[],waiters=[];
+  ws.on("message",raw=>{const message=JSON.parse(String(raw));if(!message.method)return;seen.push(message);for(const waiter of [...waiters])if(waiter.match(message)){waiters.splice(waiters.indexOf(waiter),1);waiter.resolve(message)}});
+  const rpc=(method,params={})=>new Promise((resolve,reject)=>{
+    const requestId=++id,onMessage=raw=>{const message=JSON.parse(String(raw));if(message.id!==requestId)return;ws.off("message",onMessage);message.error?reject(new Error(message.error.message)):resolve(message.result)};
+    ws.on("message",onMessage);ws.send(JSON.stringify({id:requestId,method,params}));
+  });
+  const next=match=>{const found=seen.find(match);if(found)return Promise.resolve(found);return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error("timed out waiting for a relay notification")),20_000);waiters.push({match,resolve:value=>{clearTimeout(timer);resolve(value)}})})};
+  const turn=async(threadId,text="Hello")=>{
+    const started=await rpc("turn/start",{threadId,input:[{type:"text",text}]}),turnId=started.turn.id;
+    return (await next(message=>message.method==="turn/completed"&&message.params.turn?.id===turnId)).params.turn;
+  };
+  t.after(async()=>{try{ws.close()}catch{}await relay.close();await new Promise(resolve=>server.close(()=>resolve()))});
+  return {rpc,turn};
+}
+// The SDK's Query as the Claude session drives it: each user message is answered with one reply, unless claude.failing holds the
+// error the CLI process ends with on the next message (as a Claude Code that cannot run exits).
+function fakeClaudeSdk(claude={failing:null}){
+  const query=({prompt,options})=>{
+    const items=[],waiters=[];let done=false,failure=null;
+    const push=value=>{const waiter=waiters.shift();if(waiter)waiter.resolve({value,done:false});else items.push(value)};
+    const end=(error=null)=>{if(done)return;done=true;failure=error;for(const waiter of waiters.splice(0))error?waiter.reject(error):waiter.resolve({value:undefined,done:true})};
+    void (async()=>{
+      let index=0;
+      for await(const message of prompt){
+        if(claude.failing){end(claude.failing);return}
+        if(index===0)push({type:"system",subtype:"init",session_id:options.sessionId||options.resume,model:"claude-test",permissionMode:options.permissionMode,tools:[],mcp_servers:[],slash_commands:[],agents:[],capabilities:[]});
+        const id="msg-"+index++;
+        push({type:"assistant",uuid:"assistant-"+id,parent_tool_use_id:null,message:{id,content:[{type:"text",text:"PELICAN"}]}});
+        push({type:"result",subtype:"success",is_error:false,result:"PELICAN",user_message_uuid:message.uuid,total_cost_usd:0,usage:{input_tokens:3,output_tokens:1}});
+      }
+      end();
+    })();
+    const next=()=>items.length?Promise.resolve({value:items.shift(),done:false}):done?(failure?Promise.reject(failure):Promise.resolve({value:undefined,done:true})):new Promise((resolve,reject)=>waiters.push({resolve,reject}));
+    return {next,return:()=>{end();return Promise.resolve({value:undefined,done:true})},[Symbol.asyncIterator](){return this},async interrupt(){},close(){end()},async setPermissionMode(){},initializationResult:async()=>({commands:[],agents:[],models:[]})};
+  };
+  return {query,getSessionInfo:async id=>({sessionId:id}),forkSession:async()=>({}),renameSession:async()=>{},getSessionMessages:async()=>[],deleteSession:async()=>{}};
+}
+test("a chat starts on a Claude Code whose --version did not answer in time, and its sign-in is read once it answers",async t=>{
+  let slow=true,clock=1_000_000;
+  const fx=await localHarness(t,"claude",args=>args[0]==="--version"?(slow?TIMED_OUT:answered("2.1.310 (Claude Code)\n")):answered(JSON.stringify({loggedIn:true,authMethod:"claude.ai"})),{now:()=>clock});
+  const threadStore=new AgentThreadStore({...process.env,TREBELL_HOME:join(fx.home,"trebell-home")});
+  const relay=await startRelay(t,{runtimeManager:fx.manager,threadStore,state:fx.state,claudeSdk:fakeClaudeSdk()});
+  const {thread}=await relay.rpc("thread/start",{cwd:fx.home});
+  const turn=await relay.turn(thread.id);
+  assert.equal(turn.status,"completed",JSON.stringify(turn.error||null));
+  // Once the CLI answers again, the next check (a minute on, or Settings' Refresh) reads its version and its sign-in, and keeps that
+  // answer.
+  slow=false;clock+=60_001;
+  const status=await fx.manager.probe("claude");
+  assert.deepEqual([status.available,status.authenticated,status.version],[true,true,"2.1.310 (Claude Code)"]);
+  const asked=fx.calls.length;await fx.manager.probe("claude");
+  assert.equal(fx.calls.length,asked,"a ready answer is kept as before");
+});
+
+test("a chat that fails on a Claude Code whose --version failed says, after the harness's own words, what that check did",async t=>{
+  // A broken install: its --version exits with Node's error, and the SDK's session error carries no stderr of its own.
+  const fx=await localHarness(t,"claude",args=>args[0]==="--version"?exited(1,"Error: Cannot find module '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)\n"):answered("unexpected"));
+  const CHECK="Claude Code is installed but `claude --version` exited with code 1: Error: Cannot find module '/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'";
+  const claude={failing:null},threadStore=new AgentThreadStore({...process.env,TREBELL_HOME:join(fx.home,"trebell-home")});
+  const relay=await startRelay(t,{runtimeManager:fx.manager,threadStore,state:fx.state,claudeSdk:fakeClaudeSdk(claude)});
+  const {thread}=await relay.rpc("thread/start",{cwd:fx.home});
+  claude.failing=new Error("Claude Code process exited with code 1");
+  const turn=await relay.turn(thread.id);
+  assert.deepEqual([turn.status,turn.error?.message],["failed","Claude Code process exited with code 1. "+CHECK]);
+  // As a Git text failure reads it too: the check's words once, after the harness's own.
+  assert.equal(withProbeAdvice("Claude Code process exited with code 1",{available:true,authenticated:null,versionCheckFailed:true,message:CHECK}),"Claude Code process exited with code 1. "+CHECK);
+  assert.equal(withProbeAdvice(CHECK,{available:true,authenticated:null,versionCheckFailed:true,message:CHECK}),CHECK,"advice the message already has adds none");
+  assert.equal(withProbeAdvice("Rate limited.",{available:true,authenticated:null,message:"Claude Code is installed, but Trebell could not verify its authentication status."}),"Rate limited.","an unread sign-in adds nothing, as before");
+});
+
+// A `grok models` that gives Trebell nothing to read (it timed out, or printed neither a model list nor a logged-out line) leaves
+// Grok Build's sign-in unknown, and Settings says so by the name it shows Grok by.
+test("a Grok Build whose sign-in could not be read says so, by the name Settings shows it under",async t=>{
+  for(const answer of [null,"Something unexpected\n"]){
+    const fx=await localHarness(t,"grok",args=>args[0]!=="models"?answered("grok 1.0.41\n"):answer==null?TIMED_OUT:answered(answer));
+    const status=await fx.manager.probe("grok");
+    assert.deepEqual([status.authenticated,status.message],[null,"Grok Build is installed, but Trebell could not tell whether it is signed in."],String(answer));
+  }
+});

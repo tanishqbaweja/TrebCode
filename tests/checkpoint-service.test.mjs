@@ -1,0 +1,744 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CheckpointService, isTransientCheckpointGitError } from "../src/checkpoint-service.mjs";
+import { git } from "../src/git-service.mjs";
+import { TrebellStateStore } from "../src/trebell-state.mjs";
+
+function gitCommand(args){
+  let index=0;
+  while(args[index]==="-c")index+=2;
+  return args[index];
+}
+
+// What git (2.50.1) writes under a lock another process holds, as it wrote it with a lock file left in place before a git add and
+// a git update-ref: the failed call, a blank line and its advice.
+const GIT_LOCK_ADVICE="\n\nAnother git process seems to be running in this repository, e.g.\nan editor opened by 'git commit'. Please make sure all processes\nare terminated then try again. If it still fails, a git process\nmay have crashed in this repository earlier:\nremove the file manually to continue.";
+
+test("checkpoint retry classification accepts only transient lock and disappearing-file races",()=>{
+  const verdicts=[
+    ["git add while another git holds the index",true,"fatal: Unable to create 'D:/work/atlas/.git/index.lock': File exists."+GIT_LOCK_ADVICE],
+    ["a branch update while its ref is locked",true,"fatal: update_ref failed for ref 'refs/heads/main': cannot lock ref 'refs/heads/main': Unable to create 'D:/work/atlas/.git/refs/heads/main.lock': File exists."+GIT_LOCK_ADVICE],
+    ["a file deleted while git add read it",true,"error: open(\"reports/q3.csv\"): No such file or directory\nerror: unable to index file 'reports/q3.csv'\nfatal: adding files failed"],
+    ["a file deleted before git add looked at it",true,"fatal: unable to stat 'reports/q3.csv': No such file or directory"],
+    ["a lock git may not create",false,"fatal: Unable to create 'D:/work/atlas/.git/index.lock': Permission denied"],
+    ["an index git cannot write",false,"fatal: unable to write new index file"],
+  ];
+  for(const [what,transient,failure] of verdicts)assert.equal(isTransientCheckpointGitError(new Error(failure)),transient,what);
+});
+
+// Git writes a failed system call on one line: what it was doing, naming the file, then ": " and the system's error. A lock
+// another process holds (EEXIST on a .lock) and a listed file deleted before Git read it (ENOENT on stat, lstat or open)
+// pass on their own; anything else, or the same words split over two lines, would fail again.
+test("a checkpoint runs Git again only after a held lock or a listed file that went away, read line by line in any case",()=>{
+  const passing=[
+    "fatal: Unable to create '/home/dev/shop/.git/index.lock': File exists.\n\nAnother git process seems to be running in this repository.",
+    "error: cannot lock ref 'refs/trebell/checkpoints/t-42': Unable to create '/home/dev/shop/.git/refs/trebell/checkpoints/t-42.lock': File exists.",
+    "fatal: Unable to create \"C:/work/shop/.git/index.lock\": File exists.",
+    "fatal: unable to create /home/dev/shop/.git/index.lock: file exists",
+    "fatal: Unable to create 'C:/work/shop/.git/index.lock': File exists.\r",
+    "error: lstat(\"notes/today.md\"): No such file or directory",
+    "warning: in the working copy of 'notes/a.md', LF will be replaced by CRLF\nerror: open(\"notes/today.md\"): No such file or directory\nerror: unable to index file 'notes/today.md'\nfatal: adding files failed",
+    "FATAL: UNABLE TO STAT 'NOTES/TODAY.MD': NO SUCH FILE OR DIRECTORY",
+    // A symbolic link removed between git listing it and reading where it points.
+    "error: readlink(\"assets/logo.svg\"): No such file or directory\nerror: unable to index file 'assets/logo.svg'",
+  ];
+  const lasting=[
+    "error: open(): No such file or directory",
+    "error: unlink(\"notes/today.md\"): No such file or directory",
+    "fatal: Unable to create '.lock': File exists",
+    "fatal: Unable to create '/home/dev/shop/.git/index.lock': No such file or directory",
+    "fatal: Unable to create '/home/dev/shop/.git/index': File exists",
+    "fatal: Unable to create '/home/dev/shop/.git/index.lock':\nFile exists",
+    "fatal: unable to stat 'notes/today.md':\nNo such file or directory",
+    "fatal: cannot change to '/home/dev/gone': No such file or directory",
+    "fatal: unable to stat: No such file or directory",
+    "error: insufficient permission for adding an object to repository database .git/objects",
+    // Only the letters A-Z are read in either case: a Kelvin sign or a long s, which a full case folding would make k or s,
+    // is not one of Git's words.
+    "fatal: Unable to create '/home/dev/shop/.git/index.loc\u212A': File exists",
+    "fatal: unable to \u017Ftat 'notes/today.md': No such file or directory",
+  ];
+  for(const text of passing){
+    assert.equal(isTransientCheckpointGitError(new Error(text)),true,text);
+    assert.equal(isTransientCheckpointGitError(text),true,"thrown as a string: "+text);
+  }
+  for(const text of lasting)assert.equal(isTransientCheckpointGitError(new Error(text)),false,text);
+  for(const value of [null,undefined,"",0,new Error(""),{message:""}])assert.equal(isTransientCheckpointGitError(value),false,String(value));
+});
+
+// A repository's path or a file's name can hold ": " itself, which is also what git writes between its step and the system's
+// error: the race is still seen, from wherever in the line git's step begins, and a step that is no race still is not one.
+test("a held lock or a vanished file is a race even when the repository's path or the file's name holds a colon and a space",()=>{
+  const races=[
+    "fatal: Unable to create '/home/dev/my: project/.git/index.lock': File exists.",
+    "error: open(\"notes/meeting: monday.md\"): No such file or directory",
+    "fatal: unable to stat 'notes/q&a: today.md': No such file or directory",
+    "error: cannot lock ref 'refs/trebell/checkpoints/t-7': Unable to create '/srv/work: 2026/.git/refs/trebell/checkpoints/t-7.lock': File exists."+GIT_LOCK_ADVICE,
+    "warning: in the working copy of 'plans/q4: draft.md', LF will be replaced by CRLF\nerror: readlink(\"assets/logo: dark.svg\"): No such file or directory\nerror: unable to index file 'assets/logo: dark.svg'",
+  ];
+  const notRaces=[
+    "error: unlink(\"notes/meeting: monday.md\"): No such file or directory",
+    "fatal: Unable to create '/home/dev/my: project/.git/index': File exists",
+    "fatal: Unable to create '/home/dev/my: project/.git/index.lock': Permission denied",
+    "fatal: cannot change to '/home/dev/my: project': No such file or directory",
+    "fatal: unable to stat notes/meeting: monday.md: No such file or directory",
+  ];
+  for(const text of races)assert.equal(isTransientCheckpointGitError(new Error(text)),true,text);
+  for(const text of notRaces)assert.equal(isTransientCheckpointGitError(new Error(text)),false,text);
+  // The other lines of the same review, which keep their verdicts: a ref's lock, a lock line ended by CRLF, a bare lock name and a
+  // stat call are races; a stat message whose name has no quotes is not one, as read-cache.c always quotes it.
+  const kept=[
+    [true,"error: cannot lock ref 'refs/trebell/checkpoints/t1': Unable to create '/srv/app/.git/refs/trebell/checkpoints/t1.lock': File exists."],
+    [true,"fatal: Unable to create 'C:/Users/ana/app/.git/index.lock': File exists.\r\n\r\nAnother git process seems to be running in this repository, e.g."],
+    [true,"fatal: Unable to create /srv/app/.git/index.lock: File exists."],
+    [true,"error: stat(\"notes/today.md\"): No such file or directory"],
+    [false,"error: unable to stat notes/today.md: No such file or directory"],
+  ];
+  for(const [race,text] of kept)assert.equal(isTransientCheckpointGitError(new Error(text)),race,text);
+  // Many places a step could begin cost no more than one pass: about 1.6 million characters of ": " pieces before the error.
+  const started=performance.now();
+  assert.equal(isTransientCheckpointGitError(new Error("fatal: "+"x: ".repeat(530_000)+"unable to stat 'a.md': No such file or directory")),true);
+  assert.equal(isTransientCheckpointGitError(new Error("fatal: "+"x: ".repeat(530_000)+"File exists")),false);
+  const took=performance.now()-started;
+  assert.ok(took<1000,`read in ${took.toFixed(1)} ms`);
+});
+
+// What a failed Git run wrote can be megabytes (the runner keeps up to 8 MiB). Reading it takes time in step with its length:
+// 1.6 million characters of operations that never meet their error take a few milliseconds, where a check that went back over
+// the rest of the line from each operation would take seconds.
+test("a long Git failure is read in time in step with its length",()=>{
+  // Each of the four calls git names as it fails, with its file but without the system's error, again and again over about
+  // 400,000 characters of a line of its own.
+  const calls=["fatal: Unable to create 'D:/work/atlas/.git/index.lock' ","fatal: unable to stat 'reports/q3.csv' ","error: lstat(\"reports/q3.csv\") ","error: open(\"reports/q3.csv\") "];
+  const lines=calls.map(call=>call.repeat(Math.ceil(400_000/call.length)));
+  const started=performance.now();
+  assert.equal(isTransientCheckpointGitError(new Error(lines.join("\n"))),false);
+  assert.equal(isTransientCheckpointGitError(new Error(lines.join(" ")+": No such file or directory")),true);
+  const took=performance.now()-started;
+  assert.ok(took<1000,`read in ${took.toFixed(1)} ms`);
+});
+
+// The runner's side: a lock still held at the third run fails the checkpoint with Git's words after two waits, and a file that
+// went away while add read it is read again once, so the checkpoint is made.
+test("a checkpoint's Git command runs at most three times, 75 ms apart, and a file gone during add is staged again",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-race-"));
+  const state={addCheckpoint:item=>({...item,createdAt:1}),checkpoints:()=>[],updateCheckpoint:()=>null};
+  const serviceFor=(onAdd,sleeps)=>new CheckpointService({
+    state,env:{...process.env,TREBELL_HOME:home},
+    gitInfoFn:async()=>({isGit:true,root:"/home/dev/shop"}),
+    sleepFn:async ms=>{sleeps.push(ms)},
+    gitFn:async(_cwd,args)=>{
+      const command=gitCommand(args);
+      if(command==="rev-parse")return {ok:true,stdout:"/home/dev/shop\n.git/index\nhead42\n",stderr:""};
+      if(command==="read-tree"||command==="update-ref")return {ok:true,stdout:"",stderr:""};
+      if(command==="add")return onAdd();
+      if(command==="write-tree")return {ok:true,stdout:"tree42\n",stderr:""};
+      if(command==="commit-tree")return {ok:true,stdout:"commit42\n",stderr:""};
+      throw new Error("unexpected git "+args.join(" "));
+    },
+  });
+  try{
+    let held=0;const heldSleeps=[];
+    const lockHeld=serviceFor(()=>{held++;throw new Error("fatal: Unable to create '/home/dev/shop/.git/index.lock': File exists.")},heldSleeps);
+    await assert.rejects(()=>lockHeld.create({cwd:"/home/dev/shop",threadId:"thread-held"}),{message:"fatal: Unable to create '/home/dev/shop/.git/index.lock': File exists."});
+    assert.equal(held,3);assert.deepEqual(heldSleeps,[75,75]);
+    let reads=0;const goneSleeps=[];
+    const fileGone=serviceFor(()=>{reads++;if(reads===1)throw new Error("error: open(\"notes/today.md\"): No such file or directory\nerror: unable to index file 'notes/today.md'\nfatal: adding files failed");return {ok:true,stdout:"",stderr:""}},goneSleeps);
+    const checkpoint=await fileGone.create({cwd:"/home/dev/shop",threadId:"thread-gone"});
+    assert.equal(checkpoint.supported,true);assert.equal(reads,2);assert.deepEqual(goneSleeps,[75]);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint capture retries a transient Git failure without restarting the whole capture",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-retry-"));
+  const calls=[];const sleeps=[];let addAttempts=0;
+  const state={addCheckpoint:item=>({...item,createdAt:1}),checkpoints:()=>[],updateCheckpoint:()=>null};
+  const gitFn=async(_cwd,args)=>{
+    calls.push([...args]);
+    const command=gitCommand(args);
+    if(command==="rev-parse")return {ok:true,stdout:"/repo\n.git/index\nhead123\n",stderr:""};
+    if(command==="read-tree")return {ok:true,stdout:"",stderr:""};
+    if(command==="add"){
+      addAttempts++;
+      if(addAttempts===1)throw new Error("fatal: Unable to create '/repo/.git/trebell-checkpoint.index.lock': File exists."+GIT_LOCK_ADVICE);
+      return {ok:true,stdout:"",stderr:""};
+    }
+    if(command==="write-tree")return {ok:true,stdout:"tree123\n",stderr:""};
+    if(command==="commit-tree")return {ok:true,stdout:"commit123\n",stderr:""};
+    if(command==="update-ref")return {ok:true,stdout:"",stderr:""};
+    throw new Error("unexpected git "+args.join(" "));
+  };
+  try{
+    const service=new CheckpointService({
+      state,env:{...process.env,TREBELL_HOME:home},gitFn,
+      gitInfoFn:async()=>({isGit:true,root:"/repo"}),
+      sleepFn:async ms=>{sleeps.push(ms)},
+    });
+    const checkpoint=await service.create({cwd:"/repo",threadId:"thread-1",label:"Before edit"});
+    assert.equal(checkpoint.supported,true);
+    assert.equal(addAttempts,2);
+    assert.deepEqual(sleeps,[75]);
+    assert.equal(calls.filter(args=>gitCommand(args)==="read-tree").length,1);
+    assert.equal(calls.filter(args=>gitCommand(args)==="write-tree").length,1);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("local checkpoint Git processes receive a bounded environment instead of unrelated parent secrets",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-env-")),gitEnvironments=[],infoEnvironments=[];
+  const parentEnv={
+    PATH:process.env.PATH||"/usr/bin",HOME:home,USERPROFILE:home,TREBELL_HOME:home,
+    CHECKPOINT_PRIVATE_TOKEN:"must-not-reach-git",
+    GIT_AUTHOR_NAME:"Checkpoint Author",GIT_AUTHOR_EMAIL:"checkpoint@example.test",
+  };
+  const state={addCheckpoint:item=>({...item,createdAt:1}),checkpoints:()=>[],updateCheckpoint:()=>null};
+  const gitFn=async(_cwd,args,options={})=>{
+    gitEnvironments.push(options.env||null);const command=gitCommand(args);
+    if(command==="rev-parse")return {ok:true,stdout:"/repo\n.git/index\nhead123\n",stderr:""};
+    if(command==="read-tree"||command==="add"||command==="update-ref")return {ok:true,stdout:"",stderr:""};
+    if(command==="write-tree")return {ok:true,stdout:"tree123\n",stderr:""};
+    if(command==="commit-tree")return {ok:true,stdout:"commit123\n",stderr:""};
+    throw new Error("unexpected git "+args.join(" "));
+  };
+  const service=new CheckpointService({
+    state,env:parentEnv,gitFn,
+    gitInfoFn:async(_cwd,options={})=>{infoEnvironments.push(options.env||null);return {isGit:true,root:"/repo"}},
+  });
+  try{
+    const checkpoint=await service.create({cwd:"/repo",threadId:"thread-safe-env"});
+    // The root comes from the checkpoint's own rev-parse, which runs with the same bounded environment.
+    assert.equal(checkpoint.supported,true);assert.equal(infoEnvironments.length,0);
+    for(const environment of [...infoEnvironments,...gitEnvironments]){
+      assert.ok(environment);assert.equal(environment.CHECKPOINT_PRIVATE_TOKEN,undefined);
+      assert.equal(environment.PATH,parentEnv.PATH);assert.equal(environment.HOME,home);
+      assert.equal(environment.GIT_AUTHOR_NAME,"Checkpoint Author");assert.equal(environment.GIT_AUTHOR_EMAIL,"checkpoint@example.test");
+    }
+    assert.ok(gitEnvironments.some(environment=>typeof environment.GIT_INDEX_FILE==="string"&&environment.GIT_INDEX_FILE.includes("index-")));
+    assert.ok(gitEnvironments.some(environment=>environment.GIT_INDEX_FILE===undefined));
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint capture does not retry non-transient Git failures",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-fail-"));let addAttempts=0,sleepCalls=0;
+  const service=new CheckpointService({
+    state:{addCheckpoint:item=>item},
+    env:{...process.env,TREBELL_HOME:home},
+    gitInfoFn:async()=>({isGit:true,root:"/repo"}),
+    sleepFn:async()=>{sleepCalls++},
+    gitFn:async(_cwd,args)=>{
+      const command=gitCommand(args);
+      if(command==="rev-parse")return {ok:true,stdout:"/repo\n.git/index\nhead123\n",stderr:""};
+      if(command==="read-tree")return {ok:true,stdout:"",stderr:""};
+      if(command==="add"){addAttempts++;throw new Error("fatal: unable to write new index file")}
+      throw new Error("unexpected git "+args.join(" "));
+    },
+  });
+  try{
+    await assert.rejects(()=>service.create({cwd:"/repo"}),/unable to write new index file/);
+    assert.equal(addAttempts,1);
+    assert.equal(sleepCalls,0);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint capture skips unborn nested repositories but records committed nested repositories",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-nested-"));
+  const home=join(root,"trebell-home"),repo=join(root,"repo");
+  try{
+    await mkdir(repo,{recursive:true});
+    await git(repo,["init"]);
+    await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+    await writeFile(join(repo,"tracked.txt"),"tracked\n");await git(repo,["add","tracked.txt"]);await git(repo,["commit","-m","Base"]);
+    const originalIndex=await readFile(join(repo,".git","index"));
+    const emptyNested=join(repo,"scratch","empty [repo]");await mkdir(emptyNested,{recursive:true});await git(emptyNested,["init"]);
+    await writeFile(join(emptyNested,"private.txt"),"do not capture\n");
+    const committedNested=join(repo,"committed");await mkdir(committedNested,{recursive:true});await git(committedNested,["init"]);
+    await git(committedNested,["config","user.email","trebell@example.test"]);await git(committedNested,["config","user.name","Trebell Test"]);
+    await git(committedNested,["commit","--allow-empty","-m","Nested base"]);
+    const nestedHead=(await git(committedNested,["rev-parse","HEAD"])).stdout.trim();
+    await writeFile(join(repo,"untracked.txt"),"new\n");
+    const state={addCheckpoint:item=>({...item,createdAt:1}),checkpoints:()=>[],updateCheckpoint:()=>null};
+    const checkpoint=await new CheckpointService({state,env:{...process.env,TREBELL_HOME:home}}).create({cwd:repo,threadId:"thread-nested"});
+    assert.equal(checkpoint.supported,true);
+    assert.equal((await git(repo,["show",checkpoint.commit+":untracked.txt"])).stdout,"new\n");
+    assert.equal((await git(repo,["ls-tree","-r",checkpoint.commit,"--","scratch/empty [repo]"])).stdout,"");
+    assert.match((await git(repo,["ls-tree",checkpoint.commit,"--","committed"])).stdout,new RegExp("160000 commit "+nestedHead+"\\s+committed"));
+    assert.deepEqual(await readFile(join(repo,".git","index")),originalIndex);
+    assert.equal(await readFile(join(emptyNested,"private.txt"),"utf8"),"do not capture\n");
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint nested-repository recovery refuses excessive candidates before probing them",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-cap-"));let nestedProbes=0;
+  const candidates=Array.from({length:65},(_,index)=>"empty-"+index+"/").join("\0")+"\0";
+  const service=new CheckpointService({
+    state:{addCheckpoint:item=>item},
+    env:{...process.env,TREBELL_HOME:home},
+    gitInfoFn:async()=>({isGit:true,root:"/repo"}),
+    gitFn:async(cwd,args)=>{
+      if(cwd!=="/repo")nestedProbes++;
+      const command=gitCommand(args);
+      if(command==="rev-parse")return {ok:true,stdout:"/repo\n.git/index\nhead123\n",stderr:""};
+      if(command==="read-tree")return {ok:true,stdout:"",stderr:""};
+      if(command==="add")throw new Error("error: 'empty-0/' does not have a commit checked out\nfatal: adding files failed");
+      if(command==="ls-files")return {ok:true,stdout:candidates,stderr:""};
+      throw new Error("unexpected git "+args.join(" "));
+    },
+  });
+  try{
+    await assert.rejects(()=>service.create({cwd:"/repo"}),/does not have a commit checked out/);
+    assert.equal(nestedProbes,0);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint objects and refs request fsync before state publication",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-fsync-"));const calls=[];let published=false;
+  const state={addCheckpoint:item=>{published=true;return {...item,createdAt:1}},checkpoints:()=>[],updateCheckpoint:()=>null};
+  const gitFn=async(_cwd,args)=>{
+    assert.equal(published,false,"checkpoint state must not publish before Git finishes");
+    calls.push([...args]);const command=gitCommand(args);
+    if(command==="rev-parse")return {ok:true,stdout:"/repo\n.git/index\nhead123\n",stderr:""};
+    if(command==="read-tree"||command==="add"||command==="update-ref")return {ok:true,stdout:"",stderr:""};
+    if(command==="write-tree")return {ok:true,stdout:"tree123\n",stderr:""};
+    if(command==="commit-tree")return {ok:true,stdout:"commit123\n",stderr:""};
+    throw new Error("unexpected git "+args.join(" "));
+  };
+  try{
+    await new CheckpointService({state,env:{...process.env,TREBELL_HOME:home},gitFn,gitInfoFn:async()=>({isGit:true,root:"/repo"})}).create({cwd:"/repo"});
+    assert.equal(published,true);
+    for(const command of ["add","write-tree","commit-tree","update-ref"]){
+      const args=calls.find(item=>gitCommand(item)===command);assert.ok(args,command+" was called");
+      assert.equal(args[0],"-c");assert.equal(args[1],"core.fsync=committed");
+      assert.equal(args[2],"-c");assert.equal(args[3],"core.fsyncMethod=fsync");
+      assert.equal(args[4],command);
+    }
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("checkpoint change inspection compares against the captured tree without blaming pre-existing untracked files",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-diff-"));
+  const home=join(root,"home"),repo=join(root,"repo");
+  try{
+    await mkdir(repo,{recursive:true});await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+    await writeFile(join(repo,"tracked.txt"),"base\n");await git(repo,["add","tracked.txt"]);await git(repo,["commit","-m","Base"]);
+    await writeFile(join(repo,"preexisting.txt"),"already here\n");
+    const env={...process.env,TREBELL_HOME:home},state=new TrebellStateStore(env),service=new CheckpointService({state,env});
+    const checkpoint=await service.create({cwd:repo,threadId:"thread-diff",label:"Before turn"});
+    const checkpointPaths=(await git(repo,["ls-tree","-r","--name-only",checkpoint.commit])).stdout.split(/\r?\n/).filter(Boolean);
+    assert.ok(checkpointPaths.includes("preexisting.txt"),"checkpoint must capture pre-existing untracked files before diffing the turn");
+    await writeFile(join(repo,"tracked.txt"),"changed\n");
+    await writeFile(join(repo,"new-after-turn.txt"),"new\n");
+    const changed=await service.changedPaths(checkpoint.id,{threadId:"thread-diff"});
+    assert.deepEqual(changed.paths,["new-after-turn.txt","tracked.txt"]);
+    await assert.rejects(()=>service.changedPaths(checkpoint.id,{threadId:"wrong-thread"}),/thread that created/i);
+    await writeFile(join(repo,"tracked.txt"),"base\n");await rm(join(repo,"new-after-turn.txt"));
+    assert.deepEqual((await service.changedPaths(checkpoint.id,{threadId:"thread-diff"})).paths,[]);
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("a repository with no git identity still gets its checkpoint, under Trebell's own identity, and a set identity keeps naming it",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-identity-"));
+  const home=join(root,"home"),repo=join(root,"repo"),globalConfig=join(root,"gitconfig");
+  try{
+    // A global config with user.useConfigOnly, written by git itself: git then takes no name or email it was not given, as when
+    // it cannot make an email from a host name with no domain.
+    await git(root,["config","--file",globalConfig,"user.useConfigOnly","true"]);
+    const parent=Object.fromEntries(Object.entries(process.env).filter(([key])=>!/^(EMAIL|GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL))$/.test(key)));
+    const env={...parent,TREBELL_HOME:home,GIT_CONFIG_GLOBAL:globalConfig,GIT_CONFIG_NOSYSTEM:"1"};
+    const repoGit=args=>git(repo,args,{env});
+    await mkdir(repo,{recursive:true});await repoGit(["init"]);
+    await writeFile(join(repo,"tracked.txt"),"base\n");await repoGit(["add","tracked.txt"]);
+    await repoGit(["-c","user.name=Fixture","-c","user.email=fixture@example.test","commit","-m","Base"]);
+    await assert.rejects(()=>repoGit(["commit-tree","HEAD^{tree}","-m","probe"]),/identity unknown|auto-detection is disabled/i);
+    const service=new CheckpointService({state:new TrebellStateStore(env),env});
+    const anonymous=await service.create({cwd:repo,threadId:"thread-identity",label:"Before turn"});
+    assert.equal(anonymous.supported,true);
+    assert.equal((await repoGit(["log","-1","--format=%an <%ae>|%cn <%ce>",anonymous.commit])).stdout.trim(),"Trebell Code <checkpoints@trebell.invalid>|Trebell Code <checkpoints@trebell.invalid>");
+    assert.equal((await repoGit(["rev-parse",anonymous.ref])).stdout.trim(),anonymous.commit);
+    await repoGit(["config","user.name","Person"]);await repoGit(["config","user.email","person@example.test"]);
+    const named=await service.create({cwd:repo,threadId:"thread-identity",label:"Before second turn"});
+    assert.equal((await repoGit(["log","-1","--format=%an <%ae>",named.commit])).stdout.trim(),"Person <person@example.test>");
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("a checkpoint commit that fails for any reason but identity is not made again",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-checkpoint-commit-fail-"));
+  const commits=[];
+  const gitFn=async(_cwd,args)=>{
+    const command=gitCommand(args);
+    if(command==="rev-parse")return {ok:true,code:0,stdout:"/repo\n.git/index\nabc123\n",stderr:""};
+    if(command==="write-tree")return {ok:true,code:0,stdout:"tree123\n",stderr:""};
+    if(command==="commit-tree"){commits.push([...args]);throw new Error("fatal: unable to write new object: No space left on device")}
+    return {ok:true,code:0,stdout:"",stderr:""};
+  };
+  try{
+    const service=new CheckpointService({state:{addCheckpoint:item=>item,checkpoints:()=>[],updateCheckpoint:()=>null},env:{TREBELL_HOME:home},gitFn});
+    await assert.rejects(()=>service.create({cwd:"/repo"}),/No space left on device/);
+    assert.equal(commits.length,1);assert.ok(!commits[0].includes("user.name=Trebell Code"));
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("remote checkpoints capture, diff, and restore through the pinned environment without local filesystem access",async()=>{
+  const checkpoints=[],calls=[],metas={"thread-remote":{cwd:"/srv/repo",environmentId:"ssh-1"}};
+  const state={
+    addCheckpoint:item=>{const stored={...item,createdAt:1};checkpoints.unshift(stored);return structuredClone(stored)},
+    checkpoints:()=>structuredClone(checkpoints),updateCheckpoint:(id,patch)=>{const item=checkpoints.find(entry=>entry.id===id);if(!item)return null;Object.assign(item,patch);return structuredClone(item)},
+    threadMeta:id=>metas[id]||{},listThreadMeta:()=>structuredClone(metas),projects:()=>[{path:"/srv/repo",environmentId:"ssh-1",managedWorktree:{root:"/srv/source",branch:"feature",createdAt:1,cleanedAt:null}}],
+  };
+  const environments={
+    get:id=>id==="ssh-1"?{id:"ssh-1",type:"ssh",cwd:"/srv/repo"}:null,
+    executeArgv:async(id,request)=>{
+      assert.equal(id,"ssh-1");calls.push(structuredClone(request));
+      if(request.command==="mktemp")return {exitCode:0,stdout:"/tmp/trebell-checkpoint.fixture\n",stderr:""};
+      if(request.command==="rm")return {exitCode:0,stdout:"",stderr:""};
+      if(request.command==="test")return {exitCode:1,stdout:"",stderr:""};
+      const args=request.command==="env"?request.args.slice(2):request.args,command=gitCommand(args);
+      if(command==="rev-parse"&&args.includes("--show-toplevel"))return {exitCode:0,stdout:"/srv/repo\n",stderr:""};
+      if(command==="branch")return {exitCode:0,stdout:"feature\n",stderr:""};
+      if(command==="rev-parse")return {exitCode:0,stdout:"head123\n",stderr:""};
+      if(["read-tree","add","update-ref","update-index","restore"].includes(command))return {exitCode:0,stdout:"",stderr:""};
+      if(command==="write-tree")return {exitCode:0,stdout:"tree123\n",stderr:""};
+      if(command==="commit-tree")return {exitCode:0,stdout:"commit123\n",stderr:""};
+      if(command==="diff-files")return {exitCode:0,stdout:"src/a.js\0",stderr:""};
+      if(command==="ls-files")return {exitCode:0,stdout:"new-after-turn.txt\0",stderr:""};
+      if(command==="ls-tree")return {exitCode:0,stdout:"src/a.js\0preexisting.txt\0",stderr:""};
+      throw new Error(`unexpected remote command ${request.command} ${request.args.join(" ")}`);
+    },
+  };
+  const service=new CheckpointService({state,environments,env:{}}),checkpoint=await service.create({cwd:"/srv/repo",threadId:"thread-remote",environmentId:"ssh-1",label:"Before remote edit"});
+  assert.equal(checkpoint.supported,true);assert.equal(checkpoint.environmentId,"ssh-1");assert.equal(checkpoint.root,"/srv/repo");assert.equal(checkpoint.commit,"commit123");
+  const changed=await service.changedPaths(checkpoint.id,{threadId:"thread-remote"});assert.deepEqual(changed.paths,["new-after-turn.txt","src/a.js"]);assert.equal(changed.root,"/srv/repo");
+  const restored=await service.restore(checkpoint.id,{threadId:"thread-remote"});assert.equal(restored.ok,true);assert.equal(restored.info.root,"/srv/repo");
+  assert.ok(calls.some(call=>call.command==="env"&&call.args[0].startsWith("GIT_INDEX_FILE=/tmp/trebell-checkpoint.fixture/index")&&call.args.includes("read-tree")));
+  assert.ok(calls.some(call=>call.command==="rm"&&call.cwd==="/srv/repo"&&call.args.at(-1)==="new-after-turn.txt"));
+  assert.equal(calls.some(call=>/^[A-Za-z]:\\/.test(String(call.cwd||""))),false,"remote checkpoints must not fall back to local Windows paths");
+});
+
+// What a refused file restore says; the window shows it after "Could not restore the files, so the conversation was not changed: ".
+const THREAD_MOVED="This thread no longer works in the folder its checkpoint was taken in.";
+const NOT_OWN_WORKTREE="Files go back only in a worktree Trebell made for the thread, and this folder is not one. Go back in the conversation only, and leave the files as they are.";
+const FOLDER_SHARED="Another thread also works in this folder, so putting the files back could undo its changes. Go back in the conversation only, and leave the files as they are.";
+
+test("remote checkpoint restore refuses shared workspaces just like local restore",async()=>{
+  const checkpoint={id:"remote-shared",threadId:"thread-remote",root:"/srv/repo",commit:"commit123",environmentId:"ssh-1"};
+  const state={checkpoints:()=>[checkpoint],threadMeta:()=>({cwd:"/srv/repo",environmentId:"ssh-1"}),projects:()=>[{path:"/srv/repo",environmentId:"ssh-1"}],listThreadMeta:()=>({"thread-remote":{cwd:"/srv/repo",environmentId:"ssh-1"}})};
+  const environments={get:()=>({id:"ssh-1",type:"ssh"}),executeArgv:async()=>{throw new Error("remote command should not run before isolation is proven")}};
+  await assert.rejects(()=>new CheckpointService({state,environments}).restore("remote-shared",{threadId:"thread-remote"}),{message:NOT_OWN_WORKTREE});
+});
+
+test("remote checkpoint capture skips an unborn nested repository instead of abandoning the checkpoint",async()=>{
+  const calls=[],state={addCheckpoint:item=>({...item,createdAt:1})};let stageAttempts=0;
+  const environments={
+    get:()=>({id:"ssh-1",type:"ssh",cwd:"/srv/repo"}),
+    executeArgv:async(_id,request)=>{
+      calls.push(structuredClone(request));if(request.command==="mktemp")return {exitCode:0,stdout:"/tmp/trebell-checkpoint.nested\n"};if(request.command==="rm")return {exitCode:0,stdout:""};if(request.command==="test")return {exitCode:0,stdout:""};
+      const args=request.command==="env"?request.args.slice(2):request.args,command=gitCommand(args);
+      if(command==="rev-parse"&&args.includes("--show-toplevel"))return {exitCode:0,stdout:request.cwd+"\n"};
+      if(command==="branch")return {exitCode:0,stdout:"main\n"};
+      if(command==="rev-parse"&&String(request.cwd||"").replace(/\/$/,"")==="/srv/repo/scratch/empty")return {exitCode:1,stdout:"",stderr:"fatal: Needed a single revision"};
+      if(command==="rev-parse")return {exitCode:0,stdout:"head123\n"};
+      if(command==="read-tree"||command==="update-ref")return {exitCode:0,stdout:""};
+      if(command==="add"){
+        stageAttempts++;if(stageAttempts===1)return {exitCode:128,stdout:"",stderr:"error: 'scratch/empty/' does not have a commit checked out\nfatal: adding files failed"};
+        assert.ok(args.includes(":(exclude,literal)scratch/empty/"));return {exitCode:0,stdout:""};
+      }
+      if(command==="ls-files")return {exitCode:0,stdout:"scratch/empty/\0"};
+      if(command==="write-tree")return {exitCode:0,stdout:"tree123\n"};if(command==="commit-tree")return {exitCode:0,stdout:"commit123\n"};
+      throw new Error(`unexpected remote command ${request.command} ${request.args.join(" ")}`);
+    },
+  };
+  const checkpoint=await new CheckpointService({state,environments}).create({cwd:"/srv/repo",threadId:"thread-remote",environmentId:"ssh-1"});
+  assert.equal(checkpoint.supported,true);assert.equal(stageAttempts,2);assert.ok(calls.some(call=>call.command==="test"&&call.args.at(-1)==="/srv/repo/scratch/empty/.git"));
+});
+
+test("file rewind restores only an isolated managed worktree and refuses sibling ownership",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-isolation-"));
+  const home=join(root,"home"),repo=join(root,"repo"),worktree=join(root,"worktree");
+  try{
+    await mkdir(repo,{recursive:true});
+    await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+    await git(repo,["checkout","-b","main"]);await writeFile(join(repo,"file.txt"),"base\n");await git(repo,["add","."]);await git(repo,["commit","-m","Base"]);
+    await git(repo,["branch","feature"]);await git(repo,["worktree","add",worktree,"feature"]);
+    const env={...process.env,TREBELL_HOME:home};const state=new TrebellStateStore(env);
+    state.touchProject(worktree,{managedWorktree:{root:repo,branch:"feature",baseBranch:"main",submodules:"none",createdAt:Date.now()}});
+    state.updateThreadMeta("thread-owner",{cwd:worktree,archived:false});
+    const service=new CheckpointService({state,env});
+    await writeFile(join(worktree,"file.txt"),"checkpoint\n");
+    const checkpoint=await service.create({cwd:worktree,threadId:"thread-owner",label:"Before change"});
+    await writeFile(join(worktree,"file.txt"),"later\n");
+    await service.restore(checkpoint.id,{threadId:"thread-owner"});
+    assert.equal(await readFile(join(worktree,"file.txt"),"utf8"),"checkpoint\n");
+
+    await writeFile(join(worktree,"file.txt"),"sibling work\n");
+    state.updateThreadMeta("thread-sibling",{cwd:worktree,archived:true});
+    await assert.rejects(()=>service.restore(checkpoint.id,{threadId:"thread-owner"}),{message:FOLDER_SHARED});
+    assert.equal(await readFile(join(worktree,"file.txt"),"utf8"),"sibling work\n");
+
+    state.updateThreadMeta("thread-sibling",{deletedAt:Date.now()});
+    const nested=join(worktree,"nested-owner");await mkdir(nested,{recursive:true});
+    state.updateThreadMeta("thread-nested",{cwd:nested,archived:false});
+    await assert.rejects(()=>service.restore(checkpoint.id,{threadId:"thread-owner"}),{message:FOLDER_SHARED});
+    assert.equal(await readFile(join(worktree,"file.txt"),"utf8"),"sibling work\n");
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("file rewind refuses ordinary shared project directories and checkpoint cross-thread use",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-shared-"));const home=join(root,"home"),repo=join(root,"repo");
+  try{
+    await mkdir(repo,{recursive:true});await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+    await writeFile(join(repo,"file.txt"),"base\n");await git(repo,["add","."]);await git(repo,["commit","-m","Base"]);
+    const env={...process.env,TREBELL_HOME:home};const state=new TrebellStateStore(env);
+    state.touchProject(repo,{});state.updateThreadMeta("thread-owner",{cwd:repo});
+    const service=new CheckpointService({state,env});const checkpoint=await service.create({cwd:repo,threadId:"thread-owner"});
+    await assert.rejects(()=>service.restore(checkpoint.id,{threadId:"thread-other"}),/thread that created/i);
+    await assert.rejects(()=>service.restore(checkpoint.id,{threadId:"thread-owner"}),{message:NOT_OWN_WORKTREE});
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// Each refusal names its own reason, and a refused restore leaves the files as the turn left them. A thread that was deleted, or
+// whose folder is gone, works nowhere any more and does not hold a restore back.
+test("a refused file restore says why: the thread moved, another thread works in a folder holding the worktree, or the worktree was cleaned up",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-refusals-"));
+  const home=join(root,"home"),repo=join(root,"repo"),worktree=join(root,"worktree"),elsewhere=join(root,"elsewhere");
+  try{
+    await mkdir(repo,{recursive:true});await mkdir(elsewhere,{recursive:true});
+    await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+    await git(repo,["checkout","-b","main"]);await writeFile(join(repo,"file.txt"),"base\n");await git(repo,["add","."]);await git(repo,["commit","-m","Base"]);
+    await git(repo,["branch","feature"]);await git(repo,["worktree","add",worktree,"feature"]);
+    const env={...process.env,TREBELL_HOME:home},state=new TrebellStateStore(env);
+    const kept={root:repo,branch:"feature",baseBranch:"main",submodules:"none",createdAt:Date.now()};
+    state.touchProject(worktree,{managedWorktree:kept});state.updateThreadMeta("thread-owner",{cwd:worktree});
+    const service=new CheckpointService({state,env});
+    await writeFile(join(worktree,"file.txt"),"checkpoint\n");
+    const checkpoint=await service.create({cwd:worktree,threadId:"thread-owner"});
+    await writeFile(join(worktree,"file.txt"),"turn work\n");
+    const refused=async message=>{
+      await assert.rejects(()=>service.restore(checkpoint.id,{threadId:"thread-owner"}),{message});
+      assert.equal(await readFile(join(worktree,"file.txt"),"utf8"),"turn work\n","a refused restore leaves the files as they are");
+    };
+    state.updateThreadMeta("thread-owner",{cwd:elsewhere});await refused(THREAD_MOVED);
+    state.updateThreadMeta("thread-owner",{cwd:worktree});
+    state.updateThreadMeta("thread-around",{cwd:root});await refused(FOLDER_SHARED);
+    state.updateThreadMeta("thread-around",{deletedAt:Date.now()});
+    state.updateThreadMeta("thread-gone",{cwd:join(await realpath(worktree),"removed-folder")});
+    state.touchProject(worktree,{managedWorktree:{...kept,cleanedAt:Date.now()}});await refused(NOT_OWN_WORKTREE);
+    state.touchProject(worktree,{managedWorktree:kept});
+    await service.restore(checkpoint.id,{threadId:"thread-owner"});
+    assert.equal(await readFile(join(worktree,"file.txt"),"utf8"),"checkpoint\n","a deleted thread and one whose folder is gone do not hold the restore back");
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// Over an environment the same reasons, told apart by the environment too: a thread, a kept worktree or another thread counts only
+// on the checkpoint's own environment. Nothing runs there before the checks pass, and once they do, the restore runs in the folder
+// as the checks wrote it.
+test("over an environment a refused file restore says why before any command runs, and only threads and worktrees on that environment count",async()=>{
+  const checkpoint={id:"remote-reasons",threadId:"thread-remote",root:"/srv/repo/",commit:"commit123",environmentId:"ssh-1"};
+  const kept={path:"/srv/repo",environmentId:"ssh-1",managedWorktree:{root:"/srv/main",createdAt:1,cleanedAt:null}};
+  const owner={cwd:"/srv/repo",environmentId:"ssh-1"};
+  const restoreWith=async({threads,projects=[kept]})=>{
+    const calls=[],state={checkpoints:()=>[checkpoint],threadMeta:id=>threads[id],projects:()=>projects,listThreadMeta:()=>threads};
+    const environments={get:id=>({id,type:"ssh"}),executeArgv:async(_id,request)=>{calls.push(request);throw new Error("the restore went on to its first remote command")}};
+    const error=await new CheckpointService({state,environments}).restore(checkpoint.id,{threadId:"thread-remote"}).then(()=>null,failure=>failure);
+    return {message:error?.message,folder:calls[0]?.cwd??null};
+  };
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":{cwd:"/srv/repo",environmentId:"ssh-2"}}}),{message:THREAD_MOVED,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":{cwd:"/srv/other",environmentId:"ssh-1"}}}),{message:THREAD_MOVED,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":owner},projects:[{...kept,environmentId:"ssh-2"}]}),{message:NOT_OWN_WORKTREE,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":owner},projects:[{...kept,managedWorktree:{...kept.managedWorktree,cleanedAt:2}}]}),{message:NOT_OWN_WORKTREE,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":owner,"thread-around":{cwd:"/srv",environmentId:"ssh-1"}}}),{message:FOLDER_SHARED,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":owner,"thread-inside":{cwd:"/srv/repo/packages/a",environmentId:"ssh-1"}}}),{message:FOLDER_SHARED,folder:null});
+  assert.deepEqual(await restoreWith({threads:{"thread-remote":{cwd:"\\srv\\repo\\",environmentId:"ssh-1"},"thread-elsewhere":{cwd:"/srv/repo",environmentId:"ssh-2"},"thread-next-door":{cwd:"/srv/repo2",environmentId:"ssh-1"}}}),{message:"the restore went on to its first remote command",folder:"/srv/repo"});
+});
+
+// A managed worktree owned by one thread, its checkpoint, and then work done after it: a tracked file changed, one deleted, one
+// staged, and an untracked file added. snapshot() reads what a person would check: each file's bytes, git status and the staged diff.
+async function rewindWorktree(prefix){
+  const root=await mkdtemp(join(tmpdir(),prefix));
+  const home=join(root,"home"),repo=join(root,"repo"),worktree=join(root,"worktree");
+  await mkdir(repo,{recursive:true});
+  await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+  await git(repo,["checkout","-b","main"]);
+  for(const [name,text] of [["kept.txt","base\n"],["edited.txt","base\n"],["deleted.txt","base\n"],["staged.txt","base\n"]])await writeFile(join(repo,name),text);
+  await git(repo,["add","."]);await git(repo,["commit","-m","Base"]);
+  await git(repo,["branch","feature"]);await git(repo,["worktree","add",worktree,"feature"]);
+  const env={...process.env,TREBELL_HOME:home};const state=new TrebellStateStore(env);
+  state.touchProject(worktree,{managedWorktree:{root:repo,branch:"feature",baseBranch:"main",submodules:"none",createdAt:Date.now()}});
+  state.updateThreadMeta("thread-owner",{cwd:worktree,archived:false});
+  await writeFile(join(worktree,"edited.txt"),"checkpoint\n");
+  const checkpointState={state,env,worktree,root};
+  checkpointState.later=async()=>{
+    await writeFile(join(worktree,"edited.txt"),"later work\n");await rm(join(worktree,"deleted.txt"));
+    await writeFile(join(worktree,"staged.txt"),"staged work\n");await git(worktree,["add","staged.txt"]);
+    await writeFile(join(worktree,"untracked.txt"),"new file\n");
+  };
+  checkpointState.snapshot=async()=>{
+    const files={};
+    for(const name of ["kept.txt","edited.txt","deleted.txt","staged.txt","untracked.txt"])files[name]=await readFile(join(worktree,name),"utf8").catch(()=>null);
+    const status=(await git(worktree,["status","--porcelain=v1","--untracked-files=all"])).stdout;
+    const staged=(await git(worktree,["diff","--cached","--name-status"])).stdout;
+    return {files,status,staged};
+  };
+  return checkpointState;
+}
+
+// A restore that fails part-way (git restore wrote some files and then stopped, as on a file another program holds open) puts every
+// file back as it was before the attempt, untracked and staged ones too, and says so.
+test("a file restore that fails part-way puts every file back as it was before the attempt",async()=>{
+  const fixture=await rewindWorktree("trebell-checkpoint-partial-");
+  try{
+    const plain=new CheckpointService({state:fixture.state,env:fixture.env});
+    const checkpoint=await plain.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+    await fixture.later();const before=await fixture.snapshot();
+    let failed=false;
+    const gitFn=async(cwd,args,options)=>{
+      const result=await git(cwd,args,options);
+      if(!failed&&gitCommand(args)==="restore"&&args.includes(checkpoint.commit)){failed=true;throw new Error("error: unable to unlink old 'edited.txt': Permission denied")}
+      return result;
+    };
+    const service=new CheckpointService({state:fixture.state,env:fixture.env,gitFn});
+    const error=await service.restore(checkpoint.id,{threadId:"thread-owner"}).then(()=>null,caught=>caught);
+    assert.equal(failed,true,"the restore wrote the files before it failed");
+    assert.deepEqual(await fixture.snapshot(),before,"the files, git status and the staged changes are as they were");
+    assert.match(String(error?.message),/unable to unlink old 'edited\.txt'/);assert.equal(error.filesPutBack,true,"the failure says the files were put back");
+  }finally{await rm(fixture.root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// Edit from here restores the files and then rewinds the conversation. A rewind the harness refuses takes the restore back
+// (undoRestore): every file is as it was before Edit from here, untracked and staged ones too, and the undo is used up.
+test("a file restore taken back puts every file back as it was before it, and only once",async()=>{
+  const fixture=await rewindWorktree("trebell-checkpoint-undo-");
+  try{
+    const service=new CheckpointService({state:fixture.state,env:fixture.env});
+    const checkpoint=await service.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+    await fixture.later();const before=await fixture.snapshot();
+    const restored=await service.restore(checkpoint.id,{threadId:"thread-owner"});
+    assert.equal(restored.ok,true);assert.ok(restored.undoId,"the restore can be taken back");
+    assert.equal(await readFile(join(fixture.worktree,"edited.txt"),"utf8"),"checkpoint\n");
+    assert.equal(await readFile(join(fixture.worktree,"untracked.txt"),"utf8").catch(()=>null),null);
+    await assert.rejects(()=>service.undoRestore(restored.undoId,{threadId:"thread-other"}),/no longer|thread/i);
+    const undone=await service.undoRestore(restored.undoId,{threadId:"thread-owner"});
+    assert.equal(undone.ok,true);
+    assert.deepEqual(await fixture.snapshot(),before,"the files, git status and the staged changes are as they were");
+    await assert.rejects(()=>service.undoRestore(restored.undoId,{threadId:"thread-owner"}),/no longer/i);
+    assert.deepEqual(await fixture.snapshot(),before);
+  }finally{await rm(fixture.root,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// A restore taken back gives every file its own bytes back: the files it changed are kept as they are on disk, not through git's
+// line-ending conversion. core.autocrlf=input (a common global setting) stored a CRLF file with LF endings and wrote it back with
+// LF; autocrlf=true (Git for Windows' default) wrote an LF file back with CRLF.
+async function lineEndingWorktree(autocrlf){
+  const root=await mkdtemp(join(tmpdir(),"trebell-checkpoint-eol-"));
+  const home=join(root,"home"),repo=join(root,"repo"),worktree=join(root,"worktree");
+  await mkdir(repo,{recursive:true});
+  await git(repo,["init"]);await git(repo,["config","user.email","trebell@example.test"]);await git(repo,["config","user.name","Trebell Test"]);
+  await git(repo,["config","core.autocrlf",autocrlf]);
+  await git(repo,["checkout","-b","main"]);
+  await writeFile(join(repo,"edited.txt"),"base\n");
+  await git(repo,["add","."]);await git(repo,["commit","-m","Base"]);
+  await git(repo,["branch","feature"]);await git(repo,["worktree","add",worktree,"feature"]);
+  const env={...process.env,TREBELL_HOME:home};const state=new TrebellStateStore(env);
+  state.touchProject(worktree,{managedWorktree:{root:repo,branch:"feature",baseBranch:"main",submodules:"none",createdAt:Date.now()}});
+  state.updateThreadMeta("thread-owner",{cwd:worktree,archived:false});
+  return {root,worktree,state,env};
+}
+for(const [autocrlf,eol] of [["input","\r\n"],["true","\n"]]){
+  test(`a file restore taken back gives each file its own bytes back (core.autocrlf=${autocrlf}, a file written with ${JSON.stringify(eol)})`,async()=>{
+    const fixture=await lineEndingWorktree(autocrlf);
+    try{
+      const service=new CheckpointService({state:fixture.state,env:fixture.env});
+      const checkpoint=await service.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+      // Work after the checkpoint, in the line endings the person's editor or tool wrote.
+      await writeFile(join(fixture.worktree,"edited.txt"),`later work${eol}second line${eol}`);
+      await writeFile(join(fixture.worktree,"notes.txt"),`new notes${eol}more${eol}`);
+      const bytes=async()=>({edited:await readFile(join(fixture.worktree,"edited.txt"),"latin1").catch(()=>null),notes:await readFile(join(fixture.worktree,"notes.txt"),"latin1").catch(()=>null)});
+      const before=await bytes();
+      const restored=await service.restore(checkpoint.id,{threadId:"thread-owner"});
+      assert.ok(restored.undoId);
+      assert.equal((await bytes()).notes,null,"the restore removed the file the checkpoint lacks");
+      await service.undoRestore(restored.undoId,{threadId:"thread-owner"});
+      const after=await bytes();
+      console.log("before:",JSON.stringify(before),"after:",JSON.stringify(after));
+      assert.deepEqual(after,before,"every file is put back byte for byte");
+    }finally{await rm(fixture.root,{recursive:true,force:true,maxRetries:8,retryDelay:100})}
+  });
+}
+
+// A restore that stops on a file another program holds (it may be read, not deleted or replaced, as a program that uses a file holds
+// it on Windows) puts every other file and the staged state back, and counts the held file, which never changed, as put back.
+function holdOpen(path){
+  return new Promise((resolve,reject)=>{
+    const script=`$f=[System.IO.File]::Open('${path.replace(/'/g,"''")}',[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::Read);[Console]::Out.WriteLine('held');[Console]::Out.Flush();[void][Console]::In.ReadLine();$f.Close()`;
+    const child=spawn("powershell.exe",["-NoProfile","-NonInteractive","-Command",script],{windowsHide:true,stdio:["pipe","pipe","pipe"]});
+    let held=false;
+    child.stdout.on("data",chunk=>{if(!held&&String(chunk).includes("held")){held=true;resolve({release:()=>new Promise(done=>{if(child.exitCode!=null)return done();child.once("exit",done);child.stdin.end("\n")})})}});
+    child.once("error",reject);child.once("exit",code=>{if(!held)reject(new Error("the holder exited "+code))});
+  });
+}
+test("a file restore that stops on a file another program holds puts every file and the staged state back",{skip:process.platform!=="win32"&&"Windows file sharing only",timeout:180_000},async()=>{
+  const fixture=await rewindWorktree("trebell-checkpoint-held-");
+  let holder=null;
+  try{
+    const service=new CheckpointService({state:fixture.state,env:fixture.env});
+    const checkpoint=await service.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+    await fixture.later();const before=await fixture.snapshot();
+    holder=await holdOpen(join(fixture.worktree,"edited.txt"));
+    const error=await service.restore(checkpoint.id,{threadId:"thread-owner"}).then(()=>null,caught=>caught);
+    await holder.release();holder=null;
+    const after=await fixture.snapshot();
+    console.log("error:",error?.message,"filesPutBack:",error?.filesPutBack,"after:",JSON.stringify(after));
+    assert.ok(error,"the restore stopped on the held file");
+    assert.deepEqual(after,before,"the files, git status and the staged changes are as they were");
+    assert.equal(error.filesPutBack,true,"the failure says the files were put back");
+  }finally{if(holder)await holder.release();await rm(fixture.root,{recursive:true,force:true,maxRetries:8,retryDelay:100})}
+});
+
+// Taking a restore back that cannot write a file another program holds says so and stays kept; taken back again once the file is free,
+// it puts that file back too, and names no file as changed since the restore (the ones the first try put back are as they were).
+test("a file restore taken back while a file is held can be taken back again once it is free",{skip:process.platform!=="win32"&&"Windows file sharing only",timeout:180_000},async()=>{
+  const fixture=await rewindWorktree("trebell-checkpoint-undo-held-");
+  let holder=null;
+  try{
+    const service=new CheckpointService({state:fixture.state,env:fixture.env});
+    const checkpoint=await service.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+    await fixture.later();const before=await fixture.snapshot();
+    const restored=await service.restore(checkpoint.id,{threadId:"thread-owner"});
+    holder=await holdOpen(join(fixture.worktree,"edited.txt"));
+    await assert.rejects(()=>service.undoRestore(restored.undoId,{threadId:"thread-owner"}),/Could not put every file back as it was: edited\.txt/);
+    await holder.release();holder=null;
+    const undone=await service.undoRestore(restored.undoId,{threadId:"thread-owner"});
+    console.log("undo again:",JSON.stringify(undone));
+    assert.deepEqual(undone,{ok:true},"no file is named as changed since the restore");
+    assert.deepEqual(await fixture.snapshot(),before,"the files, git status and the staged changes are as they were");
+  }finally{if(holder)await holder.release();await rm(fixture.root,{recursive:true,force:true,maxRetries:8,retryDelay:100})}
+});
+
+// A turn that starts while the files go back (Codex starts a goal's next turn by itself) works on them meanwhile. The restore removes
+// only the untracked files it kept, so the turn's new file stays, and taking the restore back puts back only what the restore changed
+// that nobody changed since: the turn's edit to a file the restore wrote stays too.
+test("a file restore and its undo leave what a turn writes meanwhile as the turn left it",async()=>{
+  const fixture=await rewindWorktree("trebell-checkpoint-turn-work-");
+  try{
+    const plain=new CheckpointService({state:fixture.state,env:fixture.env});
+    const checkpoint=await plain.create({cwd:fixture.worktree,threadId:"thread-owner",label:"Before change"});
+    await fixture.later();const before=await fixture.snapshot();
+    const output=join(fixture.worktree,"turn-output.txt");
+    // The turn writes a file of its own as git restore finishes, before the restore's clean-up.
+    const gitFn=async(cwd,args,options)=>{const result=await git(cwd,args,options);if(gitCommand(args)==="restore"&&args.includes(checkpoint.commit))await writeFile(output,"written by the turn\n");return result};
+    const service=new CheckpointService({state:fixture.state,env:fixture.env,gitFn});
+    const restored=await service.restore(checkpoint.id,{threadId:"thread-owner"});
+    assert.equal(await readFile(join(fixture.worktree,"untracked.txt"),"utf8").catch(()=>null),null,"the restore removed the untracked file it kept");
+    assert.equal(await readFile(output,"utf8").catch(()=>null),"written by the turn\n","the turn's new file is still there after the restore");
+    // The turn then changes a file the restore wrote.
+    await writeFile(join(fixture.worktree,"staged.txt"),"the turn's edit\n");
+    const undone=await service.undoRestore(restored.undoId,{threadId:"thread-owner"});
+    const after=await fixture.snapshot();
+    console.log("undo:",JSON.stringify(undone),"after:",JSON.stringify(after.files));
+    assert.equal(await readFile(output,"utf8").catch(()=>null),"written by the turn\n","the turn's new file is still there after the undo");
+    assert.equal(after.files["staged.txt"],"the turn's edit\n","the file the turn changed since the restore keeps its change");
+    assert.deepEqual({...after.files,"staged.txt":before.files["staged.txt"]},before.files,"every other file is as it was before the restore");
+    assert.deepEqual(undone.changedSince,["staged.txt"],"the undo names the file it left as the turn left it");
+  }finally{await rm(fixture.root,{recursive:true,force:true,maxRetries:8,retryDelay:100})}
+});

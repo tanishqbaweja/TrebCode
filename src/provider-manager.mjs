@@ -1,0 +1,1367 @@
+import { TREBELL_USER_AGENT } from "./client-identity.mjs";
+import { adaptAnthropicResponse, ANTHROPIC_PRE_SERIALIZED_MESSAGES, chatToAnthropic, createAnthropicMessageProjector, providerTurnAnthropicScaffold, providerTurnToAnthropic } from "./anthropic-chat-adapter.mjs";
+import { dropResponsesReasoning, NATIVE_CHAT_MESSAGE_CACHE_IDENTITY, normalizeChatTurnResponse, normalizeResponsesTurnResponse, providerTurnToChat, providerTurnToResponses, providerToolsToChat, responsesReasoningToReplay } from "./provider-turn.mjs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { trebellHome } from "./paths.mjs";
+import { redactSecretText } from "./secret-redactor.mjs";
+import { performance } from "node:perf_hooks";
+import { providerCapabilities } from "./provider-capabilities.mjs";
+import { NATIVE_OPENAI_CONTINUATION_IDENTITY, OpenAiResponseContinuationTracker } from "./openai-response-continuation.mjs";
+import { OpenAiResponsesWebSocket, openAiResponsesWebSocketStreamId, openAiRetryAfterMs } from "./openai-responses-websocket.mjs";
+import { NATIVE_TOOL_SCHEMA_FINGERPRINT } from "./native-request-metrics.mjs";
+import { isNodeFetch, providerLongRequestFetch } from "./provider-long-request-fetch.mjs";
+
+export const DEFAULT_MODEL_PROVIDER = "openai";
+
+export const MODEL_PROVIDERS = Object.freeze({
+  openai: {
+    id: "openai",
+    name: "OpenAI API",
+    baseUrl: "https://api.openai.com/v1",
+    wireApi: "responses",
+    protocolCompatibility: ["openai-responses"],
+    envKey: "OPENAI_API_KEY",
+    requiresKey: true,
+    official: true,
+  },
+  anthropic: {
+    id: "anthropic",
+    name: "Anthropic API",
+    baseUrl: "https://api.anthropic.com/v1",
+    wireApi: "chat",
+    protocolCompatibility: ["anthropic-messages"],
+    envKey: "ANTHROPIC_API_KEY",
+    requiresKey: true,
+    official: true,
+    authStyle: "anthropic",
+  },
+  gemini: {
+    id: "gemini",
+    name: "Google Gemini API",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    wireApi: "chat",
+    protocolCompatibility: ["openai-chat-completions"],
+    envKey: "GEMINI_API_KEY",
+    envKeys: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    requiresKey: true,
+    official: true,
+  },
+  // xAI's Responses API (docs.x.ai), its primary interface for tool use: Bearer key. Its /v1/models also lists the image and
+  // video models, which cannot run a turn; /v1/language-models lists only the models a turn can use, each with its reasoning
+  // efforts (capabilities.reasoning_effort).
+  xai: {
+    id: "xai",
+    name: "xAI API",
+    baseUrl: "https://api.x.ai/v1",
+    wireApi: "responses",
+    protocolCompatibility: ["openai-responses"],
+    envKey: "XAI_API_KEY",
+    requiresKey: true,
+    official: true,
+    modelsPath: "/language-models",
+    statelessResponses: true,
+  },
+  // The Meta Model API (dev.meta.ai), which Muse Code itself calls: its Responses API, the one Meta names for agentic and
+  // multi-step work, with a Bearer key. META_API_KEY is the name Muse Code reads.
+  meta: {
+    id: "meta",
+    name: "Meta Model API",
+    baseUrl: "https://api.meta.ai/v1",
+    wireApi: "responses",
+    protocolCompatibility: ["openai-responses"],
+    envKey: "META_API_KEY",
+    requiresKey: true,
+    official: true,
+    statelessResponses: true,
+    // Its tool_choice takes only "auto": "none", "required" and a named tool are refused with HTTP 400 (autoToolChoiceRequest).
+    autoToolChoiceOnly: true,
+  },
+  agentrouter: {
+    id: "agentrouter",
+    name: "AgentRouter",
+    baseUrl: "https://co.agentrouter.org/v1",
+    wireApi: "chat",
+    protocolCompatibility: ["openai-chat-completions"],
+    envKey: "AGENTROUTER_API_KEY",
+    requiresKey: true,
+  },
+  justworker: {
+    id: "justworker",
+    name: "JustWorker.icu",
+    // The endpoint supplied by the service intentionally spells the host
+    // "justwoker". Keep the configured API URL exact instead of guessing.
+    baseUrl: "https://api.justwoker.icu/v1",
+    wireApi: "chat",
+    protocolCompatibility: ["anthropic-messages"],
+    envKey: "JUSTWORKER_API_KEY",
+    envKeys: ["JUSTWORKER_API_KEY", "JUST_WORKER_API_KEY"],
+    requiresKey: true,
+    staticModels: ["claude-opus-4-8"],
+  },
+  hcnsec: {
+    id: "hcnsec",
+    name: "HCNSec.cn",
+    baseUrl: "https://api.hcnsec.cn/v1",
+    wireApi: "chat",
+    protocolCompatibility: ["openai-chat-completions"],
+    envKey: "HCNSEC_API_KEY",
+    envKeys: ["HCNSEC_API_KEY", "HNSEC_API_KEY"],
+    requiresKey: true,
+    staticModels: ["glm-5.3"],
+  },
+  vyceai: {
+    id: "vyceai",
+    name: "VyceAi",
+    baseUrl: "https://vyceai.com/v1",
+    wireApi: "chat",
+    protocolCompatibility: ["openai-chat-completions"],
+    envKey: "VYCEAI_API_KEY",
+    envKeys: ["VYCEAI_API_KEY", "VYCE_API_KEY"],
+    requiresKey: true,
+  },
+});
+
+export function normalizeProviderId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MODEL_PROVIDERS, id) ? id : DEFAULT_MODEL_PROVIDER;
+}
+
+// A turn for a provider whose tool_choice takes only "auto" (autoToolChoiceOnly). The Meta Model API answers any other choice with
+// HTTP 400: "only `\"auto\"` is supported for `tool_choice`. `\"none\"`, `\"required\"`, and named function choices are not currently
+// supported" (checked live 2026-11-04; a request with no tools is accepted, also when its input carries earlier tool calls and their
+// outputs, and the model answers it). Native's controllers ask for "required" or a named tool when a step must call one, so on such
+// a provider that step asks for "auto" (the step offers only the tools it needs, and its own messages still say what to call).
+// Native's steps that must answer without a tool already send no tools; a "none" from any other caller is sent without its tools.
+export function autoToolChoiceRequest(request={}){
+  const choice=request?.toolChoice;
+  if(choice==null||choice==="auto")return request;
+  if(choice==="none")return {...request,tools:[],toolChoice:"auto"};
+  return {...request,toolChoice:"auto"};
+}
+
+// The official OpenAI /models list also returns embedding, audio, image, video (Sora), moderation, realtime, live voice,
+// search-only and legacy completion models; none of them can run a Trebell Native agent turn on the Responses API (it
+// refuses the search models outright and answered gpt-live-1 with HTTP 500 every time). The words match whole id tokens
+// only, and a fine-tune (ft:<base>:<org>:<suffix>:<id>) is judged by its base model, so an organization or suffix such as
+// "speechify" or "image-captions" never hides a chat fine-tune.
+const OPENAI_NON_AGENT_MODEL=/(?:^|[^a-z0-9])(?:embedding|audio|tts|whisper|transcribe|speech|dall-e|image|sora|video|moderation|realtime|live|search|babbage|davinci|instruct)(?=[^a-z0-9]|$)/;
+const OPENAI_DEFAULT_MODEL_EXCLUDED=/mini|nano|search|preview|audio|realtime|codex|oss|chat-latest/;
+// Expensive "-pro" variants (pro as a whole id token, e.g. gpt-6-pro, o3-pro) stay selectable but are never the silent default.
+const OPENAI_PRO_MODEL=/(?:^|[^a-z0-9])pro(?:[^a-z0-9]|$)/;
+function openAiAgentModel(id){const text=String(id||"").trim().toLowerCase(),base=text.startsWith("ft:")?text.split(":")[1]||"":text;return !OPENAI_NON_AGENT_MODEL.test(base)}
+// /models keeps listing a model after its shutdown_date (a UTC day), and from that day the Responses API answers 404 for it.
+function openAiModelShutDown(item,now){const date=Date.parse(String(item?.shutdown_date||""));return Number.isFinite(date)&&date<=now}
+// Meta's /v1/models lists its image (muse-image), speech-to-text (muse-voice-transcribe) and segmentation (sam) models beside
+// the chat models; none of them can run an agent turn.
+const META_NON_AGENT_MODEL=/(?:^|[^a-z0-9])(?:image|voice|transcribe|speech|tts|audio|sam|segment|segmentation|embedding)(?=[^a-z0-9]|$)/;
+// A listed model a Native turn can run on: OpenAI's agent-capable models that are not shut down, Meta's chat models, and every
+// model of the other providers (xAI's /v1/language-models lists only language models).
+function agentModelRow(providerId,item,now){
+  const id=String((typeof item==="string"?item:item?.id)||"").trim().toLowerCase();
+  if(providerId==="openai")return openAiAgentModel(id)&&!openAiModelShutDown(item,now);
+  if(providerId==="meta")return !META_NON_AGENT_MODEL.test(id);
+  return true;
+}
+// xAI lists a model's reasoning efforts as capabilities.reasoning_effort; Native reads them as reasoningEfforts.
+function advertisedReasoningEfforts(item){
+  const listed=item?.capabilities?.reasoning_effort;
+  return Array.isArray(listed)&&listed.length?listed.filter(value=>typeof value==="string").map(value=>value.trim().toLowerCase()).filter(Boolean):null;
+}
+function openAiDefaultModel(rows=[]){
+  const ranked=rows.map(item=>({id:String((typeof item==="string"?item:item?.id)||"").trim(),created:Number(typeof item==="string"?NaN:item?.created)})).filter(item=>item.id&&!OPENAI_PRO_MODEL.test(item.id.toLowerCase()))
+    .map(item=>({...item,created:Number.isFinite(item.created)?item.created:-Infinity}))
+    .sort((a,b)=>(b.created>a.created?1:b.created<a.created?-1:0)||a.id.length-b.id.length||(a.id<b.id?-1:a.id>b.id?1:0));
+  const flagship=ranked.find(item=>{const id=item.id.toLowerCase();return id.startsWith("gpt-")&&!OPENAI_DEFAULT_MODEL_EXCLUDED.test(id)});
+  return (flagship||ranked[0])?.id||null;
+}
+
+function providerSecretsPath(env = process.env) {
+  return join(trebellHome(env), "provider-secrets.json");
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function bundledCodexVersion(){
+  try{
+    const pkg=JSON.parse(readFileSync(new URL("../node_modules/@openai/codex/package.json",import.meta.url),"utf8"));
+    const value=String(pkg?.version||"").trim();if(value)return value;
+  }catch{}
+  try{
+    const pkg=JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8"));
+    const value=String(pkg?.dependencies?.["@openai/codex"]||"").trim().replace(/^[^0-9]*/,"");
+    if(value)return value;
+  }catch{}
+  return "0.149.1";
+}
+const DEFAULT_AGENTROUTER_CLIENT_VERSION=bundledCodexVersion();
+const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 300_000;
+function providerErrorExcerpt(value,{environment={},secret="",maxChars=1200}={}){
+  const max=Math.max(120,Math.min(4000,Math.trunc(Number(maxChars)||1200))),scan=String(value??"").slice(0,Math.max(max*4,max+4096));
+  return redactSecretText(scan,{environment:{...environment,TREBELL_PROVIDER_ERROR_SECRET:String(secret||"")}}).slice(0,max);
+}
+// A provider's error body as people read it: the message of its JSON error (OpenAI's {"error":{"message"}}, Anthropic's
+// {"type":"error","error":{...}}, Gemini's [{"error":{...}}], a bare message, detail or FastAPI's [{"msg"}], and an upstream
+// body a relay passes on as its message), else the body's text; never raw JSON or an HTML page. Secrets are redacted, and so
+// is a masked key the provider echoes back (sk-proj-****abcd, sk-abc***xyz, sk-abc...wxyz).
+const MASKED_KEY=/\S*(?:\*{3,}|[\w-](?:\.{3}|…)\w)\S*/g;
+function providerErrorMessage(raw,{environment={},secret="",maxChars=300}={}){
+  const text=String(raw??"").trim();let parsed;
+  try{parsed=JSON.parse(text)}catch{parsed=undefined}
+  const find=(value,depth=0)=>{
+    if(typeof value==="string"){
+      const inner=value.trim();
+      if(/^[{[]/.test(inner)&&depth<=4)try{return find(JSON.parse(inner),depth+1)}catch{}
+      return /^\{\s*"/.test(inner)?"":value;
+    }
+    if(!value||typeof value!=="object"||depth>4)return "";
+    if(Array.isArray(value))return find(value[0],depth+1);
+    for(const key of ["message","error","detail","error_description","msg"]){const found=find(value[key],depth+1);if(found)return found}
+    return "";
+  };
+  const message=parsed===undefined?(/^(?:<|\{\s*")/.test(text)?"":text):find(parsed);
+  return providerErrorExcerpt(message.replace(/\s+/g," ").trim().replace(MASKED_KEY,"[redacted]"),{environment,secret,maxChars});
+}
+// fetch rejects with a TypeError ("fetch failed") whose cause is the network error when a provider cannot be reached, and
+// with a TimeoutError when it does not answer in time.
+function providerUnreachable(provider,error,timeoutMs){
+  if(error?.name==="TimeoutError")return new Error(`${provider.name} did not answer within ${Math.round(timeoutMs/1000)} seconds`,{cause:error});
+  if(!(error instanceof TypeError)||error.message!=="fetch failed")return error;
+  const cause=String(error.cause?.message||"").replace(/\s+/g," ").trim();
+  return new Error(`Could not reach ${provider.name}${cause?": "+cause:""}`,{cause:error});
+}
+const sentence=text=>/[.!?]$/.test(text)?text:text+".";
+function agentRouterClientVersion(environment={}){
+  const requested=String(environment.AGENTROUTER_CLIENT_VERSION||environment.TREBELL_AGENTROUTER_CLIENT_VERSION||DEFAULT_AGENTROUTER_CLIENT_VERSION).trim();
+  return /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(requested)?requested:DEFAULT_AGENTROUTER_CLIENT_VERSION;
+}
+
+function agentRouterHeaders(key, { accept = "application/json", environment = {} } = {}) {
+  const version=agentRouterClientVersion(environment);
+  return {
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+    Accept: accept,
+    "User-Agent": `codex_cli_rs/${version}`,
+    originator: "codex_cli_rs",
+    version,
+  };
+}
+
+function agentRouterProvider(provider,environment={}){
+  const configuredBase=String(environment.AGENTROUTER_BASE_URL||"").trim().replace(/\/+$/,"");
+  const requestedWire=String(environment.AGENTROUTER_WIRE_API||"").trim().toLowerCase();
+  const wireApi=["responses","openai-responses"].includes(requestedWire)
+    ?"responses"
+    :["chat","openai-chat-completions"].includes(requestedWire)
+      ?"chat"
+      :provider.wireApi;
+  return {
+    ...provider,
+    baseUrl:configuredBase||provider.baseUrl,
+    wireApi,
+    protocolCompatibility:[wireApi==="responses"?"openai-responses":"openai-chat-completions"],
+  };
+}
+
+function officialResponsesToolName(namespace,name){return namespace?String(namespace)+"__"+String(name||"tool"):String(name||"tool")}
+function officialOpenAiPromptCacheKey(body={},toolsJson=null){
+  if(typeof toolsJson!=="string"){
+    const seed=JSON.stringify({model:String(body.model||""),instructions:String(body.instructions||""),tools:Array.isArray(body.tools)?body.tools:[],parallelToolCalls:Boolean(body.parallel_tool_calls)});
+    return "trebell-"+createHash("sha256").update(seed).digest("hex").slice(0,32);
+  }
+  const state=createHash("sha256");
+  state.update('{"model":');state.update(JSON.stringify(String(body.model||"")));
+  state.update(',"instructions":');state.update(JSON.stringify(String(body.instructions||"")));
+  state.update(',"tools":');state.update(toolsJson);
+  state.update(',"parallelToolCalls":');state.update(Boolean(body.parallel_tool_calls)?"true":"false");state.update("}");
+  return "trebell-"+state.digest("hex").slice(0,32);
+}
+function officialOpenAiExplicitCacheBreakpointsSupported(model=""){
+  const match=String(model||"").trim().toLowerCase().match(/(?:^|\/)gpt-(\d+)(?:\.(\d+))?/);
+  if(!match)return false;
+  const major=Number(match[1]||0),minor=Number(match[2]||0);
+  return major>5||(major===5&&minor>=6);
+}
+// The model metadata that OpenAI ships with Codex gives GPT-5.5 and later text models a default verbosity of "low",
+// and Codex sends it on every request. Codex, pro, chat, search, audio and realtime variants are left at the API default. An explicit
+// request.textVerbosity ("low", "medium" or "high") wins, and "default" omits the field. Structured-output control
+// turns keep the API default, because their schema already bounds the output.
+function officialOpenAiTextVerbosity(request={}){
+  const explicit=String(request.textVerbosity??"").trim().toLowerCase();
+  if(explicit)return ["low","medium","high"].includes(explicit)?explicit:null;
+  if(request.responseJsonSchema)return null;
+  const model=String(request.model||"").trim().toLowerCase(),match=model.match(/(?:^|\/)gpt-(\d+)(?:\.(\d+))?/);
+  if(!match||/codex|chat|search|audio|realtime|(?:^|[^a-z0-9])pro(?:[^a-z0-9]|$)/.test(model))return null;
+  const major=Number(match[1]||0),minor=Number(match[2]||0);
+  return major>5||(major===5&&minor>=5)?"low":null;
+}
+// The models that reason: gpt-5 and later, the o-series and codex-mini, the families Codex builds its reasoning parameter for.
+// Their chat variants (chat-latest, gpt-6-chat-latest) and every other model (gpt-4.1, gpt-4o, gpt-3.5-turbo, gpt-oss) do not,
+// and a fine-tune is judged by its base model.
+function officialOpenAiReasoningModel(model=""){
+  const text=String(model||"").trim().toLowerCase(),id=(text.startsWith("ft:")?text.split(":")[1]||"":text).replace(/^.*\//,"");
+  if(/(?:^|[^a-z0-9])chat(?:[^a-z0-9]|$)/.test(id))return false;
+  const gpt=id.match(/^gpt-(\d+)/);
+  return gpt?Number(gpt[1])>=5:/^(?:o\d|codex-)/.test(id);
+}
+// The API refusing the reasoning a rebuilt body carried again: HTTP 400, or a WebSocket error event with that status, whose error
+// names reasoning, encrypted content or an input item. One that points at a single item (input[N]) counts only when that item is
+// replayed reasoning, so a refused compaction item goes on as before.
+function openAiReasoningReplayRefused(status,providerError,input=[]){
+  if(Number(status)!==400)return false;
+  const detail=[providerError?.message,providerError?.code,providerError?.param].filter(value=>typeof value==="string").join(" ");
+  if(/reasoning/i.test(detail))return true;
+  const item=/\binput\[(\d+)\]/i.exec(detail);
+  return item?input?.[Number(item[1])]?.type==="reasoning":/encrypted[\s_-]?content|input[\s_-]?item/i.test(detail);
+}
+function normalizedOpenAiPromptCacheDiagnostics(body={}){
+  const value=body?.prompt_cache_diagnostics;
+  if(!value||typeof value!=="object")return null;
+  const type=String(value.type||"").trim();if(!type)return null;
+  const reason=String(value.reason||"").trim();
+  const optionalCount=input=>{
+    if(input==null||input==="")return null;
+    const number=Number(input);return Number.isFinite(number)&&number>=0?number:null;
+  };
+  return {
+    type:type.slice(0,80),
+    reason:reason?reason.slice(0,120):null,
+    comparisonReusableTokens:optionalCount(value.comparison_reusable_tokens),
+    cacheMissedTokens:optionalCount(value.cache_missed_tokens),
+  };
+}
+function normalizedOpenAiReasoningContext(body={}){
+  const context=String(body?.reasoning?.context||"").trim().toLowerCase();
+  return ["all_turns","current_turn"].includes(context)?context:null;
+}
+function officialOpenAiTools(requestTools=[]){
+  const tools=[];
+  for(const entry of Array.isArray(requestTools)?requestTools:[]){
+    if(entry?.type==="namespace"&&entry.name&&Array.isArray(entry.tools)){
+      for(const child of entry.tools){
+        if(!child?.name)continue;
+        tools.push({type:"function",name:officialResponsesToolName(entry.name,child.name),description:child.description||entry.description||"",parameters:child.parameters||child.inputSchema||{type:"object",properties:{}}});
+      }
+      continue;
+    }
+    if(entry?.type==="function"){
+      const source=entry.function||entry,name=source.name||entry.name;if(!name)continue;
+      tools.push({type:"function",name:String(name),description:source.description||entry.description||"",parameters:source.parameters||entry.parameters||entry.inputSchema||{type:"object",properties:{}}});
+    }
+  }
+  return tools;
+}
+const PRE_SERIALIZED_TOP_LEVEL=Symbol("trebell.provider.pre-serialized-top-level");
+function attachPreSerializedTopLevel(body,key,value,json){
+  if(!body||typeof body!=="object"||typeof json!=="string")return body;
+  try{
+    let cached=body[PRE_SERIALIZED_TOP_LEVEL];
+    if(!(cached instanceof Map)){cached=new Map();Object.defineProperty(body,PRE_SERIALIZED_TOP_LEVEL,{value:cached,enumerable:true,configurable:true})}
+    cached.set(String(key),{value,json});
+  }catch{}
+  return body;
+}
+function stringifyProviderBody(body){
+  const cached=body&&typeof body==="object"?body[PRE_SERIALIZED_TOP_LEVEL]:null;
+  if(!(cached instanceof Map)||!cached.size||typeof body?.toJSON==="function")return JSON.stringify(body);
+  const parts=[];
+  for(const key of Object.keys(body)){
+    const entry=cached.get(key),valueJson=entry&&entry.value===body[key]&&typeof entry.json==="string"?entry.json:JSON.stringify(body[key]);
+    if(valueJson!==undefined)parts.push(JSON.stringify(key)+":"+valueJson);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+function preSerializedChatMessages(messages=[],cache=null){
+  if(!cache||typeof cache.get!=="function"||typeof cache.set!=="function")return null;
+  const parts=[];
+  try{
+    for(const message of Array.isArray(messages)?messages:[]){
+      if(!message||typeof message!=="object")return null;
+      let json=cache.get(message);if(typeof json!=="string"){json=JSON.stringify(message);if(typeof json!=="string")return null;cache.set(message,json)}parts.push(json);
+    }
+  }catch{return null}
+  return `[${parts.join(",")}]`;
+}
+function officialOpenAiResponsesBody(request={},toolManifest=null,promptCacheKeyForBody=null,responsesOptions=null){
+  const explicitReasoningContext=String(request.reasoningContext||"").trim(),effectiveRequest={...(explicitReasoningContext?request:{...request,reasoningContext:"current_turn"}),textVerbosity:officialOpenAiTextVerbosity(request)};
+  const explicitCacheBreakpoints=officialOpenAiExplicitCacheBreakpointsSupported(effectiveRequest.model),body=providerTurnToResponses(effectiveRequest,{preserveInstructionOrder:true,flattenToolCallNames:true,toolResultCacheBreakpoints:explicitCacheBreakpoints,...(responsesOptions&&typeof responsesOptions==="object"?responsesOptions:{})});
+  const tools=Array.isArray(toolManifest?.tools)?toolManifest.tools:officialOpenAiTools(effectiveRequest.tools);body.tools=tools;
+  const contextManagement=(Array.isArray(effectiveRequest.contextManagement)?effectiveRequest.contextManagement:[])
+    .map(item=>{
+      if(String(item?.type||"").trim().toLowerCase()!=="compaction")return null;
+      const threshold=Math.trunc(Number(item?.compactThreshold??item?.compact_threshold));
+      return Number.isFinite(threshold)&&threshold>0?{type:"compaction",compact_threshold:threshold}:null;
+    })
+    .filter(Boolean);
+  if(contextManagement.length)body.context_management=contextManagement;
+  if(explicitCacheBreakpoints){
+    const comparisonResponseId=String(effectiveRequest.promptCacheComparisonResponseId||"").trim();
+    body.prompt_cache_options={mode:"implicit",...(comparisonResponseId?{comparison_response_id:comparisonResponseId}:{})};
+  }
+  // A model that reasons returns each reasoning item with its encrypted_content, so a request rebuilt in full after its continuation
+  // failed can carry its turn's reasoning again (reasoningReplay): WebSocket requests go with store:false, and nothing but the socket
+  // that made a response can continue from it. The API has refused include on a model that does not reason (HTTP 400, "Encrypted
+  // content is not supported with this model"), and Codex sends it only with the reasoning parameter it builds for the families that
+  // reason.
+  if(officialOpenAiReasoningModel(effectiveRequest.model))body.include=["reasoning.encrypted_content"];
+  body.prompt_cache_key=typeof promptCacheKeyForBody==="function"?promptCacheKeyForBody(body,toolManifest?.toolsJson):officialOpenAiPromptCacheKey(body,toolManifest?.toolsJson);
+  if(toolManifest?.toolsJson&&body.tools===toolManifest.tools)attachPreSerializedTopLevel(body,"tools",body.tools,toolManifest.toolsJson);
+  return body;
+}
+
+// The Responses body for a provider Native calls without server-side state (statelessResponses: xAI, Meta). The whole conversation
+// goes with each request, as for every provider but OpenAI, and nothing is kept on the provider's side (store:false). Both document
+// how a model keeps its reasoning across the calls of a turn that way: include reasoning.encrypted_content, and send each reasoning
+// item back in the next input, which the current turn's replies kept (reasoningReplay). Tools go as flat function tools, a call by
+// its flat name, the leading system and developer messages as instructions and a later one in place, as for OpenAI, with the same
+// prompt_cache_key both use to group requests that share a prefix. None of OpenAI's own fields: no verbosity (Meta refuses it),
+// reasoning.context, context management or cache breakpoints. A model whose provider refused include (replay:false) gets neither.
+function statelessResponsesBody(request={},{replay=true}={}){
+  const tools=officialOpenAiTools(request.tools),body=providerTurnToResponses({...request,tools,reasoningContext:null,textVerbosity:null},{preserveInstructionOrder:true,flattenToolCallNames:true,reasoningReplay:replay});
+  body.store=false;
+  if(replay)body.include=["reasoning.encrypted_content"];
+  body.prompt_cache_key=officialOpenAiPromptCacheKey(body);
+  return body;
+}
+// A 400 that refuses include itself (its param, or a message naming include or encrypted content).
+function statelessIncludeRefused(status,providerError){
+  if(Number(status)!==400)return false;
+  if(String(providerError?.param||"").trim().toLowerCase()==="include")return true;
+  return /\binclude\b|encrypted[\s_-]?content/i.test(String(providerError?.message||""));
+}
+
+// A turn's reply text as it arrives, for Native drafts. The sink only observes the stream: the turn's request and result are
+// the same with or without it, every call into onStream is caught, and the first throw turns the sink off. Text after the first
+// tool-call event is not passed on (a draft is withdrawn there), and text of an OpenAI commentary item is passed on as held.
+function createStreamSink(onStream){
+  let forwarded=false,toolStarted=false,disabled=false;const commentary=new Set();
+  const send=event=>{if(disabled)return;try{onStream(event)}catch{disabled=true}};
+  const guarded=fn=>value=>{if(disabled)return;try{fn(value)}catch{disabled=true}};
+  const text=(delta,hold=false)=>{if(toolStarted||typeof delta!=="string"||!delta)return;forwarded=true;send(hold?{type:"text",delta,hold:true}:{type:"text",delta})};
+  const toolCall=()=>{if(toolStarted)return;toolStarted=true;send({type:"tool_call"})};
+  return {
+    text:guarded(delta=>text(delta)),
+    toolCall:guarded(toolCall),
+    // The same call is about to be sent again after nothing it returned was used; whatever was passed on belongs to the attempt before.
+    restart:guarded(()=>{if(!forwarded)return;forwarded=false;toolStarted=false;commentary.clear();send({type:"restart"})}),
+    responsesEvent:guarded(event=>{
+      const type=String(event?.type||"");
+      if(((type==="response.output_item.added"||type==="response.output_item.done")&&event.item?.type==="function_call")||type==="response.function_call_arguments.delta")return toolCall();
+      if(type==="response.output_item.added"&&event.item?.type==="message"&&event.item.phase==="commentary")return void commentary.add(event.output_index);
+      if(type==="response.output_text.delta"&&typeof event.delta==="string")text(event.delta,commentary.has(event.output_index));
+    }),
+    // Some proxies send tool_calls:[] on every chunk, so only a listed call starts a tool. Reasoning and refusal text are never passed on.
+    chatDelta:guarded(delta=>{
+      if(typeof delta?.content==="string")text(delta.content);
+      if(Array.isArray(delta?.tool_calls)&&delta.tool_calls.length>0)toolCall();
+    }),
+  };
+}
+
+// A Responses stream, read to its end. label names the stream in its errors and codePrefix their fallback codes (OpenAI's by default);
+// a streamed stateless provider's classifyError says whether an error event inside the stream retries, and its finalGraceMs how long
+// the stream may stay open after its final event before the response is taken as it is.
+async function readOpenAiResponsesStream(source,{requestStartedAt=performance.now(),signal=null,idleTimeoutMs=DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,onEvent=null,label="OpenAI Responses stream",codePrefix="openai_stream",classifyError=null,finalGraceMs=null}={}){
+  if(!source||typeof source.getReader!=="function")throw new Error(label+" body is unavailable.");
+  const reader=source.getReader(),decoder=new TextDecoder();let buffer="",response=null,responseBytes=0,timeToFirstTokenMs=null;
+  const consume=block=>{
+    const data=String(block||"").split(/\r?\n/).filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
+    if(!data||data==="[DONE]")return;
+    let event;try{event=JSON.parse(data)}catch{throw new Error(label+" returned an invalid JSON event.")}
+    if(event.type==="response.output_text.delta"&&event.delta&&timeToFirstTokenMs==null)timeToFirstTokenMs=Number((performance.now()-requestStartedAt).toFixed(3));
+    if(onEvent)try{onEvent(event)}catch{}
+    if((event.type==="response.completed"||event.type==="response.incomplete")&&event.response)response=event.response;
+    if(event.type==="response.failed"){
+      const error=new Error(event.response?.error?.message||event.error?.message||label+" failed.");error.code=event.response?.error?.code||event.error?.code||codePrefix+"_failed";
+      if(classifyError)Object.assign(error,classifyError(event.response?.error||event.error||{}));throw error;
+    }
+    if(event.type==="error"){
+      const error=new Error(event.message||event.error?.message||label+" failed.");error.code=event.code||event.error?.code||codePrefix+"_error";
+      if(classifyError)Object.assign(error,classifyError({code:event.code??event.error?.code,type:event.error?.type,message:event.message||event.error?.message}));throw error;
+    }
+  };
+  try{
+    let ended=true;
+    for(;;){
+      // Once the final event is in, finalGraceMs (when given) bounds the wait for the stream's end: nothing after it is needed, so a
+      // stream that then stays open, breaks or drops its connection before its end still gives the complete response (not a stop).
+      const wait=response&&finalGraceMs>0?Math.min(idleTimeoutMs,finalGraceMs):idleTimeoutMs;let chunk;
+      try{chunk=await readProviderStreamChunk(reader,{signal,idleTimeoutMs:wait,label})}
+      catch(error){if(response&&finalGraceMs>0&&!signal?.aborted){ended=false;break}throw error}
+      const {done,value}=chunk;if(done)break;
+      responseBytes+=Number(value?.byteLength||0);buffer+=decoder.decode(value,{stream:true});
+      const blocks=buffer.split(/\r?\n\r?\n/);buffer=blocks.pop()||"";for(const block of blocks)consume(block);
+    }
+    if(ended){buffer+=decoder.decode();if(buffer.trim())consume(buffer)}
+  }catch(error){error.streamTelemetry={responseBytes,timeToFirstTokenMs};throw error}
+  finally{reader.releaseLock()}
+  if(!response)throw new Error(label+" ended before a completed response was received.");
+  return {response,responseBytes,timeToFirstTokenMs};
+}
+
+// An error event inside Meta's stream comes after a 200: response.failed with the response's error, or type "error" with a top-level
+// code (dev.meta.ai/docs/error-handling). Meta's transient codes retry as the same failure does when it comes as an HTTP status: a rate
+// limit (rate_limit_exceeded, a 429) as back-pressure, a server error, a shutdown, an overload or an unavailable backend (a 500 or 503)
+// as transient, the whole request sent again ("Retry the whole request"); any other (a content policy refusal, a bad request) ends the
+// turn with its error.
+// Coming after a 200, an error event names the wait it asks for only in its message: Meta's docs give "Rate limit exceeded. Please retry
+// after 15 seconds." (dev.meta.ai/docs/error-handling); "try again in 2.5s" is read too. When the message names none, a rate limit waits
+// 15 s and an overload or an unavailable backend 60 s, the waits those docs give, on the loop's rate-limit retries (the team's 150 requests
+// and 3M tokens a minute are shared with everything else on its key), instead of the quick retries that would spend the minute's budget.
+const META_TRANSIENT_STREAM_ERRORS=new Set(["server_error","server_shutting_down","service_overloaded","backend_unavailable"]);
+const META_STREAM_BACKOFF_MS=Object.freeze({rate_limit_exceeded:15_000,service_overloaded:60_000,backend_unavailable:60_000});
+function metaStreamRetryAfterMs(message){
+  const match=/\b(?:retry after|try again in)\s+(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)\b/i.exec(String(message||""));
+  if(!match)return null;
+  const unit=match[2].toLowerCase(),scale=unit==="ms"||unit.startsWith("milli")?1:unit==="m"||unit.startsWith("min")?60_000:1000;
+  return Math.ceil(Number(match[1])*scale);
+}
+function metaStreamErrorRetry(providerError={}){
+  const code=String(providerError?.code??"").trim().toLowerCase(),type=String(providerError?.type??"").trim().toLowerCase();
+  const rateLimit=code==="rate_limit_exceeded"||type==="rate_limit_error",backoff=rateLimit?META_STREAM_BACKOFF_MS.rate_limit_exceeded:META_STREAM_BACKOFF_MS[code]??null;
+  if(backoff!=null)return {retryable:true,rateLimited:true,retryAfterMs:metaStreamRetryAfterMs(providerError?.message)??backoff};
+  return {retryable:META_TRANSIENT_STREAM_ERRORS.has(code)||(!code&&type==="server_error")};
+}
+// The stateless providers whose Responses stream a turn reads when it asks to stream (streamResponses, Native's Meta lane in
+// src/native-configuration.mjs), each once a live check showed its events, usage and errors: Meta, 2026-11-03. Meta ends a stream with
+// "data: [DONE]" and closes it right after response.completed; one held open after its final event is let go after 5 s, and one that
+// breaks after it is taken as it is, so a response already complete is never waited out to the idle bound or sent again.
+const STREAMED_STATELESS_RESPONSES=Object.freeze({meta:Object.freeze({codePrefix:"meta_stream",classifyError:metaStreamErrorRetry,finalGraceMs:5_000})});
+
+// An error that arrives inside a stream comes after a 200, so it names its class instead of carrying a status. It retries as the same
+// error does when it comes back as an HTTP status: a rate limit (429) as back-pressure, a server error, overload or timeout as transient.
+// No status is set, so the error still reads as one from the stream.
+function streamedChatErrorRetry(providerError={}){
+  const labels=[providerError?.code,providerError?.type,providerError?.status].filter(value=>value!=null&&value!=="").map(value=>String(value).trim().toLowerCase());
+  if(labels.some(label=>label==="429"||label.startsWith("rate_limit"))){const retryAfterMs=openAiRetryAfterMs({message:providerError?.message});return {retryable:true,rateLimited:true,...(retryAfterMs!=null?{retryAfterMs}:{})}}
+  if(labels.some(label=>/^5\d\d$/.test(label)||label==="server_error"||label.startsWith("overloaded")||label.includes("timeout")))return {retryable:true};
+  return {};
+}
+
+async function readOpenAiChatStream(source,{requestStartedAt=performance.now(),signal=null,idleTimeoutMs=DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,onDelta=null}={}){
+  if(!source||typeof source.getReader!=="function")throw new Error("OpenAI Chat stream body is unavailable.");
+  const reader=source.getReader(),decoder=new TextDecoder();let buffer="",responseBytes=0,timeToFirstTokenMs=null,id="",model="",finishReason=null,usage=null,text="",role="assistant";
+  const toolCalls=new Map();
+  const consume=block=>{
+    const data=String(block||"").split(/\r?\n/).filter(line=>line.startsWith("data:")).map(line=>line.slice(5).trimStart()).join("\n");
+    if(!data||data==="[DONE]")return;
+    let event;try{event=JSON.parse(data)}catch{throw new Error("OpenAI Chat stream returned an invalid JSON event.")}
+    if(event.error){
+      const error=new Error(event.error?.message||"OpenAI Chat stream failed.");error.code=event.error?.code||event.error?.type||"openai_chat_stream_error";Object.assign(error,streamedChatErrorRetry(event.error));throw error;
+    }
+    if(event.id)id=String(event.id);if(event.model)model=String(event.model);if(event.usage)usage=event.usage;
+    for(const choice of Array.isArray(event.choices)?event.choices:[]){
+      if(choice?.finish_reason)finishReason=String(choice.finish_reason);
+      const delta=choice?.delta||{};if(delta.role)role=String(delta.role);
+      if(typeof delta.content==="string"&&delta.content){
+        if(timeToFirstTokenMs==null)timeToFirstTokenMs=Number((performance.now()-requestStartedAt).toFixed(3));
+        text+=delta.content;
+      }
+      for(const fragment of Array.isArray(delta.tool_calls)?delta.tool_calls:[]){
+        const index=Number.isFinite(Number(fragment?.index))?Number(fragment.index):toolCalls.size,current=toolCalls.get(index)||{id:"",type:"function",function:{name:"",arguments:""}};
+        if(fragment?.id)current.id=String(fragment.id);if(fragment?.type)current.type=String(fragment.type);
+        if(fragment?.function?.name)current.function.name+=String(fragment.function.name);
+        if(fragment?.function?.arguments)current.function.arguments+=String(fragment.function.arguments);
+        toolCalls.set(index,current);
+      }
+      if(onDelta)try{onDelta(delta)}catch{}
+    }
+  };
+  try{
+    for(;;){
+      const {done,value}=await readProviderStreamChunk(reader,{signal,idleTimeoutMs,label:"OpenAI Chat stream"});if(done)break;
+      responseBytes+=Number(value?.byteLength||0);buffer+=decoder.decode(value,{stream:true});
+      const blocks=buffer.split(/\r?\n\r?\n/);buffer=blocks.pop()||"";for(const block of blocks)consume(block);
+    }
+    buffer+=decoder.decode();if(buffer.trim())consume(buffer);
+  }catch(error){error.streamTelemetry={responseBytes,timeToFirstTokenMs};throw error}
+  finally{reader.releaseLock()}
+  return {
+    response:{id,model,choices:[{message:{role,content:text,tool_calls:[...toolCalls.entries()].sort((a,b)=>a[0]-b[0]).map(([,call])=>call)},finish_reason:finishReason}],usage:usage||{}},
+    responseBytes,timeToFirstTokenMs,
+  };
+}
+
+function normalizeProviderKey(value) {
+  let key = String(value || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .trim();
+  if (key.length >= 2) {
+    const first = key[0];
+    const last = key[key.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'") || (first === "`" && last === "`")) {
+      key = key.slice(1, -1).trim();
+    }
+  }
+  key = key.replace(/^Bearer\s+/i, "").trim();
+  return key;
+}
+
+function providerRequestSignal(signal, timeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+function providerHeadersSignal(signal, timeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS) {
+  const controller=new AbortController(),duration=Math.max(1,Math.trunc(Number(timeoutMs)||DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS));
+  const timer=setTimeout(()=>controller.abort(new DOMException("Provider response headers timed out.","TimeoutError")),duration);timer.unref?.();
+  return {
+    signal:signal?AbortSignal.any([signal,controller.signal]):controller.signal,
+    release:()=>clearTimeout(timer),
+  };
+}
+
+async function readProviderStreamChunk(reader,{signal=null,idleTimeoutMs=DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS,label="Provider stream"}={}){
+  if(signal?.aborted)throw signal.reason instanceof Error?signal.reason:new DOMException("Aborted","AbortError");
+  const duration=Math.max(1,Math.trunc(Number(idleTimeoutMs)||DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS));
+  return await new Promise((resolve,reject)=>{
+    let settled=false,timer=null;
+    const cleanup=()=>{if(timer)clearTimeout(timer);signal?.removeEventListener?.("abort",onAbort)};
+    const finish=(fn,value)=>{if(settled)return;settled=true;cleanup();fn(value)};
+    const fail=error=>{if(settled)return;try{void Promise.resolve(reader.cancel?.(error)).catch(()=>{})}catch{}finish(reject,error)};
+    const onAbort=()=>fail(signal?.reason instanceof Error?signal.reason:new DOMException("Aborted","AbortError"));
+    timer=setTimeout(()=>fail(new DOMException(`${label} idle timeout exceeded.`,"TimeoutError")),duration);timer.unref?.();
+    signal?.addEventListener?.("abort",onAbort,{once:true});
+    Promise.resolve().then(()=>reader.read()).then(value=>finish(resolve,value),error=>finish(reject,error));
+  });
+}
+
+function remainingProviderRequestMs(deadlineAt){
+  const remaining=Math.ceil(Number(deadlineAt)-performance.now());
+  if(remaining>0)return remaining;
+  const error=new DOMException("Provider request deadline exceeded.","TimeoutError");error.retryable=false;throw error;
+}
+
+export class ProviderManager {
+  constructor({ env = process.env, fetchFn = fetch, longRequestFetchFn = null, requestTimeoutMs = DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS, openAiResponsesWebSocketFactory=null, openAiResponsesWebSocketRetryMs=30_000, openAiToolManifestCacheSize=32, openAiPromptCacheKeyCacheSize=128, anthropicToolManifestCacheSize=32, chatToolManifestCacheSize=32, reusePreSerializedToolJson=true, reuseOpenAiContinuationInputBuild=true, reuseChatMessageConversion=true, reuseAnthropicMessageBuild=true, nowFn=Date.now } = {}) {
+    this.env = env;
+    this.fetchFn = fetchFn;
+    // A streamed stateless provider's Responses stream (Meta's) goes through a fetch with no body or header deadline of its own
+    // (src/provider-long-request-fetch.mjs) in place of Node's own fetch, which cuts a body after 300 s without a byte, before the lane's
+    // idle bound. Any other fetch (a test's stand-in, the offline E2E guard, a guard that replaced the global fetch) stays the transport
+    // for those streams too, unless the caller names this one.
+    this.longRequestFetchFn = typeof longRequestFetchFn === "function" ? longRequestFetchFn : isNodeFetch(fetchFn) ? providerLongRequestFetch : fetchFn;
+    const timeoutMs = Math.trunc(Number(requestTimeoutMs));
+    this.requestTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+    this.path = providerSecretsPath(env);
+    mkdirSync(dirname(this.path), { recursive: true });
+    this.secrets = this.#load();
+    // The last refused key check per provider, for this server run (checkKey); any key change clears it.
+    this.keyChecks=new Map();
+    // "<provider>\0<model>" of a stateless provider that refused include for that model, for this server run.
+    this.statelessIncludeRefusals=new Set();
+    this.openAiResponseContinuations=new OpenAiResponseContinuationTracker();
+    this.openAiWebSocketResponseOrigins=new Map();
+    this.openAiResponsesWebSocketFactory=typeof openAiResponsesWebSocketFactory==="function"?openAiResponsesWebSocketFactory:options=>new OpenAiResponsesWebSocket(options);
+    const retryMs=Math.trunc(Number(openAiResponsesWebSocketRetryMs));this.openAiResponsesWebSocketRetryMs=Number.isFinite(retryMs)&&retryMs>=0?retryMs:30_000;this.nowFn=typeof nowFn==="function"?nowFn:Date.now;
+    this.openAiResponsesWebSocket=null;this.openAiResponsesWebSocketDisabledUntil=0;this.openAiResponsesWebSocketPermanentlyDisabled=false;this.openAiResponsesWebSocketTransientFailures=0;
+    this.reusePreSerializedToolJson=reusePreSerializedToolJson!==false;
+    this.reuseOpenAiContinuationInputBuild=reuseOpenAiContinuationInputBuild!==false;
+    this.reuseChatMessageConversion=reuseChatMessageConversion!==false;this.chatMessageConversionCaches=new WeakMap();
+    this.reuseAnthropicMessageBuild=reuseAnthropicMessageBuild!==false;this.anthropicMessageProjectors=new WeakMap();
+    const manifestCacheSize=Math.trunc(Number(openAiToolManifestCacheSize));this.openAiToolManifestCacheSize=Number.isFinite(manifestCacheSize)&&manifestCacheSize>=0?Math.min(256,manifestCacheSize):32;this.openAiToolManifestCache=new Map();
+    const anthropicManifestCacheSize=Math.trunc(Number(anthropicToolManifestCacheSize));this.anthropicToolManifestCacheSize=Number.isFinite(anthropicManifestCacheSize)&&anthropicManifestCacheSize>=0?Math.min(256,anthropicManifestCacheSize):32;this.anthropicToolManifestCache=new Map();
+    const cacheKeyCacheSize=Math.trunc(Number(openAiPromptCacheKeyCacheSize));this.openAiPromptCacheKeyCacheSize=Number.isFinite(cacheKeyCacheSize)&&cacheKeyCacheSize>=0?Math.min(1024,cacheKeyCacheSize):128;this.openAiPromptCacheKeyCache=new Map();
+    const chatCacheSize=Math.trunc(Number(chatToolManifestCacheSize));this.chatToolManifestCacheSize=Number.isFinite(chatCacheSize)&&chatCacheSize>=0?Math.min(256,chatCacheSize):32;this.chatToolManifestCache=new Map();
+  }
+
+  #openAiToolManifest(request={}){
+    const supplied=request?.[NATIVE_TOOL_SCHEMA_FINGERPRINT],fingerprint=/^[a-f0-9]{64}$/i.test(String(supplied||""))?String(supplied).toLowerCase():null;
+    if(fingerprint&&this.openAiToolManifestCacheSize>0&&this.openAiToolManifestCache.has(fingerprint)){
+      const cached=this.openAiToolManifestCache.get(fingerprint);this.openAiToolManifestCache.delete(fingerprint);this.openAiToolManifestCache.set(fingerprint,cached);return cached;
+    }
+    const builtTools=officialOpenAiTools(request.tools),toolsJson=fingerprint?JSON.stringify(builtTools):null,tools=toolsJson==null?builtTools:JSON.parse(toolsJson),manifest={tools,toolsJson};
+    if(fingerprint&&this.openAiToolManifestCacheSize>0){this.openAiToolManifestCache.set(fingerprint,manifest);while(this.openAiToolManifestCache.size>this.openAiToolManifestCacheSize)this.openAiToolManifestCache.delete(this.openAiToolManifestCache.keys().next().value)}
+    return manifest;
+  }
+
+  #openAiPromptCacheKey(request={},body={},toolsJson=null){
+    const supplied=request?.[NATIVE_TOOL_SCHEMA_FINGERPRINT],fingerprint=/^[a-f0-9]{64}$/i.test(String(supplied||""))?String(supplied).toLowerCase():null;
+    if(!fingerprint||this.openAiPromptCacheKeyCacheSize<=0)return officialOpenAiPromptCacheKey(body,toolsJson);
+    const lookup=String(body.model||"")+"\0"+(body.parallel_tool_calls?"1":"0")+"\0"+fingerprint+"\0"+String(body.instructions||"");
+    if(this.openAiPromptCacheKeyCache.has(lookup)){
+      const cached=this.openAiPromptCacheKeyCache.get(lookup);this.openAiPromptCacheKeyCache.delete(lookup);this.openAiPromptCacheKeyCache.set(lookup,cached);return cached;
+    }
+    const value=officialOpenAiPromptCacheKey(body,toolsJson);this.openAiPromptCacheKeyCache.set(lookup,value);
+    while(this.openAiPromptCacheKeyCache.size>this.openAiPromptCacheKeyCacheSize)this.openAiPromptCacheKeyCache.delete(this.openAiPromptCacheKeyCache.keys().next().value);
+    return value;
+  }
+
+  #officialOpenAiResponsesBody(request={},responsesOptions=null){
+    const manifest=this.#openAiToolManifest(request);
+    return officialOpenAiResponsesBody(request,manifest,(body,toolsJson)=>this.#openAiPromptCacheKey(request,body,toolsJson),responsesOptions);
+  }
+
+  #anthropicToolScaffold(request={}){
+    const supplied=request?.[NATIVE_TOOL_SCHEMA_FINGERPRINT],fingerprint=/^[a-f0-9]{64}$/i.test(String(supplied||""))?String(supplied).toLowerCase():null;
+    if(!fingerprint||this.anthropicToolManifestCacheSize<=0)return {scaffold:providerTurnAnthropicScaffold(request),toolsJson:null};
+    const maxOutputTokens=request.maxOutputTokens!=null&&Number.isFinite(Number(request.maxOutputTokens))?Math.max(1,Math.trunc(Number(request.maxOutputTokens))):null,temperature=request.temperature!=null&&Number.isFinite(Number(request.temperature))?Number(request.temperature):null,reasoningEffort=request.reasoningEffort==null?null:String(request.reasoningEffort).trim()||null;
+    let toolChoiceKey;try{toolChoiceKey=JSON.stringify(request.toolChoice??"auto")}catch{return {scaffold:providerTurnAnthropicScaffold(request),toolsJson:null}}
+    const key=JSON.stringify([fingerprint,String(request.model||""),maxOutputTokens,temperature,reasoningEffort,toolChoiceKey]);
+    if(this.anthropicToolManifestCache.has(key)){
+      const cached=this.anthropicToolManifestCache.get(key);this.anthropicToolManifestCache.delete(key);this.anthropicToolManifestCache.set(key,cached);return cached;
+    }
+    const scaffold=providerTurnAnthropicScaffold(request),toolsJson=Array.isArray(scaffold.tools)&&scaffold.tools.length?JSON.stringify(scaffold.tools):null,manifest={scaffold,toolsJson};this.anthropicToolManifestCache.set(key,manifest);
+    while(this.anthropicToolManifestCache.size>this.anthropicToolManifestCacheSize)this.anthropicToolManifestCache.delete(this.anthropicToolManifestCache.keys().next().value);
+    return manifest;
+  }
+
+  #chatToolManifest(request={}){
+    const supplied=request?.[NATIVE_TOOL_SCHEMA_FINGERPRINT],fingerprint=/^[a-f0-9]{64}$/i.test(String(supplied||""))?String(supplied).toLowerCase():null;
+    if(!fingerprint||this.chatToolManifestCacheSize<=0)return null;
+    if(this.chatToolManifestCache.has(fingerprint)){
+      const cached=this.chatToolManifestCache.get(fingerprint);this.chatToolManifestCache.delete(fingerprint);this.chatToolManifestCache.set(fingerprint,cached);return cached;
+    }
+    const tools=providerToolsToChat(request.tools),manifest={tools,toolsJson:JSON.stringify(tools)};this.chatToolManifestCache.set(fingerprint,manifest);
+    while(this.chatToolManifestCache.size>this.chatToolManifestCacheSize)this.chatToolManifestCache.delete(this.chatToolManifestCache.keys().next().value);
+    return manifest;
+  }
+
+  #chatMessageConversionCache(request={}){
+    if(!this.reuseChatMessageConversion)return null;
+    const identity=request?.[NATIVE_CHAT_MESSAGE_CACHE_IDENTITY];if(!identity||typeof identity!=="object")return null;
+    let cache=this.chatMessageConversionCaches.get(identity);if(!cache){cache={messages:new WeakMap(),serialized:new WeakMap()};this.chatMessageConversionCaches.set(identity,cache)}return cache;
+  }
+
+  #openAiWebSocketCircuitOpen(){
+    if(this.openAiResponsesWebSocketPermanentlyDisabled)return true;
+    const now=Number(this.nowFn()),until=Number(this.openAiResponsesWebSocketDisabledUntil||0);if(Number.isFinite(until)&&until>now)return true;
+    this.openAiResponsesWebSocketDisabledUntil=0;return false;
+  }
+
+  #resetOpenAiWebSocket(reason="reset"){
+    const normalized=String(reason||""),transport=this.openAiResponsesWebSocket,transient=["connect_failure","send_failure","transport_failure","timeout_failure","api_failure"].includes(normalized),protocol=normalized==="protocol_failure";
+    if(protocol){this.openAiResponsesWebSocketPermanentlyDisabled=true;this.openAiResponseContinuations.clear();this.openAiWebSocketResponseOrigins.clear()}
+    if(transient){
+      this.openAiResponsesWebSocketTransientFailures=Math.min(16,Number(this.openAiResponsesWebSocketTransientFailures||0)+1);
+      const multiplier=Math.min(16,2**Math.max(0,this.openAiResponsesWebSocketTransientFailures-1)),cooldown=Math.min(300_000,this.openAiResponsesWebSocketRetryMs*multiplier);
+      this.openAiResponsesWebSocketDisabledUntil=Math.max(Number(this.openAiResponsesWebSocketDisabledUntil||0),Number(this.nowFn())+cooldown);
+    }
+    if(transient||protocol){this.openAiResponsesWebSocket=null;try{transport?.close?.()}catch{}}
+  }
+
+  #openAiWebSocketTransport(){
+    if(this.#openAiWebSocketCircuitOpen())return null;
+    if(this.openAiResponsesWebSocket)return this.openAiResponsesWebSocket;
+    const key=this.key("openai");if(!key)return null;
+    this.openAiResponsesWebSocket=this.openAiResponsesWebSocketFactory({
+      apiKey:key,baseUrl:this.get("openai").baseUrl,userAgent:TREBELL_USER_AGENT,
+      onReset:event=>this.#resetOpenAiWebSocket(event?.reason||"reset"),
+    });
+    return this.openAiResponsesWebSocket;
+  }
+
+  #recordOpenAiWebSocketResponseOrigin(responseId,transport){
+    const id=String(responseId||"").trim();if(!id||!transport)return;
+    const state=typeof transport.connectionState==="function"?transport.connectionState():null;
+    this.openAiWebSocketResponseOrigins.delete(id);
+    this.openAiWebSocketResponseOrigins.set(id,{transport,generation:Number.isFinite(Number(state?.generation))?Number(state.generation):null});
+    while(this.openAiWebSocketResponseOrigins.size>128)this.openAiWebSocketResponseOrigins.delete(this.openAiWebSocketResponseOrigins.keys().next().value);
+  }
+
+  #openAiWebSocketParentAvailable(parentId,transport){
+    const id=String(parentId||"").trim(),origin=id?this.openAiWebSocketResponseOrigins.get(id):null;if(!origin)return true;
+    if(origin.transport!==transport)return false;
+    if(origin.generation==null||typeof transport?.connectionState!=="function")return true;
+    const state=transport.connectionState();return state?.open===true&&Number(state?.generation)===origin.generation;
+  }
+
+  #load() {
+    try {
+      const parsed = JSON.parse(readFileSync(this.path, "utf8"));
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  #save() {
+    const tmp = this.path + ".tmp";
+    writeFileSync(tmp, JSON.stringify(this.secrets, null, 2), { encoding: "utf8", mode: 0o600 });
+    renameSync(tmp, this.path);
+  }
+
+  definitions() {
+    return Object.values(MODEL_PROVIDERS).map(({id}) => this.get(id)).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      wireApi: provider.wireApi,
+      protocolCompatibility: [...(provider.protocolCompatibility || [])],
+      requiresKey: provider.requiresKey,
+      official: Boolean(provider.official),
+      hasKey: this.hasKey(provider.id),
+      keyCheck: this.keyChecks.get(provider.id)||null,
+      capabilities:providerCapabilities(provider.id),
+    }));
+  }
+
+  get(providerId) {
+    const provider=MODEL_PROVIDERS[normalizeProviderId(providerId)];
+    return provider.id==="agentrouter"?agentRouterProvider(provider,this.env):provider;
+  }
+
+  // Where a provider's key comes from: the key saved in Settings (provider-secrets.json), else the first of the provider's
+  // environment variables that is set in Trebell's own environment.
+  #keySource(provider){
+    if(this.secrets[provider.id])return {key:normalizeProviderKey(this.secrets[provider.id]),source:"settings",variable:null};
+    const variable=(provider.envKeys||[provider.envKey]).find(name=>this.env[name]);
+    return variable?{key:normalizeProviderKey(this.env[variable]),source:"environment",variable}:{key:"",source:null,variable:null};
+  }
+
+  key(providerId) {
+    return this.#keySource(this.get(providerId)).key;
+  }
+
+  // A provider's key for another consumer of it, such as a harness the person put on API key, read as Native reads it (key()):
+  // {provider, key, source: "settings" | "environment", variable: the environment variable it came from, or null}, or null when
+  // the provider has no key. An id that is not a model provider is refused, never read as the default provider.
+  keyFor(providerId){
+    const id=String(providerId??"").trim().toLowerCase();
+    if(!Object.prototype.hasOwnProperty.call(MODEL_PROVIDERS,id))throw new Error(`Unknown model provider "${String(providerId??"")}".`);
+    const found=this.#keySource(this.get(id));
+    return found.key?{provider:id,...found}:null;
+  }
+
+  // keyFor of each listed provider that has a key (by default every model provider), in the order listed.
+  keysFor(providerIds=Object.keys(MODEL_PROVIDERS)){
+    return (Array.isArray(providerIds)?providerIds:[]).map(id=>this.keyFor(id)).filter(Boolean);
+  }
+
+  hasKey(providerId) {
+    return Boolean(this.key(providerId));
+  }
+
+  setKey(providerId, value) {
+    const provider = this.get(providerId);
+    const previousKey=this.key(provider.id),key = normalizeProviderKey(value);
+    if (key) this.secrets[provider.id] = key;
+    else delete this.secrets[provider.id];
+    this.keyChecks.delete(provider.id);
+    this.#save();
+    if(provider.id==="openai"&&previousKey!==key){try{this.openAiResponsesWebSocket?.close?.()}catch{}this.openAiResponsesWebSocket=null;this.openAiResponsesWebSocketDisabledUntil=0;this.openAiResponsesWebSocketPermanentlyDisabled=false;this.openAiResponsesWebSocketTransientFailures=0;this.openAiResponseContinuations.clear();this.openAiWebSocketResponseOrigins.clear()}
+    return { provider: provider.id, hasKey: Boolean(key) };
+  }
+
+  close() {
+    const transport=this.openAiResponsesWebSocket;
+    this.openAiResponsesWebSocket=null;
+    this.openAiResponsesWebSocketDisabledUntil=0;
+    this.openAiResponsesWebSocketPermanentlyDisabled=false;
+    this.openAiResponsesWebSocketTransientFailures=0;
+    this.openAiResponseContinuations.clear();
+    this.openAiWebSocketResponseOrigins.clear();
+    try{transport?.close?.()}catch{}
+  }
+
+  status(providerId) {
+    const provider = this.get(providerId);
+    return {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      wireApi: provider.wireApi,
+      protocolCompatibility: [...(provider.protocolCompatibility || [])],
+      requiresKey: provider.requiresKey,
+      official: Boolean(provider.official),
+      hasKey: this.hasKey(provider.id),
+      ready: this.hasKey(provider.id),
+      keyCheck: this.keyChecks.get(provider.id)||null,
+      capabilities:providerCapabilities(provider.id),
+    };
+  }
+
+  // A typed key is kept only once the provider's model list answers to it, and the catalog is returned. A refused key leaves
+  // the stored key as it was, and the refusal is kept (status().keyCheck) so Settings can still say why after it is left.
+  async checkKey(providerId,value){
+    const provider=this.get(providerId),hadStoredKey=Object.hasOwn(this.secrets,provider.id),storedKey=this.secrets[provider.id];
+    this.setKey(provider.id,value);
+    try{return await this.models(provider.id)}
+    catch(error){
+      this.setKey(provider.id,hadStoredKey?storedKey:"");
+      const status=Number(error?.status)||null;
+      const reason=status?`HTTP ${status}${error.providerMessage?": "+error.providerMessage:""}`:providerErrorExcerpt(error?.message||String(error),{environment:this.env,secret:normalizeProviderKey(value),maxChars:300});
+      const keyCheck={status,message:sentence(reason)+" The key was not saved.",at:new Date(this.nowFn()).toISOString()};
+      this.keyChecks.set(provider.id,keyCheck);
+      throw Object.assign(new Error(keyCheck.message),{keyCheck});
+    }
+  }
+
+  // Without a key the catalog asks for one, or says why the last key typed for the provider was refused (checkKey).
+  #missingKeyError(providerId){const check=this.keyChecks.get(providerId);return check?"API key check failed: "+check.message:"API key required"}
+
+  async models(providerId) {
+    const provider = this.get(providerId);
+    if (provider.staticModels) {
+      return {
+        models: [...provider.staticModels],
+        defaultModel: provider.staticModels[0] || null,
+        source: "static",
+        metadata: provider.staticModels.map((id) => ({ id, provider: provider.id, protocolCompatibility: [...(provider.protocolCompatibility || [])] })),
+        ...(!this.hasKey(provider.id) ? { error: this.#missingKeyError(provider.id) } : {}),
+      };
+    }
+    if (!this.hasKey(provider.id)) {
+      return { models: [], defaultModel: null, source: "none", error: this.#missingKeyError(provider.id) };
+    }
+
+    const key = this.key(provider.id);
+    let response, raw;
+    try {
+      response = await this.fetchFn(provider.baseUrl + (provider.modelsPath || "/models"), {
+        headers: provider.id === "agentrouter"
+          ? agentRouterHeaders(key,{environment:this.env})
+          : provider.authStyle === "anthropic"
+            ? {
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                Accept: "application/json",
+              }
+            : {
+                Authorization: `Bearer ${key}`,
+                Accept: "application/json",
+              },
+        signal: AbortSignal.timeout(12_000),
+      });
+      // The time limit covers the list too: a provider that sends its headers and then stalls the body has not answered.
+      raw = await response.text();
+    } catch (error) {
+      throw providerUnreachable(provider, error, 12_000);
+    }
+    if (!response.ok) {
+      const message=providerErrorMessage(raw,{environment:this.env,secret:key});
+      throw Object.assign(new Error(`${provider.name} model list failed with HTTP ${response.status}${message?": "+message:""}`),{status:response.status,providerMessage:message});
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${provider.name} returned invalid JSON from ${provider.modelsPath || "/models"}`);
+    }
+    const listed = Array.isArray(parsed?.data) ? parsed.data : Array.isArray(parsed?.models) ? parsed.models : [];
+    const now = Number(this.nowFn());
+    const rows = provider.id === "openai" || provider.id === "meta" ? listed.filter((item) => agentModelRow(provider.id, item, now)) : listed;
+    const models = [...new Set(rows.map((item) => typeof item === "string" ? item : item?.id).filter(Boolean).map(String))].sort();
+    return {
+      models,
+      defaultModel: provider.id === "openai" ? openAiDefaultModel(rows) : null,
+      source: "live",
+      metadata: rows
+        .filter((item) => item && typeof item === "object" && item.id)
+        .map((item) => {
+          const metadata={ ...clone(item), id: String(item.id), provider: provider.id };
+          if(metadata.protocolCompatibility==null)metadata.protocolCompatibility=[...(provider.protocolCompatibility||[])];
+          const efforts=metadata.reasoningEfforts==null?advertisedReasoningEfforts(item):null;if(efforts)metadata.reasoningEfforts=efforts;
+          return metadata;
+        }),
+    };
+  }
+
+  async forwardChat(providerId, chatBody, { signal, userAgent, onWire, promptCaching=false, anthropicBody=null } = {}) {
+    const provider = this.get(providerId);
+    const key = this.key(provider.id);
+    if (!key) throw new Error(`${provider.name} API key is not configured.`);
+    if (provider.protocolCompatibility?.includes("anthropic-messages")) {
+      const requestBody = anthropicBody||chatToAnthropic(chatBody);
+      if(provider.id==="anthropic"&&promptCaching===true)requestBody.cache_control={type:"ephemeral"};
+      const endpoint=provider.baseUrl + "/messages",body=this.reusePreSerializedToolJson?stringifyProviderBody(requestBody):JSON.stringify(requestBody);onWire?.({endpoint,wireApi:"anthropic-messages",requestBytes:Buffer.byteLength(body,"utf8")});
+      const headerGuard=requestBody.stream?providerHeadersSignal(signal,this.requestTimeoutMs):null;
+      try{
+        const upstream = await this.fetchFn(endpoint, {
+          method: "POST",
+          headers: {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+            "Accept": requestBody.stream ? "text/event-stream, application/json" : "application/json",
+            "User-Agent": TREBELL_USER_AGENT,
+          },
+          body,
+          signal: headerGuard?.signal||providerRequestSignal(signal, this.requestTimeoutMs),
+        });
+        return await adaptAnthropicResponse(upstream, { stream: requestBody.stream, model: requestBody.model });
+      }finally{headerGuard?.release()}
+    }
+
+    const headers = provider.id === "agentrouter"
+      ? agentRouterHeaders(key, {
+          accept: chatBody.stream ? "text/event-stream, application/json" : "application/json",
+          environment:this.env,
+        })
+      : {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "Accept": chatBody.stream ? "text/event-stream, application/json" : "application/json",
+          "User-Agent": TREBELL_USER_AGENT,
+        };
+
+    const endpoint=provider.baseUrl + "/chat/completions",body=this.reusePreSerializedToolJson?stringifyProviderBody(chatBody):JSON.stringify(chatBody);onWire?.({endpoint,wireApi:"openai-chat-completions",requestBytes:Buffer.byteLength(body,"utf8")});
+    const headerGuard=chatBody.stream?providerHeadersSignal(signal,this.requestTimeoutMs):null;
+    try{
+      return await this.fetchFn(endpoint, {
+        method: "POST",
+        headers,
+        body,
+        signal: headerGuard?.signal||providerRequestSignal(signal, this.requestTimeoutMs),
+      });
+    }finally{headerGuard?.release()}
+  }
+
+  // longRequest: a streamed request sent through longRequestFetchFn, whose only bounds are the header guard and the stream's reader. Its
+  // init carries timeout:false, which Bun's fetch reads to drop its own default timeout (the Harbor adapter runs the runner on Bun when a
+  // task image has it, and Bun's fetch is then the transport, isNodeFetch being false); Node's fetch, providerLongRequestFetch and the
+  // stand-ins ignore it, as they ignore any init member they do not know.
+  async forwardResponses(providerId, responsesBody, { signal, onWire, timeoutMs=this.requestTimeoutMs, longRequest=false } = {}) {
+    const provider = this.get(providerId);
+    if (provider.wireApi !== "responses") {
+      throw new Error(`${provider.name} does not use direct Responses forwarding.`);
+    }
+    const key = this.key(provider.id);
+    if (!key) throw new Error(`${provider.name} API key is not configured.`);
+    const stream = Boolean(responsesBody?.stream);
+    const endpoint=provider.baseUrl + "/responses",body=this.reusePreSerializedToolJson?stringifyProviderBody(responsesBody):JSON.stringify(responsesBody);onWire?.({endpoint,wireApi:"openai-responses",requestBytes:Buffer.byteLength(body,"utf8")});
+    const long=stream&&longRequest,headerGuard=stream?providerHeadersSignal(signal,timeoutMs):null,fetchFn=long?this.longRequestFetchFn:this.fetchFn;
+    try{
+      return await fetchFn(endpoint, {
+        method: "POST",
+        headers: provider.id === "agentrouter"
+          ? agentRouterHeaders(key, {
+              accept: stream ? "text/event-stream, application/json" : "application/json",
+              environment:this.env,
+            })
+          : {
+              Authorization: `Bearer ${key}`,
+              "Content-Type": "application/json",
+              Accept: stream ? "text/event-stream, application/json" : "application/json",
+              "User-Agent": TREBELL_USER_AGENT,
+            },
+        body,
+        signal: headerGuard?.signal||providerRequestSignal(signal, timeoutMs),
+        ...(long ? { timeout: false } : {}),
+      });
+    }finally{headerGuard?.release()}
+  }
+
+  // streamIdleTimeoutMs: how long a streamed stateless provider's Responses stream may send nothing (its lane's, else requestTimeoutMs).
+  async turn(providerId, request={}, { signal, promptCaching=false, streamResponses=false, streamChat=false, onStream=null, streamIdleTimeoutMs=null } = {}) {
+    const provider=this.get(providerId),model=String(request.model||"").trim();
+    if(provider.autoToolChoiceOnly===true)request=autoToolChoiceRequest(request);
+    const statelessStream=streamResponses===true&&provider.statelessResponses===true&&Object.hasOwn(STREAMED_STATELESS_RESPONSES,provider.id)?STREAMED_STATELESS_RESPONSES[provider.id]:null;
+    const sink=typeof onStream==="function"?createStreamSink(onStream):null;
+    if(!model)throw new Error("Provider turn requires a model.");
+    const requestedServiceTierRaw=String(request.serviceTier||request.service_tier||"").trim().toLowerCase(),requestedServiceTier=requestedServiceTierRaw==="priority"?"fast":requestedServiceTierRaw||null;
+    const started=performance.now(),requestDeadlineAt=started+this.requestTimeoutMs;let wire={endpoint:null,wireApi:null,requestBytes:0},wireRequestBytes=0,wireAttempts=0;
+    const onWire=value=>{wire=value||wire;wireRequestBytes+=Number(value?.requestBytes||0);wireAttempts++};
+    let fullResponsesBody=null,openAiContinuation=null,responsesBody=null,openAiParentId="",compactedResend=null,openAiWebSocketLane=false,replayInput,replayRefused=null;
+    // A body rebuilt because the continuation it was sent as failed (the socket that held its parent was replaced, or the API refused
+    // the parent or found no output for one of its calls) carries again the reasoning the current turn's replies kept
+    // (providerTurnToResponses' reasoningReplay), which the server held for that continuation and lost with its parent. Every other
+    // body is sent as before: a continuation, and a full body with no usable parent (none, one older than 240 s, another prefix or model).
+    // The continuation tracker keeps proving prefixes on the input built without it, which every full body of a turn shares. Only a
+    // model that reasons is sent any, and a completion gate none: a judge rebuilt in full is sent the transcript without the coder's
+    // reasoning, as before (a batch-evidence precommit gate starts mid-turn, right after a tool output). Once the API refused a body
+    // for its reasoning (replayRefused), no later attempt of this request carries any.
+    const replayedInput=()=>{
+      if(!openAiContinuation?.used||replayRefused)return null;
+      if(replayInput===undefined){
+        const input=provider.id==="openai"&&request?.metadata?.completionGate!==true&&officialOpenAiReasoningModel(model)&&responsesReasoningToReplay(request.messages)?this.#officialOpenAiResponsesBody({...request,model},{reasoningReplay:true}).input:null;
+        replayInput=input?.some(item=>item?.type==="reasoning")?input:null;
+      }
+      return replayInput;
+    };
+    const sentFull=full=>{const input=full?replayedInput():null;return input?{...full,input}:full};
+    // A compacted resend carries the reasoning that came after the compaction: the replayed input past the items it covers.
+    const sentCompactedResend=resend=>{
+      const input=replayedInput();if(!input)return resend.body;
+      let index=0;for(let covered=0;index<input.length&&covered<resend.omittedInputCount;index++)if(input[index]?.type!=="reasoning")covered++;
+      return {...resend.body,input:[resend.body.input[0],...input.slice(index)]};
+    };
+    const replayedReasoningCount=body=>Array.isArray(body?.input)?body.input.reduce((count,item)=>count+(item?.type==="reasoning"?1:0),0):0;
+    const reasoningReplayTelemetry=()=>{const replayed=replayedReasoningCount(responsesBody);return {...(replayed?{replayedReasoningItems:replayed}:{}),...(replayRefused?{replayRefused}:{})}};
+    // The API refused a body for the reasoning it carried again: the same body goes once more without those items.
+    const refuseReplay=(body,{status,wireApi,providerError=null})=>{
+      const code=typeof providerError?.code==="string"&&providerError.code?providerError.code:null;
+      replayRefused={reasoningItems:replayedReasoningCount(body),status:Number(status),wireApi,...(code?{code}:{})};
+      const stripped={...body,input:body.input.filter(item=>item?.type!=="reasoning")};
+      if(compactedResend?.body===body){compactedResend.body=stripped;compactedResend.inputCount=stripped.input.length}
+      responsesBody=stripped;return stripped;
+    };
+    // Every HTTPS send of a Responses body. A 400 for a body that carries replayed reasoning is read for its error: a refusal of that
+    // reasoning is answered by the one resend without it, and any other goes on as before, with its status, headers and text.
+    // A stateless provider (xAI, Meta) that refuses include for a model is sent the body again without it and without the reasoning
+    // it carried, and that model's later requests leave both out.
+    const forwardResponsesBody=async body=>{
+      const send=sent=>this.forwardResponses(provider.id,sent,{signal,onWire,timeoutMs:remainingProviderRequestMs(requestDeadlineAt),...(statelessStream?{longRequest:true}:{})});
+      const upstream=await send(body);
+      const sentInclude=provider.statelessResponses===true&&Array.isArray(body?.include)&&body.include.length>0;
+      if(upstream.ok||Number(upstream.status)!==400||(!sentInclude&&(replayRefused||!replayedReasoningCount(body))))return upstream;
+      const raw=await upstream.text();let providerError=null;try{providerError=JSON.parse(raw)?.error}catch{}
+      if(!providerError||typeof providerError!=="object")providerError={message:raw};
+      if(sentInclude&&statelessIncludeRefused(upstream.status,providerError)){
+        this.statelessIncludeRefusals.add(provider.id+"\0"+model);
+        const {include:_include,...rest}=body;responsesBody={...rest,input:body.input.filter(item=>item?.type!=="reasoning")};
+        sink?.restart();
+        return send(responsesBody);
+      }
+      if(replayRefused||!replayedReasoningCount(body)||!openAiReasoningReplayRefused(upstream.status,providerError,body.input))return new Response(raw,{status:upstream.status,statusText:upstream.statusText,headers:upstream.headers});
+      sink?.restart();
+      return send(refuseReplay(body,{status:upstream.status,wireApi:"openai-responses",providerError}));
+    };
+    // When a WebSocket session falls back (a replaced connection, a refused continuation, an HTTPS retry, or a completion judge
+    // without a usable socket) and the server had compacted this chain, the request is resent as the compaction item and what
+    // followed it (the server's own context) instead of the whole local transcript; a resend the API refuses is sent whole.
+    // Anything else that cannot continue its parent (an expired parent, another model or prefix, a session without the
+    // WebSocket lane) is sent whole, as before. A resend or whole body rebuilt after a failed continuation carries the reasoning
+    // kept since the turn's last compaction (recordResponse).
+    const compactedOrFull=(full,parentId)=>{
+      if(!openAiWebSocketLane)return sentFull(full);
+      if(!compactedResend){const resend=this.openAiResponseContinuations.compactedResend(full,parentId);if(resend){const body=sentCompactedResend(resend);compactedResend={...resend,body,inputCount:body.input.length,rejected:false}}}
+      return compactedResend&&!compactedResend.rejected?compactedResend.body:sentFull(full);
+    };
+    const sentCompacted=()=>Boolean(compactedResend&&!compactedResend.rejected&&responsesBody===compactedResend.body);
+    // The server compaction a response was produced on top of: the one a compacted resend carried, the parent's for a continuation
+    // (undefined lets the tracker inherit it), and none for the whole transcript.
+    const sentCompaction=()=>sentCompacted()?compactedResend.compaction:openAiContinuation?.used&&!continuationFallback?undefined:null;
+    // A compaction in a response's own output stands for everything its request held, the reasoning its replies kept too, so that
+    // reasoning leaves the messages: no body rebuilt later in the turn carries it again, whether that body is whole (a refused
+    // compacted resend) or follows a whole send the tracker records without the compaction (an expired parent, another prefix).
+    // A judge's compaction forks off the coding lane and drops nothing.
+    const recordResponse=result=>{
+      this.openAiResponseContinuations.record(result.id,openAiContinuation,result,{baseCompaction:sentCompaction()});
+      if(result.serverCompaction&&request?.metadata?.completionGate!==true)dropResponsesReasoning(request.messages);
+    };
+    const compactedResendTelemetry=()=>compactedResend?{compactedResend:{compactionResponseId:compactedResend.compactionResponseId,omittedInputCount:compactedResend.omittedInputCount,inputCount:compactedResend.inputCount,rejected:compactedResend.rejected===true}}:{};
+    if(provider.wireApi==="responses"){
+      if(provider.id==="openai"){
+        const messageRefs=Array.isArray(request.messages)?request.messages:null,identityToken=request?.[NATIVE_OPENAI_CONTINUATION_IDENTITY]||null,comparisonParentId=String(request.promptCacheComparisonResponseId||"").trim(),parentId=Object.prototype.hasOwnProperty.call(request,"openAiContinuationResponseId")?String(request.openAiContinuationResponseId||"").trim():comparisonParentId;openAiParentId=parentId;
+        const preflight=this.reuseOpenAiContinuationInputBuild
+          ?this.openAiResponseContinuations.preflight(parentId,{messageRefs,identityToken,model})
+          :null;
+        if(preflight){
+          const suffixBody=this.#officialOpenAiResponsesBody({...request,model},{inputStartMessageIndex:preflight.messageCount});
+          openAiContinuation=this.openAiResponseContinuations.prepareSuffix(suffixBody,parentId,{messageRefs,identityToken});
+          if(openAiContinuation)responsesBody=openAiContinuation.body;
+        }
+        if(!responsesBody){
+          fullResponsesBody=this.#officialOpenAiResponsesBody({...request,model});
+          openAiContinuation=this.openAiResponseContinuations.prepare(fullResponsesBody,parentId,{messageRefs,identityToken});
+          responsesBody=openAiContinuation?.body||fullResponsesBody;
+        }
+      }else if(provider.statelessResponses){
+        fullResponsesBody=statelessResponsesBody({...request,model},{replay:!this.statelessIncludeRefusals.has(provider.id+"\0"+model)});
+        responsesBody=fullResponsesBody;
+      }else{
+        fullResponsesBody=providerTurnToResponses({...request,model});
+        responsesBody=fullResponsesBody;
+      }
+    }
+    if(provider.id==="openai"&&streamResponses===true&&responsesBody){responsesBody.stream=true;if(fullResponsesBody)fullResponsesBody.stream=true}
+    // A streamed stateless provider's request is its JSON one with stream:true (the same key, in place).
+    if(statelessStream&&responsesBody)responsesBody.stream=true;
+    const anthropicScaffold=provider.id==="anthropic"?this.#anthropicToolScaffold({...request,model}):null;
+    let anthropicMessageProjector=null;
+    if(anthropicScaffold&&this.reuseAnthropicMessageBuild){const identity=request?.[NATIVE_OPENAI_CONTINUATION_IDENTITY];if(identity&&typeof identity==="object"){anthropicMessageProjector=this.anthropicMessageProjectors.get(identity);if(!anthropicMessageProjector){anthropicMessageProjector=createAnthropicMessageProjector();this.anthropicMessageProjectors.set(identity,anthropicMessageProjector)}}}
+    const directAnthropicBody=anthropicScaffold?providerTurnToAnthropic({...request,model},{stream:streamChat===true,scaffold:anthropicScaffold.scaffold,messageProjector:anthropicMessageProjector}):null;
+    if(this.reusePreSerializedToolJson&&directAnthropicBody?.[ANTHROPIC_PRE_SERIALIZED_MESSAGES])attachPreSerializedTopLevel(directAnthropicBody,"messages",directAnthropicBody.messages,directAnthropicBody[ANTHROPIC_PRE_SERIALIZED_MESSAGES]);
+    if(this.reusePreSerializedToolJson&&directAnthropicBody&&anthropicScaffold?.toolsJson&&directAnthropicBody.tools===anthropicScaffold.scaffold.tools)attachPreSerializedTopLevel(directAnthropicBody,"tools",directAnthropicBody.tools,anthropicScaffold.toolsJson);
+    const chatManifest=provider.wireApi==="responses"||directAnthropicBody?null:this.#chatToolManifest(request);
+    const chatMessageCache=this.#chatMessageConversionCache(request),chatBody=provider.wireApi==="responses"||directAnthropicBody?null:providerTurnToChat({...request,model},{preparedTools:chatManifest?.tools||null,messageCache:chatMessageCache?.messages||null});
+    if(streamChat===true&&chatBody){chatBody.stream=true;chatBody.stream_options={include_usage:true}}
+    if(chatBody&&chatMessageCache?.serialized){const messagesJson=preSerializedChatMessages(chatBody.messages,chatMessageCache.serialized);if(messagesJson)attachPreSerializedTopLevel(chatBody,"messages",chatBody.messages,messagesJson)}
+    if(this.reusePreSerializedToolJson&&chatBody&&chatManifest?.toolsJson&&chatBody.tools===chatManifest.tools)attachPreSerializedTopLevel(chatBody,"tools",chatBody.tools,chatManifest.toolsJson);
+    let openAiWebSocketFallback=null,continuationFallback=false,continuationFallbackReason=null;
+    const openAiWebSocketStreamId=provider.id==="openai"&&streamResponses===true?openAiResponsesWebSocketStreamId(request?.metadata?.sessionId):null;
+    // The session runs on the WebSocket lane, so a request this turn sends over HTTPS is a fallback from it.
+    openAiWebSocketLane=request?.openAiDisableWebSocket!==true&&Boolean(openAiWebSocketStreamId)&&String(this.env.TREBELL_OPENAI_RESPONSES_WEBSOCKET||"1").trim()!=="0";
+    const openAiWebSocketEnabled=openAiWebSocketLane&&!this.#openAiWebSocketCircuitOpen();
+    const openAiWebSocketTransport=openAiWebSocketEnabled?this.#openAiWebSocketTransport():null;
+    if(provider.id==="openai"&&provider.wireApi==="responses"&&request?.metadata?.completionGate===true&&request.openAiDisableWebSocket!==true&&!openAiWebSocketTransport){
+      // A WebSocket-only parent cannot be relied upon when the audit must fall back to HTTP.
+      // Rebuild the complete prompt and omit the inaccessible cross-transport comparison ID.
+      fullResponsesBody=this.#officialOpenAiResponsesBody({...request,promptCacheComparisonResponseId:""});
+      if(streamResponses===true)fullResponsesBody.stream=true;
+      openAiContinuation=this.openAiResponseContinuations.prepare(fullResponsesBody,"",{messageRefs:Array.isArray(request.messages)?request.messages:null,identityToken:request?.[NATIVE_OPENAI_CONTINUATION_IDENTITY]||null});
+      responsesBody=compactedOrFull(fullResponsesBody,openAiParentId);
+      continuationFallback=true;continuationFallbackReason="control_gate_websocket_unavailable";
+    }
+    if(openAiWebSocketTransport){
+      const transport=openAiWebSocketTransport;
+        try{
+          if(openAiContinuation?.used&&!this.#openAiWebSocketParentAvailable(openAiContinuation.parentId,transport)){
+            const fallbackBody=this.#officialOpenAiResponsesBody({...request,model,promptCacheComparisonResponseId:""});fallbackBody.stream=true;
+            fullResponsesBody=fallbackBody;responsesBody=compactedOrFull(fallbackBody,openAiParentId);continuationFallback=true;continuationFallbackReason="websocket_connection_replaced";
+          }
+          const socketStarted=performance.now(),socketResult=await transport.request(responsesBody,{streamId:openAiWebSocketStreamId,signal,idleTimeoutMs:this.requestTimeoutMs,...(sink?{onEvent:sink.responsesEvent}:{})}),result=normalizeResponsesTurnResponse(socketResult.response,provider.id,model);
+          this.openAiResponsesWebSocketTransientFailures=0;
+          recordResponse(result);
+          this.#recordOpenAiWebSocketResponseOrigin(result.id,transport);
+          result.telemetry={
+            endpoint:String(provider.baseUrl||"").replace(/^http/i,"ws")+"/responses",wireApi:"openai-responses-websocket",requestBytes:Number(socketResult.requestBytes||0),responseBytes:Number(socketResult.telemetry?.responseBytes||0),
+            responseHeadersLatencyMs:null,responseBodyLatencyMs:Number(socketResult.telemetry?.totalLatencyMs||0),timeToFirstTokenMs:socketResult.telemetry?.timeToFirstTokenMs??null,totalLatencyMs:Number(socketResult.telemetry?.totalLatencyMs??(performance.now()-socketStarted)),streaming:true,providerRequestId:null,providerResponseId:result.id||null,
+            requestedServiceTier,serviceTier:result.serviceTier||null,promptCacheDiagnostics:normalizedOpenAiPromptCacheDiagnostics(socketResult.response),reasoningContext:normalizedOpenAiReasoningContext(socketResult.response),persistentConnection:true,responseContinuation:openAiContinuation?{used:Boolean(openAiContinuation.used&&!continuationFallback),attempted:Boolean(openAiContinuation.used),fallback:continuationFallback,...compactedResendTelemetry(),...reasoningReplayTelemetry(),...(continuationFallbackReason?{fallbackReason:continuationFallbackReason}:{}),parentId:openAiContinuation.parentId||null,parentExpired:Boolean(openAiContinuation.parentExpired),fullInputCount:Number(openAiContinuation.fullInputCount||0),deltaInputCount:continuationFallback?Number(openAiContinuation.fullInputCount||0):Number(openAiContinuation.deltaInputCount||0),savedRequestBytes:continuationFallback?0:Number(openAiContinuation.savedRequestBytes||0),inputBuildReused:Boolean(openAiContinuation.inputBuildReused&&!continuationFallback),canonicalPrefixMessageCount:Number(openAiContinuation.canonicalPrefixMessageCount||0),wireAttempts:1}:null,
+          };
+          return result;
+        }catch(error){
+          if(signal?.aborted||error?.name==="AbortError")throw error;
+          const failedWire=Number(error?.webSocketTelemetry?.requestBytes||0);if(failedWire>0)wireRequestBytes+=failedWire;wireAttempts++;
+          const responseStatus=Number(error?.webSocketEvent?.status||error?.status||error?.statusCode||0),responseMessage=String(error?.webSocketEvent?.error?.message||error?.message||""),failureKind=String(error?.webSocketFailureKind||((error?.name==="TimeoutError")?"timeout":error?.protocolFailure?"protocol":error?.transportFailure?"transport":"unknown")),continuationRejected=(Boolean(openAiContinuation?.used)||sentCompacted())&&[400,404,409].includes(responseStatus),invalidToolOutputRequest=responseStatus===400&&/no tool output found for function call/i.test(responseMessage),providerError=error?.webSocketEvent?.response?.error||error?.webSocketEvent?.error||null,refusalDetail={message:responseMessage,code:providerError?.code,param:providerError?.param},reasoningRefused=!replayRefused&&replayedReasoningCount(responsesBody)>0&&openAiReasoningReplayRefused(responseStatus,refusalDetail,responsesBody.input),replaySafe=error?.replaySafe===true||continuationRejected||invalidToolOutputRequest||reasoningRefused;
+          openAiWebSocketFallback={transportFailure:Boolean(error?.transportFailure),protocolFailure:Boolean(error?.protocolFailure),failureKind,name:error?.name||null,code:error?.code??null,replaySafe,retried:false,requestBytes:failedWire,responseBytes:Number(error?.webSocketTelemetry?.responseBytes||0),timeToFirstTokenMs:error?.webSocketTelemetry?.timeToFirstTokenMs??null};
+          if(this.openAiResponsesWebSocket===transport){
+            if(error?.transportFailure)this.#resetOpenAiWebSocket("transport_failure");
+            else if(error?.protocolFailure)this.#resetOpenAiWebSocket("protocol_failure");
+            else if(error?.name==="TimeoutError")this.#resetOpenAiWebSocket("timeout_failure");
+            // A rate limit is account back-pressure, not lane damage: keep the socket and its continuation parent.
+            else if(error?.retryable===true&&error?.rateLimited!==true&&["api_error","response_failed"].includes(failureKind))this.#resetOpenAiWebSocket("api_failure");
+          }
+          if(!replaySafe){
+            // A post-send timeout is not safe to replay inside this provider turn,
+            // but it is safe for the agent loop to retry as a fresh model attempt:
+            // no model tool call is executed until a terminal response is returned.
+            // The timeout reset above also opens the socket cooldown, so that fresh
+            // attempt naturally uses HTTPS instead of repeating the unhealthy lane.
+            error.retryable=error?.retryable===true||Boolean(error?.transportFailure)||error?.name==="TimeoutError";
+            error.telemetry={endpoint:String(provider.baseUrl||"").replace(/^http/i,"ws")+"/responses",wireApi:"openai-responses-websocket",requestBytes:failedWire,responseBytes:Number(error?.webSocketTelemetry?.responseBytes||0),timeToFirstTokenMs:error?.webSocketTelemetry?.timeToFirstTokenMs??null,totalLatencyMs:Number((performance.now()-started).toFixed(3)),streaming:true,persistentConnection:true,webSocketFallback:openAiWebSocketFallback};throw error
+          }
+          try{remainingProviderRequestMs(requestDeadlineAt)}catch{error.retryable=false;error.telemetry={endpoint:String(provider.baseUrl||"").replace(/^http/i,"ws")+"/responses",wireApi:"openai-responses-websocket",requestBytes:failedWire,responseBytes:Number(error?.webSocketTelemetry?.responseBytes||0),timeToFirstTokenMs:error?.webSocketTelemetry?.timeToFirstTokenMs??null,totalLatencyMs:Number((performance.now()-started).toFixed(3)),streaming:true,persistentConnection:true,webSocketFallback:openAiWebSocketFallback};throw error}
+          openAiWebSocketFallback.retried=true;
+          // The socket refused the reasoning a rebuilt body carried: the HTTPS retry sends that body without it.
+          if(reasoningRefused)refuseReplay(responsesBody,{status:responseStatus,wireApi:"openai-responses-websocket",providerError:refusalDetail});
+          else if(continuationRejected||invalidToolOutputRequest){
+            const fallbackBody=this.#officialOpenAiResponsesBody({...request,model,promptCacheComparisonResponseId:""});fallbackBody.stream=true;
+            // The socket refused the compacted resend itself: the HTTPS retry sends the whole transcript.
+            const refusedCompacted=sentCompacted();if(refusedCompacted)compactedResend.rejected=true;
+            fullResponsesBody=fallbackBody;responsesBody=compactedOrFull(fallbackBody,openAiParentId);continuationFallback=true;continuationFallbackReason=continuationRejected?(refusedCompacted?"compacted_resend_rejected":"previous_response_unavailable"):"invalid_tool_output_state";
+          }
+        }
+    }
+    sink?.restart();
+    let upstream=provider.wireApi==="responses"
+      ?await forwardResponsesBody(responsesBody)
+      :await this.forwardChat(provider.id,chatBody,{signal,onWire,promptCaching,anthropicBody:directAnthropicBody});
+    const refusedResend=sentCompacted();
+    if(provider.id==="openai"&&(openAiContinuation?.used||refusedResend)&&!upstream.ok&&[400,404,409].includes(Number(upstream.status))){
+      try{await upstream.body?.cancel?.()}catch{}
+      if(!fullResponsesBody){fullResponsesBody=this.#officialOpenAiResponsesBody({...request,model});if(streamResponses===true)fullResponsesBody.stream=true}
+      if(refusedResend)compactedResend.rejected=true;
+      responsesBody=compactedOrFull(fullResponsesBody,openAiParentId);
+      sink?.restart();
+      upstream=await forwardResponsesBody(responsesBody);continuationFallback=true;if(!continuationFallbackReason)continuationFallbackReason=refusedResend?"compacted_resend_rejected":"previous_response_unavailable";
+      if(sentCompacted()&&!upstream.ok&&[400,404,409].includes(Number(upstream.status))){
+        try{await upstream.body?.cancel?.()}catch{}
+        compactedResend.rejected=true;responsesBody=sentFull(fullResponsesBody);sink?.restart();
+        upstream=await forwardResponsesBody(responsesBody);
+      }
+    }
+    const headersLatencyMs=Number((performance.now()-started).toFixed(3));
+    const providerRequestId=upstream.headers?.get?.("x-request-id")||upstream.headers?.get?.("request-id")||upstream.headers?.get?.("x-amzn-requestid")||null;
+    const bodyStarted=performance.now();
+    const contentType=String(upstream.headers?.get?.("content-type")||"").toLowerCase();
+    if(upstream.ok&&provider.id==="openai"&&streamResponses===true&&upstream.body&&contentType.includes("text/event-stream")){
+      try{
+        const streamed=await readOpenAiResponsesStream(upstream.body,{requestStartedAt:started,signal,idleTimeoutMs:this.requestTimeoutMs,...(sink?{onEvent:sink.responsesEvent}:{})}),bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        const result=normalizeResponsesTurnResponse(streamed.response,provider.id,model);
+        recordResponse(result);
+        result.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-responses",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:streamed.responseBytes,responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:streamed.timeToFirstTokenMs,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:result.id||null,requestedServiceTier,serviceTier:result.serviceTier||null,promptCacheDiagnostics:normalizedOpenAiPromptCacheDiagnostics(streamed.response),reasoningContext:normalizedOpenAiReasoningContext(streamed.response),persistentConnection:false,webSocketFallback:openAiWebSocketFallback,responseContinuation:openAiContinuation?{used:Boolean(openAiContinuation.used&&!continuationFallback),attempted:Boolean(openAiContinuation.used),fallback:continuationFallback,...compactedResendTelemetry(),...reasoningReplayTelemetry(),...(continuationFallbackReason?{fallbackReason:continuationFallbackReason}:{}),parentId:openAiContinuation.parentId||null,parentExpired:Boolean(openAiContinuation.parentExpired),fullInputCount:Number(openAiContinuation.fullInputCount||0),deltaInputCount:continuationFallback?Number(openAiContinuation.fullInputCount||0):Number(openAiContinuation.deltaInputCount||0),savedRequestBytes:continuationFallback?0:Number(openAiContinuation.savedRequestBytes||0),inputBuildReused:Boolean(openAiContinuation.inputBuildReused&&!continuationFallback),canonicalPrefixMessageCount:Number(openAiContinuation.canonicalPrefixMessageCount||0),wireAttempts}:null};
+        return result;
+      }catch(error){
+        const bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        error.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-responses",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:Number(error?.streamTelemetry?.responseBytes||0),responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:error?.streamTelemetry?.timeToFirstTokenMs??null,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:null};throw error;
+      }
+    }
+    // A streamed stateless provider (Meta): the stream's final event holds the same response object its JSON reply is, usage too, so the
+    // result and the usage it records are the same; the telemetry has a JSON turn's fields. The stream is read with its lane's idle
+    // bound: no whole-request timeout, which a long answer always exceeds.
+    if(upstream.ok&&statelessStream&&upstream.body&&contentType.includes("text/event-stream")){
+      const idle=Math.trunc(Number(streamIdleTimeoutMs)),idleTimeoutMs=Number.isFinite(idle)&&idle>0?idle:this.requestTimeoutMs;
+      try{
+        const streamed=await readOpenAiResponsesStream(upstream.body,{requestStartedAt:started,signal,idleTimeoutMs,label:provider.name+" Responses stream",codePrefix:statelessStream.codePrefix,classifyError:statelessStream.classifyError,finalGraceMs:statelessStream.finalGraceMs,...(sink?{onEvent:sink.responsesEvent}:{})}),bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        const result=normalizeResponsesTurnResponse(streamed.response,provider.id,model);
+        result.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-responses",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:streamed.responseBytes,responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:streamed.timeToFirstTokenMs,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:result.id||null,requestedServiceTier,serviceTier:result.serviceTier||null};
+        return result;
+      }catch(error){
+        // Nothing a stream that stalled, broke or ended early sent is used, so the loop sends the request again as a fresh attempt, as it
+        // does a timed-out request: an idle timeout, a dropped connection (its socket error under it), a stream closed before its final
+        // event. An error event says itself whether it retries (classifyError); a stop does not.
+        if(!signal?.aborted&&error?.name!=="AbortError"&&typeof error?.retryable!=="boolean")error.retryable=true;
+        // The stream is given up whatever ended it, so its body is cancelled, which closes its connection: an error event (or a
+        // response.failed, or an event that does not parse) ends the read while the server may keep the stream open, and on the long
+        // request's transport, which has no body deadline, that socket would stay open for as long as the server kept it, and keep a
+        // runner whose turn failed from exiting.
+        try{void Promise.resolve(upstream.body.cancel(error)).catch(()=>{})}catch{}
+        const bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        error.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-responses",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:Number(error?.streamTelemetry?.responseBytes||0),responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:error?.streamTelemetry?.timeToFirstTokenMs??null,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:null,requestedServiceTier};throw error;
+      }
+    }
+    if(upstream.ok&&streamChat===true&&upstream.body&&contentType.includes("text/event-stream")){
+      try{
+        const streamed=await readOpenAiChatStream(upstream.body,{requestStartedAt:started,signal,idleTimeoutMs:this.requestTimeoutMs,...(sink?{onDelta:sink.chatDelta}:{})}),bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        const result=normalizeChatTurnResponse(streamed.response,provider.id,model);
+        result.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-chat-completions",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:streamed.responseBytes,responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:streamed.timeToFirstTokenMs,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:result.id||null,requestedServiceTier,serviceTier:result.serviceTier||null};
+        return result;
+      }catch(error){
+        const bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3)),totalLatencyMs=Number((performance.now()-started).toFixed(3));
+        error.telemetry={endpoint:wire.endpoint,wireApi:wire.wireApi||"openai-chat-completions",requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,responseBytes:Number(error?.streamTelemetry?.responseBytes||0),responseHeadersLatencyMs:headersLatencyMs,responseBodyLatencyMs:bodyLatencyMs,timeToFirstTokenMs:error?.streamTelemetry?.timeToFirstTokenMs??null,totalLatencyMs,streaming:true,providerRequestId,providerResponseId:null};throw error;
+      }
+    }
+    const raw=await upstream.text();
+    const bodyLatencyMs=Number((performance.now()-bodyStarted).toFixed(3));
+    const totalLatencyMs=Number((performance.now()-started).toFixed(3));
+    const baseTelemetry={
+      endpoint:wire.endpoint,
+      wireApi:wire.wireApi||provider.protocolCompatibility?.[0]||provider.wireApi,
+      requestBytes:wireRequestBytes||Number(wire.requestBytes)||0,
+      responseBytes:Buffer.byteLength(raw,"utf8"),
+      responseHeadersLatencyMs:headersLatencyMs,
+      responseBodyLatencyMs:bodyLatencyMs,
+      timeToFirstTokenMs:null,
+      totalLatencyMs,
+      streaming:false,
+      providerRequestId,
+      providerResponseId:null,
+      requestedServiceTier,
+      ...(provider.id==="openai"?{persistentConnection:false,webSocketFallback:openAiWebSocketFallback}:{}),
+    };
+    if(!upstream.ok){
+      const error=new Error(`${provider.name} HTTP ${upstream.status}: ${providerErrorExcerpt(raw,{environment:this.env,secret:this.key(provider.id),maxChars:1200})}`);
+      error.status=upstream.status;
+      error.retryable=[408,409,425,429].includes(upstream.status)||(upstream.status>=500&&upstream.status<=599);
+      if(upstream.status===429){
+        let providerCode="";try{providerCode=String(JSON.parse(raw)?.error?.code||"").trim().toLowerCase()}catch{}
+        if(providerCode==="insufficient_quota")error.retryable=false;
+        else{error.rateLimited=true;const retryAfterMs=openAiRetryAfterMs({headers:upstream.headers,message:raw});if(retryAfterMs!=null)error.retryAfterMs=retryAfterMs}
+      }
+      error.telemetry=baseTelemetry;
+      throw error;
+    }
+    let parsed;try{parsed=raw?JSON.parse(raw):{}}catch{
+      const error=new Error(`${provider.name} returned invalid JSON for a provider turn.`);error.telemetry=baseTelemetry;throw error;
+    }
+    const result=provider.wireApi==="responses"
+      ?normalizeResponsesTurnResponse(parsed,provider.id,model)
+      :normalizeChatTurnResponse(parsed,provider.id,model);
+    if(provider.id==="openai")recordResponse(result);
+    result.telemetry={
+      ...baseTelemetry,
+      providerResponseId:result.id||null,
+      serviceTier:result.serviceTier||null,
+      ...(provider.id==="openai"?{promptCacheDiagnostics:normalizedOpenAiPromptCacheDiagnostics(parsed),reasoningContext:normalizedOpenAiReasoningContext(parsed),responseContinuation:openAiContinuation?{used:Boolean(openAiContinuation.used&&!continuationFallback),attempted:Boolean(openAiContinuation.used),fallback:continuationFallback,...compactedResendTelemetry(),...reasoningReplayTelemetry(),...(continuationFallbackReason?{fallbackReason:continuationFallbackReason}:{}),parentId:openAiContinuation.parentId||null,parentExpired:Boolean(openAiContinuation.parentExpired),fullInputCount:Number(openAiContinuation.fullInputCount||0),deltaInputCount:continuationFallback?Number(openAiContinuation.fullInputCount||0):Number(openAiContinuation.deltaInputCount||0),savedRequestBytes:continuationFallback?0:Number(openAiContinuation.savedRequestBytes||0),inputBuildReused:Boolean(openAiContinuation.inputBuildReused&&!continuationFallback),canonicalPrefixMessageCount:Number(openAiContinuation.canonicalPrefixMessageCount||0),wireAttempts}:null}:{}),
+    };
+    return result;
+  }
+
+  async directChat(providerId, { model, prompt }) {
+    const provider = this.get(providerId);
+    const result=await this.turn(provider.id,{
+      model,
+      messages:[{role:"user",content:prompt}],
+      tools:[],
+      toolChoice:"none",
+    });
+    return {text:String(result.text||""),model:result.model||model,provider:provider.id,raw:result.raw};
+  }
+}

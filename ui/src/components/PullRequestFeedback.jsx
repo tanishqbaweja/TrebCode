@@ -1,0 +1,63 @@
+import React,{useRef,useState} from "react";
+import { CheckCircle2, MessageSquare, Send, X, XCircle } from "lucide-react";
+
+// A selected pull request's comment and review box (SourceControlPanel): it posts a comment, a review, or either, as the host allows
+// for that pull request, and keeps an unsent draft while it is closed. A review's parts go by GitHub's names for them: its comment,
+// its type (Approve, Request changes) and Submit review.
+export default function PullRequestFeedback({canComment=true,canReview=false,canRequestChanges=false,busy=false,onComment,onReview}){
+  const [open,setOpen]=useState(false);
+  const [mode,setMode]=useState(canComment?"comment":"review");
+  const [comment,setComment]=useState("");
+  const [review,setReview]=useState("");
+  const [verdict,setVerdict]=useState("APPROVE");
+  const textareaRef=useRef(null);
+  const triggerRef=useRef(null);
+  const hasReview=Boolean(canReview);
+  const hasComment=Boolean(canComment);
+  if(!hasComment&&!hasReview)return null;
+
+  function openComposer(){
+    setMode(hasComment?"comment":"review");
+    setOpen(true);
+    // The caret goes after a kept draft; a plain focus() put it at the start, so typing on went in front of the draft.
+    setTimeout(()=>{const node=textareaRef.current;if(!node)return;node.focus();const end=node.value.length;node.setSelectionRange?.(end,end)},0);
+  }
+  async function submitComment(){
+    const body=comment.trim();if(!body||busy)return;
+    const ok=await onComment?.(body);if(ok===false)return;setComment("");setOpen(false);
+  }
+  async function submitReview(){
+    const body=review.trim();if(busy)return;
+    if(verdict==="REQUEST_CHANGES"&&!body)return;
+    const ok=await onReview?.({event:verdict,body});if(ok===false)return;setReview("");setOpen(false);
+  }
+
+  // Escape closes the composer like its X (the draft is kept for the next open) and returns focus to the button that opened it.
+  function closeComposer(){setOpen(false);setTimeout(()=>triggerRef.current?.focus(),0)}
+
+  return <div className="pr-composer-wrap">
+    <button type="button" ref={triggerRef} className="pr-composer-trigger" onClick={openComposer} disabled={busy}><MessageSquare size={12}/>{hasReview?"Comment / review":"Comment"}</button>
+    {open&&<div className="pr-composer" data-testid="pr-composer" onKeyDown={event=>{if(event.key==="Escape"&&!event.defaultPrevented){event.preventDefault();closeComposer()}}}>
+      <div className="pr-composer-head">
+        {hasComment&&hasReview?<div className="pr-composer-modes" role="tablist" aria-label="Pull request composer mode">
+          <button type="button" role="tab" aria-selected={mode==="comment"} className={mode==="comment"?"active":""} onClick={()=>setMode("comment")}>Comment</button>
+          <button type="button" role="tab" aria-selected={mode==="review"} className={mode==="review"?"active":""} onClick={()=>setMode("review")}>Review</button>
+        </div>:<strong>{mode==="review"?"New review":"New comment"}</strong>}
+        <button type="button" className="pr-composer-close" aria-label="Close pull request composer" onClick={closeComposer}><X size={12}/></button>
+      </div>
+      {mode==="comment"?<div className="pr-composer-form">
+        <textarea ref={textareaRef} aria-label="Pull request comment" value={comment} onChange={event=>setComment(event.target.value)} placeholder="Leave a comment…" onKeyDown={event=>{if(event.key==="Enter"&&(event.ctrlKey||event.metaKey)&&!event.shiftKey){event.preventDefault();submitComment()}}}/>
+        <div className="pr-composer-submit"><span>Ctrl/Cmd+Enter to post</span><button type="button" disabled={!comment.trim()||busy} onClick={submitComment}><Send size={11}/>{busy?"Posting…":"Comment"}</button></div>
+      </div>:<div className="pr-composer-form">
+        <textarea ref={textareaRef} aria-label="Review comment" value={review} onChange={event=>setReview(event.target.value)} placeholder={verdict==="REQUEST_CHANGES"?"Explain what needs to change…":"Optional comment for the review…"} onKeyDown={event=>{if(event.key==="Enter"&&(event.ctrlKey||event.metaKey)&&!event.shiftKey){event.preventDefault();submitReview()}}}/>
+        <div className="pr-composer-submit">
+          <select aria-label="Review type" value={verdict} onChange={event=>setVerdict(event.target.value)}>
+            <option value="APPROVE">Approve</option>
+            {canRequestChanges&&<option value="REQUEST_CHANGES">Request changes</option>}
+          </select>
+          <button type="button" disabled={busy||(verdict==="REQUEST_CHANGES"&&!review.trim())} onClick={submitReview}>{verdict==="REQUEST_CHANGES"?<XCircle size={11}/>:<CheckCircle2 size={11}/>} {busy?"Submitting…":"Submit review"}</button>
+        </div>
+      </div>}
+    </div>}
+  </div>;
+}

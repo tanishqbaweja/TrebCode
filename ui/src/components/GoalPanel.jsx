@@ -1,0 +1,357 @@
+import React,{useEffect,useLayoutEffect,useReducer,useRef,useState} from "react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Pause, Play, RefreshCw, Target, Trash2 } from "lucide-react";
+import { startSameThreadVerificationRepair } from "../verification-repair.js";
+import { verificationEvidenceMeta, verificationEvidenceSummary, verificationEvidenceView } from "../verification-evidence-view.js";
+import { codexGoalStatusLabel, codexGoalsMissing } from "../codex-turn-options.js";
+import { workspaceLabel } from "../workspace-label.js";
+import { askConfirm } from "../ask-dialog.js";
+import { ignorePressRest } from "./ThreadSidebar.jsx";
+
+const NOTE_KEYS=["completedWork","unresolvedFailures","importantDecisions","artifactsCreated","pendingNextActions"];
+const GOAL_LABELS=["Objective","Token budget","Time budget","Turn budget","Tool-call budget","Child-agent budget","Cost budget","Completion conditions","Constraints","Validation expectations"];
+const NOTE_LABELS=["Completed work","Unresolved failures","Important decisions","Artifacts created","Pending next actions"];
+function lines(value){return (Array.isArray(value)?value:[]).join("\n")}
+function goalValues(goal){return [goal?.objective||"",...[goal?.tokenBudget,goal?.timeBudgetMinutes,goal?.turnBudget,goal?.toolCallBudget,goal?.childAgentBudget,goal?.costBudgetUsd].map(value=>value==null?"":String(value)),lines(goal?.completionConditions),lines(goal?.constraints),lines(goal?.validationExpectations)]}
+function noteValues(continuity){return NOTE_KEYS.map(key=>lines(continuity?.notes?.[key]))}
+// The fields of a group (the goal's, the notes) as the person has them, kept against what they were last filled with from what the
+// thread saved (saved.filled): a read of it again (every read and save answer brings new lists) or a change made elsewhere fills only
+// the fields still as they were filled, so what the person typed stays until it is saved or discarded. A change made elsewhere to
+// a field they edited (the /goal command, another window) is said in the bar that saves it (saved.changed), with Use saved and Keep
+// mine: it used to stay out of sight, and the next save wrote the edit over it. What this panel saved (saved.own), or what comes
+// while its save or clear is on its way (saved.sending), is not such a change. It all stays while the panel is away (another tab,
+// the panel closed, another thread opened), also what a save still on its way brings, and comes back with it: each thread's panel
+// with that thread's own (awayDrafts keeps one per thread and group), and one with none from its saved goal and notes. Another
+// thread's panel used to drop what the one before had put away. A run for what the fields were filled with already leaves them
+// alone: StrictMode's second, and the run for the clear the harness says ahead of its answer when React runs it only once that
+// answer has emptied the fields (fill), which took the fields as drawn before the answer for edits and put them back.
+const awayDrafts=new Map();
+function useSavedFields(group,threadId,values,fields,setters){
+  const key=group+":"+threadId;
+  const [saved]=useState(()=>threadId&&awayDrafts.get(key)?.saved||{filled:null,changed:{}});
+  const [,render]=useReducer(count=>count+1,0),latest=useRef(fields),first=useRef(true);latest.current=fields;
+  useEffect(()=>{
+    let last=saved.filled,current=fields;
+    if(first.current){first.current=false;const away=awayDrafts.get(key);awayDrafts.delete(key);if(away?.saved===saved)current=away.fields}
+    else if(JSON.stringify(last)===JSON.stringify(values))return;
+    const was=saved.changed;saved.filled=values;saved.changed={};
+    values.forEach((value,index)=>{
+      const edited=last&&current[index]!==last[index];setters[index](edited?current[index]:value);
+      if(edited&&value!==current[index]&&(value===last[index]?index in was:!saved.sending&&value!==saved.own?.[index]))saved.changed[index]=value;
+    });
+    render();
+  },[JSON.stringify(values)]);
+  useEffect(()=>()=>{const fields=latest.current,last=saved.filled;if(threadId&&last&&fields.some((value,index)=>value!==last[index]))awayDrafts.set(key,{saved,fields});else awayDrafts.delete(key)},[]);
+  const settle=(index,value)=>{if(value!=null)setters[index](value);delete saved.changed[index];render()};
+  // fill: the fields filled anew as the thread has them saved, from values once a clear has emptied them (with any edit in them),
+  // or with what they were last filled with (Discard changes), so nothing is left unsaved or said to have changed elsewhere.
+  return {saved,unsaved:!!saved.filled&&fields.some((value,index)=>value!==saved.filled[index]),use:index=>settle(index,saved.changed[index]),keep:index=>settle(index),
+    fill(values=saved.filled){saved.filled=values;saved.changed={};values.forEach((value,index)=>setters[index](value));render()}};
+}
+// Each field edited here whose saved value changed elsewhere, across the bar above the button that saves it.
+function changedNotes(group,labels){
+  return Object.entries(group.saved.changed).map(([index,value])=><div key={index} className="goal-field-changed" role="status"><span>{labels[index]} {value?<>changed elsewhere to “{value.length>240?value.slice(0,240)+"…":value}”</>:"cleared elsewhere"} while you were editing.</span><div><button type="button" onClick={()=>group.use(index)}>Use saved</button><button type="button" onClick={()=>group.keep(index)}>Keep mine</button></div></div>);
+}
+function parseLines(value){return String(value||"").split(/\r?\n/).map(item=>item.trim()).filter(Boolean)}
+function wholeNumber(value,label){
+  const raw=String(value||"").trim();if(!raw)return null;
+  const number=Number(raw);if(!Number.isInteger(number)||number<=0)throw new Error(label+" must be a positive whole number.");
+  return number;
+}
+function positiveNumber(value,label){
+  const raw=String(value||"").trim();if(!raw)return null;
+  const number=Number(raw);if(!Number.isFinite(number)||number<=0)throw new Error(label+" must be a positive number.");
+  return number;
+}
+function durationLabel(seconds){
+  const value=Math.max(0,Number(seconds)||0);
+  if(value<60)return Math.round(value)+"s";
+  if(value<3600)return Math.round(value/60)+"m";
+  const hours=Math.floor(value/3600),minutes=Math.round((value%3600)/60);
+  return minutes?hours+"h "+minutes+"m":hours+"h";
+}
+function remainingTimeLabel(minutes){
+  const value=Math.max(0,Number(minutes)||0);return durationLabel(value*60)+" remaining";
+}
+function moneyLabel(value){
+  return "$"+Math.max(0,Number(value)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4});
+}
+// A press runs one of the goal's or the notes' buttons once, as a thread's menu item runs: the rest of it (the second click of a
+// double click, Enter held) does nothing, so it never lands on what took the button's place once its save answered (Resume where
+// Pause was, or Complete moved under it). While a write is on its way the buttons only say they are off (aria-disabled), so the
+// keyboard stays on the one pressed, and a press on them does nothing. One pressed from the keyboard is kept (pressed) with its bar
+// and the bar's controls after it and before it, nearest first: when it goes once its write is over (Complete once the goal is
+// complete, Clear once it is cleared, Discard changes once nothing is left to discard), the keyboard goes on to the first of them
+// still there, as from a removed chip, instead of falling to the page.
+function pressOnce(event,pressed){
+  const button=event.target.closest("button"),all=[...event.currentTarget.querySelectorAll("button")],at=all.indexOf(button);if(at<0)return;
+  if(button.getAttribute("aria-disabled")){event.stopPropagation();return}
+  ignorePressRest(!event.detail);pressed.current=event.detail?null:{bar:event.currentTarget,button,near:[...all.slice(at+1),...all.slice(0,at).reverse()]};
+}
+// The write each thread's panel has on its way (what busy names), kept outside the panel as its drafts are, and the panel shown for
+// each thread: one drawn again while a write is on its way (back from another tab, with the right panel closed and opened, or from
+// another thread) says so on the button pressed, with the rest off, takes no second press until it lands, and says why if it is
+// refused, as the panel that sent it would. The write went with the panel that sent it, so the one drawn again offered every
+// button, a second Update goal saved again, and a refusal was said nowhere. A refusal that lands while no panel is shown for the
+// thread (the person is on Files) waits for the next one (refused), which says it: it was said nowhere either.
+const writes=new Map(),panels=new Map(),refused=new Map();
+// The writes of Continuity state's own buttons: the notes' save and clear, and the repair start.
+const CONTINUITY_WRITES=["continuity","continuity-clear","verification-repair"];
+
+// covered: another thread's opening state is up. The panel belongs to the thread being left, so it hides without unmounting: a
+// failed open brings it back with the drafts in it. leaving: another thread's open is on its way, from the click, so also in the
+// moment before its opening state comes up, and in an open that lands before it would.
+// onResume: what Resume runs instead of setting the goal active, when the harness has it (a Codex goal with no turn running: App runs
+// what /goal resume runs).
+export default function GoalPanel({rpc,rpcStatus,thread,goal,onGoal,continuity,onContinuity,covered=false,leaving=false,onResume=null}){
+  const [objective,setObjective]=useState("");
+  const [tokenBudget,setTokenBudget]=useState("");
+  const [timeBudget,setTimeBudget]=useState("");
+  const [turnBudget,setTurnBudget]=useState("");
+  const [toolCallBudget,setToolCallBudget]=useState("");
+  const [childAgentBudget,setChildAgentBudget]=useState("");
+  const [costBudgetUsd,setCostBudgetUsd]=useState("");
+  const [completionConditions,setCompletionConditions]=useState("");
+  const [constraints,setConstraints]=useState("");
+  const [validationExpectations,setValidationExpectations]=useState("");
+  const [detailsOpen,setDetailsOpen]=useState(false);
+  const [advancedBudgetOpen,setAdvancedBudgetOpen]=useState(false);
+  // A panel drawn while a notes write or a repair start is on its way draws Continuity state open, as its button, which says so,
+  // and the refusal it may bring are in it: drawn closed, nothing in sight said why the goal's buttons were off. Those writes are
+  // named whole: Complete's ("complete") began as the notes' do, and opened the section the person had closed.
+  const [continuityOpen,setContinuityOpen]=useState(()=>CONTINUITY_WRITES.includes(writes.get(thread?.id)));
+  // The section's element (continuityRef): a person's close is in the element at once but in the state only with the browser's toggle
+  // event, a moment later, so a refusal said in between found the state still open, changed nothing, and the toggle then closed it.
+  const continuityRef=useRef(null);
+  const [verificationOpen,setVerificationOpen]=useState(false);
+  const [verificationEvidence,setVerificationEvidence]=useState(null);
+  const [verificationEvidenceLoading,setVerificationEvidenceLoading]=useState(false);
+  const [verificationEvidenceError,setVerificationEvidenceError]=useState("");
+  const [completedWork,setCompletedWork]=useState("");
+  const [unresolvedFailures,setUnresolvedFailures]=useState("");
+  const [importantDecisions,setImportantDecisions]=useState("");
+  const [artifactsCreated,setArtifactsCreated]=useState("");
+  const [pendingNextActions,setPendingNextActions]=useState("");
+  const [repairStatus,setRepairStatus]=useState("");
+  const [repairStartedFor,setRepairStartedFor]=useState(null);
+  const [busy,showBusy]=useState(()=>writes.get(thread?.id)||"");
+  // The bar button last pressed from the keyboard (pressOnce). Drawn without it once no write is on its way, the keyboard goes on to
+  // its nearest control still there: Complete and Clear go as the goal's change comes in, ahead of their answer, and the Discard
+  // changes of an edit cleared with the goal only with that answer. The press is over once the person has put the keyboard elsewhere:
+  // a pointer press anywhere but in the question it asked, or the keyboard taken out of its bar. It was kept until the next press, so
+  // a button that went later (Pause and Complete as Codex ends the goal itself) took the keyboard from where the person had put it.
+  const pressed=useRef(null);
+  useLayoutEffect(()=>{const kept=pressed.current;if(kept&&!busy&&!kept.button.isConnected){pressed.current=null;if(document.activeElement===document.body)kept.near.find(node=>node.isConnected)?.focus()}});
+  useEffect(()=>{
+    const over=event=>{const kept=pressed.current,target=event.target;if(kept&&!target.closest?.(".inspector-text-prompt")&&(event.type==="pointerdown"||!kept.bar.contains(target)))pressed.current=null};
+    const types=["pointerdown","focusin"];for(const type of types)document.addEventListener(type,over,true);
+    return()=>{for(const type of types)document.removeEventListener(type,over,true)};
+  },[]);
+  // The last refusal, said where it was asked for (at): the goal's bar, the notes' buttons or the repair card. One said in
+  // Continuity state opens it, closed or not, and it is brought into view as it shows, clear of the goal's bar pinned below.
+  const [error,setError]=useState(null),errorRef=useRef(null);
+  useEffect(()=>{errorRef.current?.scrollIntoView({block:"nearest"})},[error]);
+  // The panel shown for the thread (panels) says what a write on its way from the one before does: why it was refused (say), and
+  // that a repair it started has started (started), so its button holds Repair started; and a refusal that waited for it. With a
+  // write of Continuity state on its way, that write's button (Saving…, Clearing…, Starting…) comes into view as a refusal does,
+  // clear of the goal's bar: the panel drawn at its top had the section under that bar and the button below the window. A panel
+  // covered while another thread opens is hidden, so a refusal waits for the panel shown next, as while no panel is shown: this one
+  // uncovered once that open fails, or the thread's drawn again once it has opened. Said on the hidden one, it went with it. This
+  // runs again in the commit that covers or uncovers the panel, so no refusal comes in between. One that lands in the moment after
+  // the click, before the opening state is up (leaving), is said here and kept as well: this panel goes once that open lands, and it
+  // went with it, said for that moment on a panel the person had clicked away from, also in an open that landed before any opening
+  // state. The open over with this panel still here (it failed, or the thread was asked for again), the one said here is not kept
+  // (saidHere): said once, as any refusal it says.
+  const leavingRef=useRef(leaving),saidHere=useRef(null);
+  useLayoutEffect(()=>{
+    const id=thread?.id,shown={showBusy,say(said){if(covered||leavingRef.current)refused.set(id,said);if(covered)return;saidHere.current=said;if(said.at!=="goal"){setContinuityOpen(true);if(continuityRef.current)continuityRef.current.open=true}setError(said)},started(status,key){setRepairStatus(status);setRepairStartedFor(key)}};
+    panels.set(id,shown);showBusy(writes.get(id)||"");const said=refused.get(id);if(said){refused.delete(id);shown.say(said)}
+    else if(!covered&&CONTINUITY_WRITES.includes(writes.get(id)))continuityRef.current?.querySelector("[aria-busy=true]")?.scrollIntoView({block:"nearest"});
+    return()=>{if(panels.get(id)===shown)panels.delete(id)};
+  },[covered]);
+  useLayoutEffect(()=>{leavingRef.current=leaving;const id=thread?.id;if(!leaving&&refused.get(id)===saidHere.current)refused.delete(id)},[leaving]);
+  const goalFields=[objective,tokenBudget,timeBudget,turnBudget,toolCallBudget,childAgentBudget,costBudgetUsd,completionConditions,constraints,validationExpectations];
+  const goalSaved=useSavedFields("goal",thread?.id,goalValues(goal),goalFields,[setObjective,setTokenBudget,setTimeBudget,setTurnBudget,setToolCallBudget,setChildAgentBudget,setCostBudgetUsd,setCompletionConditions,setConstraints,setValidationExpectations]);
+  const notes=[completedWork,unresolvedFailures,importantDecisions,artifactsCreated,pendingNextActions];
+  const notesSaved=useSavedFields("notes",thread?.id,noteValues(continuity),notes,[setCompletedWork,setUnresolvedFailures,setImportantDecisions,setArtifactsCreated,setPendingNextActions]);
+  useEffect(()=>{setDetailsOpen(false);setAdvancedBudgetOpen(false);setVerificationOpen(false);setVerificationEvidence(null);setVerificationEvidenceError("");setRepairStatus("");setRepairStartedFor(null)},[thread?.id]);
+  // A started repair holds the button until its turn ends or the thread records a newer verification, so one failure
+  // is not repaired twice at once.
+  const threadRunning=thread?.status?.type==="active",threadWasRunning=useRef(threadRunning);
+  const verificationKey=continuity?.verification?String(continuity.verification.status)+":"+String(continuity.verification.updatedAt||""):"";
+  const repairStarted=repairStartedFor!=null&&repairStartedFor===verificationKey;
+  useEffect(()=>{if(threadWasRunning.current&&!threadRunning)setRepairStartedFor(null);threadWasRunning.current=threadRunning},[threadRunning]);
+  useEffect(()=>{
+    if(!rpc||rpcStatus!=="connected"||!thread?.id){setVerificationEvidence(null);setVerificationEvidenceLoading(false);return}
+    let disposed=false;setVerificationEvidenceLoading(true);setVerificationEvidenceError("");
+    rpc.request("thread/verification/get",{threadId:thread.id}).then(result=>{if(!disposed)setVerificationEvidence(verificationEvidenceView(result))}).catch(error=>{if(!disposed){setVerificationEvidence(null);setVerificationEvidenceError(String(error?.message||error||"Unknown error").slice(0,300))}}).finally(()=>{if(!disposed)setVerificationEvidenceLoading(false)});
+    return()=>{disposed=true};
+  },[rpc,rpcStatus,thread?.id,continuity?.verification?.updatedAt]);
+  if(!thread?.id)return <div className="empty-state"><Target size={28}/><strong>No active thread</strong><span>Start or open a thread before setting a durable goal.</span></div>;
+  if(rpcStatus!=="connected")return <div className="empty-state"><Target size={28}/><strong>Agent harness is reconnecting</strong><span>This thread's durable goal will be available again when the active harness reconnects.</span></div>;
+  // A write is the thread's (writes), and what it does and why it was refused are said by the panel shown for the thread, which may
+  // be one drawn after the panel that sent it went.
+  function setBusy(what){if(what)writes.set(thread.id,what);else writes.delete(thread.id);panels.get(thread.id)?.showBusy(what)}
+  const failAt=(at,e)=>{const said={at,text:e?.message||String(e)},shown=panels.get(thread.id);if(shown)shown.say(said);else refused.set(thread.id,said)};
+  const alertAt=at=>error?.at===at&&<div ref={errorRef} className="inline-error" role="alert">{error.text}</div>;
+  // While a write is on its way the bars' buttons only say they are off (pressOnce takes no press of them), and the one pressed,
+  // which busy names ("save", the status Pause, Resume or Complete sets, "clear", "continuity" ...), says what it does, marked busy.
+  const writing=what=>({"aria-disabled":!!busy||undefined,"aria-busy":busy===what||undefined});
+  // sent: the fields as a save sent them, which are what the goal it answers was filled from; one typed into since stays as typed.
+  // The goal it saved is this panel's own, which a change made elsewhere is told from.
+  async function setGoal(patch,sent){
+    if(!rpc)return;const saved=goalSaved.saved;setBusy(sent?"save":patch.status);setError(null);if(sent)saved.sending=(saved.sending||0)+1;
+    try{const result=await rpc.request("thread/goal/set",{threadId:thread.id,...patch});if(sent)Object.assign(saved,{filled:sent,own:goalValues(result?.goal),changed:{}});onGoal?.(result?.goal||null)}
+    // A Codex without goals refuses the goal as a method it does not have: said as such, not as Codex's error.
+    catch(e){failAt("goal",codexGoalsMissing(e)?"Could not set the goal: this Codex does not support goals.":e)}finally{if(sent)saved.sending--;setBusy("")}
+  }
+  // Resume of a Codex goal starts the goal's next turn (onResume), the goal active once that turn has started: set active alone, it
+  // started no turn, and Codex did not go on with a goal Trebell had paused because Codex started none, which read Active with nothing
+  // running. A Stop pressed before that turn started says nothing, as with /goal resume.
+  async function resume(){
+    setBusy("active");setError(null);
+    try{await onResume()}catch(e){if(!e?.trebellSendStopped)failAt("goal",codexGoalsMissing(e)?"Could not resume the goal: this Codex does not support goals.":e)}finally{setBusy("")}
+  }
+  async function discard(group,what){if(await askConfirm("Discard your changes to "+what+"?",{confirm:"Discard changes",cancel:"Keep editing"}))group.fill()}
+  async function save(){
+    const text=objective.trim();if(!text){failAt("goal","Enter an objective first.");return}
+    let nextTokenBudget,nextTimeBudget,nextTurnBudget,nextToolCallBudget,nextChildAgentBudget,nextCostBudgetUsd;
+    try{
+      nextTokenBudget=wholeNumber(tokenBudget,"Token budget");nextTimeBudget=wholeNumber(timeBudget,"Time budget");
+      nextTurnBudget=wholeNumber(turnBudget,"Turn budget");nextToolCallBudget=wholeNumber(toolCallBudget,"Tool-call budget");nextChildAgentBudget=wholeNumber(childAgentBudget,"Child-agent budget");nextCostBudgetUsd=positiveNumber(costBudgetUsd,"Cost budget");
+    }
+    catch(e){failAt("goal",e);return}
+    await setGoal({
+      objective:text,status:goal?.status||"active",tokenBudget:nextTokenBudget,timeBudgetMinutes:nextTimeBudget,turnBudget:nextTurnBudget,toolCallBudget:nextToolCallBudget,childAgentBudget:nextChildAgentBudget,costBudgetUsd:nextCostBudgetUsd,
+      completionConditions:parseLines(completionConditions),constraints:parseLines(constraints),validationExpectations:parseLines(validationExpectations),
+    },goalFields);
+  }
+  async function clear(){
+    if(!rpc||!await askConfirm("Clear this thread goal?",{confirm:"Clear goal"}))return;const saved=goalSaved.saved;setBusy("clear");setError(null);saved.sending=(saved.sending||0)+1;
+    // The goal cleared, which the harness can say before it answers, is this panel's own, and an edit in the fields goes with it.
+    try{
+      await rpc.request("thread/goal/clear",{threadId:thread.id});onGoal?.(null);
+      goalSaved.fill(goalValues());setDetailsOpen(false);setAdvancedBudgetOpen(false);
+    }
+    catch(e){failAt("goal",e)}finally{saved.sending--;setBusy("")}
+  }
+  async function saveContinuity(){
+    if(!rpc)return;const saved=notesSaved.saved;setBusy("continuity");setError(null);saved.sending=(saved.sending||0)+1;
+    try{
+      const result=await rpc.request("thread/continuity/set",{
+        threadId:thread.id,
+        completedWork:parseLines(completedWork),unresolvedFailures:parseLines(unresolvedFailures),importantDecisions:parseLines(importantDecisions),
+        artifactsCreated:parseLines(artifactsCreated),pendingNextActions:parseLines(pendingNextActions),
+      });
+      Object.assign(saved,{filled:notes,own:noteValues(result?.continuity),changed:{}});onContinuity?.(result?.continuity||null);
+    }catch(e){failAt("notes",e)}finally{saved.sending--;setBusy("")}
+  }
+  async function clearContinuity(){
+    if(!rpc||!await askConfirm("Clear explicit continuity notes? Trebell-derived verification, checkpoints, queue and failure evidence will remain.",{confirm:"Clear notes"}))return;
+    const saved=notesSaved.saved;setBusy("continuity-clear");setError(null);saved.sending=(saved.sending||0)+1;
+    try{
+      const result=await rpc.request("thread/continuity/clear",{threadId:thread.id});onContinuity?.(result?.continuity||null);
+      notesSaved.fill(noteValues());
+    }catch(e){failAt("notes",e)}finally{saved.sending--;setBusy("")}
+  }
+  async function repairVerification(){
+    if(!rpc)return;setBusy("verification-repair");setError(null);setRepairStatus("");
+    try{
+      const result=await startSameThreadVerificationRepair({rpc,thread});
+      panels.get(thread.id)?.started(result?.turn?.id?"Repair turn started on this thread.":"Repair request started.",verificationKey);
+    }catch(e){failAt("repair",e)}finally{setBusy("")}
+  }
+  // Codex's own goal statuses (usageLimited, budgetLimited) read as words rather than Codex's identifiers.
+  const status=goal?.status?codexGoalStatusLabel(goal.status):"not set";
+  const blocked=goal?.status==="active"&&goal?.budgetExhausted;
+  const tokensUsed=Math.max(0,Number(goal?.tokensUsed)||0),timeUsedSeconds=Math.max(0,Number(goal?.timeUsedSeconds)||0);
+  const guidanceCount=(goal?.completionConditions?.length||0)+(goal?.constraints?.length||0)+(goal?.validationExpectations?.length||0);
+  const advancedBudgetCount=[goal?.turnBudget,goal?.toolCallBudget,goal?.childAgentBudget,goal?.costBudgetUsd].filter(value=>value!=null).length;
+  const continuityNoteCount=NOTE_KEYS.reduce((sum,key)=>sum+(continuity?.notes?.[key]?.length||0),0);
+  const verificationLabel=continuity?.verification?[continuity.verification.status,continuity.verification.risk].filter(Boolean).join(" · "):"No verification recorded";
+  // The cell is narrow, so a folder shows by its own name (a root by its path); the full path is in the tooltip.
+  const workspaceCwd=String(continuity?.workspace?.cwd||"");
+  const workspaceCellLabel=workspaceLabel(continuity?.workspace);
+  return <div className={"goal-panel"+(covered?" opening-covered":"")} data-testid="goal-panel">
+    <div className="goal-panel-head"><Target size={19}/><div><strong>Thread goal</strong><span>Durable objective stored with this thread, independent of the chat transcript.</span></div><em className={"goal-status status-"+String(status).replace(/[^a-z]/gi,"").toLowerCase()}>{status}</em></div>
+    {blocked&&<div className="goal-budget-alert" role="alert" data-testid="goal-budget-alert"><AlertTriangle size={16}/><div><strong>Goal budget exhausted</strong><span>New turns are blocked. Increase the exhausted budget, or pause, complete, or clear this goal.</span></div></div>}
+    {/* A goal Trebell paused once Codex started no next turn for it (the server's pauseReason) says why while it stays paused. */}
+    {goal?.status==="paused"&&goal.pauseReason==="continuationExpired"&&<div className="goal-budget-alert goal-pause-note" role="status" data-testid="goal-pause-note"><Pause size={16}/><div><strong>Goal paused</strong><span>Codex started no next turn for this goal after its last turn ended. Resume or send /goal resume to continue.</span></div></div>}
+    <label>Objective<textarea aria-label="Objective" value={objective} onChange={e=>setObjective(e.target.value)} maxLength={4000} placeholder="What should this thread keep working toward?"/></label>
+    <div className="goal-budget-grid">
+      <label>Token budget <span>(optional)</span><input aria-label="Token budget" type="number" min="1" step="1" value={tokenBudget} onChange={e=>setTokenBudget(e.target.value)} placeholder="No token cap"/></label>
+      <label>Time budget <span>(minutes, optional)</span><input aria-label="Time budget" type="number" min="1" step="1" value={timeBudget} onChange={e=>setTimeBudget(e.target.value)} placeholder="No time cap"/></label>
+    </div>
+    <details className="goal-details goal-budget-details" open={advancedBudgetOpen} onToggle={e=>setAdvancedBudgetOpen(e.currentTarget.open)}>
+      <summary><span><strong>Advanced budgets</strong><small>{advancedBudgetCount?advancedBudgetCount+" configured limit"+(advancedBudgetCount===1?"":"s"):"Turns, tools, child agents, and known cost."}</small></span><ChevronDown size={14}/></summary>
+      <div className="goal-details-body goal-budget-details-body">
+        <div className="goal-budget-grid">
+          <label>Turn budget <span>(optional)</span><input aria-label="Turn budget" type="number" min="1" max="500" step="1" value={turnBudget} onChange={e=>setTurnBudget(e.target.value)} placeholder="No turn cap"/></label>
+          <label>Tool-call budget <span>(optional)</span><input aria-label="Tool-call budget" type="number" min="1" max="1000" step="1" value={toolCallBudget} onChange={e=>setToolCallBudget(e.target.value)} placeholder="No tool cap"/></label>
+          <label>Child-agent budget <span>(optional)</span><input aria-label="Child-agent budget" type="number" min="1" max="100" step="1" value={childAgentBudget} onChange={e=>setChildAgentBudget(e.target.value)} placeholder="No child cap"/></label>
+          <label>Cost budget <span>(USD, optional)</span><input aria-label="Cost budget" type="number" min="0.0001" step="0.01" value={costBudgetUsd} onChange={e=>setCostBudgetUsd(e.target.value)} placeholder="No cost cap"/></label>
+        </div>
+        <p className="goal-budget-note">Limits stop the next new turn after they are reached; Trebell does not kill work mid-action. Cost and child-agent caps enforce only when the runtime exposes complete telemetry.</p>
+      </div>
+    </details>
+    {goal&&<div className="goal-metrics">
+      <div className={goal.tokenBudgetRemaining===0?"exhausted":""}><span>Tokens used</span><strong>{tokensUsed.toLocaleString()}{goal.tokenBudget!=null?" / "+Number(goal.tokenBudget).toLocaleString():""}</strong><small>{goal.tokenBudgetRemaining==null?"No token cap":Number(goal.tokenBudgetRemaining).toLocaleString()+" remaining"}</small></div>
+      <div className={goal.timeBudgetRemainingMinutes===0?"exhausted":""}><span>Agent work time</span><strong>{durationLabel(timeUsedSeconds)}{goal.timeBudgetMinutes!=null?" / "+durationLabel(Number(goal.timeBudgetMinutes)*60):""}</strong><small>{goal.timeBudgetRemainingMinutes==null?"No time cap":remainingTimeLabel(goal.timeBudgetRemainingMinutes)}</small></div>
+      <div className={goal.turnBudgetRemaining===0?"exhausted":""}><span>Model turns</span><strong>{Number(goal.turnsUsed||0).toLocaleString()}{goal.turnBudget!=null?" / "+Number(goal.turnBudget).toLocaleString():""}</strong><small>{goal.turnBudgetRemaining==null?"No turn cap":Number(goal.turnBudgetRemaining).toLocaleString()+" remaining"}</small></div>
+      <div className={goal.toolCallBudget!=null&&goal.toolCallTelemetryComplete&&Number(goal.toolCallBudgetRemaining)===0?"exhausted":""}><span>Tool calls</span><strong>{Number(goal.toolCallsUsed||0).toLocaleString()}{goal.toolCallBudget!=null?" / "+Number(goal.toolCallBudget).toLocaleString():""}</strong><small>{goal.toolCallBudget==null?"No tool cap":!goal.toolCallTelemetryComplete?"Tool telemetry incomplete · not enforced":Number(goal.toolCallBudgetRemaining||0).toLocaleString()+" remaining"}</small></div>
+      <div className={goal.childAgentBudget!=null&&goal.childAgentTelemetryComplete&&Number(goal.childAgentBudgetRemaining)===0?"exhausted":""}><span>Child agents</span><strong>{goal.childAgentsUsed==null?"Unavailable":Number(goal.childAgentsUsed).toLocaleString()+(goal.childAgentBudget!=null?" / "+Number(goal.childAgentBudget).toLocaleString():"")}</strong><small>{goal.childAgentBudget==null?"No child cap":!goal.childAgentTelemetryComplete?"Child telemetry not exposed · not enforced":Number(goal.childAgentBudgetRemaining||0).toLocaleString()+" remaining"}</small></div>
+      <div className={goal.costBudgetUsd!=null&&goal.costTelemetryComplete&&Number(goal.costBudgetRemainingUsd)===0?"exhausted":""}><span>Known cost</span><strong>{goal.costUsedUsd==null?"Unavailable":moneyLabel(goal.costUsedUsd)+(goal.costBudgetUsd!=null?" / "+moneyLabel(goal.costBudgetUsd):"")}</strong><small>{goal.costBudgetUsd==null?"No cost cap":!goal.costTelemetryComplete?"Cost telemetry incomplete · not enforced":goal.costBudgetRemainingUsd==null?"Waiting for cost telemetry":moneyLabel(goal.costBudgetRemainingUsd)+" remaining"}</small></div>
+    </div>}
+    <details className="goal-details" open={detailsOpen} onToggle={e=>setDetailsOpen(e.currentTarget.open)}>
+      <summary><span><strong>Completion & guardrails</strong><small>{guidanceCount?guidanceCount+" saved guidance item"+(guidanceCount===1?"":"s"):"Optional durable guidance for long-running work."}</small></span><ChevronDown size={14}/></summary>
+      <div className="goal-details-body">
+        <label>Completion conditions <span>(one per line)</span><textarea aria-label="Completion conditions" value={completionConditions} onChange={e=>setCompletionConditions(e.target.value)} placeholder={"Tests pass\nFeature works after restart"}/></label>
+        <label>Constraints <span>(one per line)</span><textarea aria-label="Constraints" value={constraints} onChange={e=>setConstraints(e.target.value)} placeholder={"Keep backward compatibility\nDo not change the schema"}/></label>
+        <label>Validation expectations <span>(one per line)</span><textarea aria-label="Validation expectations" value={validationExpectations} onChange={e=>setValidationExpectations(e.target.value)} placeholder={"Run targeted tests\nVerify the UI with a screenshot"}/></label>
+      </div>
+    </details>
+    <details className="goal-details goal-continuity-details" ref={continuityRef} open={continuityOpen} onToggle={e=>setContinuityOpen(e.currentTarget.open)}>
+      <summary><span><strong>Continuity state</strong><small>{continuityNoteCount?continuityNoteCount+" explicit note"+(continuityNoteCount===1?"":"s"):"Derived facts only"}{continuity?.meaningful?" · durable state available":""}</small></span><ChevronDown size={14}/></summary>
+      <div className="goal-details-body continuity-body">
+        <div className="continuity-derived" data-testid="continuity-derived">
+          <div><span>Workspace</span><strong title={[continuity?.workspace?.branch,workspaceCwd].filter(Boolean).join(" · ")||undefined}>{workspaceCellLabel}</strong></div>
+          <div><span>Verification</span><strong>{verificationLabel}</strong></div>
+          <div><span>Completed turns</span><strong>{Number(continuity?.completedTurnIds?.length||0)}</strong></div>
+          <div><span>Unresolved / recent failures</span><strong>{Number(continuity?.unresolvedFailures?.length||0)+Number(continuity?.recentFailures?.length||0)}</strong></div>
+        </div>
+        <details className="verification-evidence-details" open={verificationOpen} onToggle={event=>setVerificationOpen(event.currentTarget.open)} data-testid="verification-evidence">
+          <summary><span><strong>Verification evidence</strong><small>{verificationEvidenceLoading?"Loading persisted evidence…":verificationEvidence?verificationEvidenceSummary(verificationEvidence):verificationEvidenceError?"Persisted evidence could not be loaded":"No persisted verification record"}</small></span><ChevronDown size={13}/></summary>
+          <div className="verification-evidence-body">
+            {verificationEvidenceError&&<div className="verification-evidence-error">Evidence unavailable: {verificationEvidenceError}</div>}
+            {!verificationEvidenceLoading&&!verificationEvidenceError&&!verificationEvidence&&<div className="verification-evidence-empty">No verification steps have been recorded for this thread yet.</div>}
+            {verificationEvidence&&<>
+              <div className="verification-evidence-overview"><span className={"status "+verificationEvidence.status}>{verificationEvidence.status}</span><span>{verificationEvidence.risk} risk</span>{verificationEvidence.nextAction&&<span>next {verificationEvidence.nextStepId||verificationEvidence.nextAction}</span>}</div>
+              <div className="verification-evidence-rows">{verificationEvidence.rows.map(row=>{
+                const meta=verificationEvidenceMeta(row);return <div key={row.id} className={"verification-evidence-row status-"+row.status}>
+                  <span className="verification-evidence-icon">{row.status==="passed"?<CheckCircle2 size={13}/>:row.status==="failed"||row.status==="blocked"?<AlertTriangle size={13}/>:<Target size={13}/>}</span>
+                  <div className="verification-evidence-main"><div><strong>{row.id}</strong><em>{row.kind}</em><b>{row.status}</b></div>{row.reason&&<p>{row.reason}</p>}{meta&&<small>{meta}</small>}</div>
+                </div>})}</div>
+            </>}
+          </div>
+        </details>
+        {continuity?.verification?.status==="failed"&&<div className="verification-repair-card" data-testid="verification-repair-card"><div><strong>Verification needs repair</strong><span>Start a same-thread repair turn with the persisted failed-step evidence. No second reviewer model is spawned.</span></div><button type="button" onClick={repairVerification} disabled={!!busy||repairStarted||threadRunning} aria-busy={busy==="verification-repair"||undefined} title={!repairStarted&&threadRunning?"A repair can start once the running turn ends":undefined}>{busy==="verification-repair"?"Starting…":repairStarted?"Repair started":"Repair failed verification"}</button></div>}
+        {repairStatus&&<div className="verification-repair-status">{repairStatus}</div>}{alertAt("repair")}
+        <label>Completed work <span>(one per line)</span><textarea aria-label="Completed work" value={completedWork} onChange={e=>setCompletedWork(e.target.value)} placeholder={"Implemented the parser\nAdded regression tests"}/></label>
+        <label>Unresolved failures <span>(one per line)</span><textarea aria-label="Unresolved failures" value={unresolvedFailures} onChange={e=>setUnresolvedFailures(e.target.value)} placeholder={"Preview still fails on Windows"}/></label>
+        <label>Important decisions <span>(one per line)</span><textarea aria-label="Important decisions" value={importantDecisions} onChange={e=>setImportantDecisions(e.target.value)} placeholder={"Keep the public API backward compatible"}/></label>
+        <label>Artifacts created <span>(one per line)</span><textarea aria-label="Artifacts created" value={artifactsCreated} onChange={e=>setArtifactsCreated(e.target.value)} placeholder={"Migration script\nRelease notes"}/></label>
+        <label>Pending next actions <span>(one per line)</span><textarea aria-label="Pending next actions" value={pendingNextActions} onChange={e=>setPendingNextActions(e.target.value)} placeholder={"Run the final browser smoke test"}/></label>
+        <div className="goal-actions continuity-actions" onClickCapture={event=>pressOnce(event,pressed)}>{alertAt("notes")}{changedNotes(notesSaved,NOTE_LABELS)}<button type="button" className="primary" onClick={saveContinuity} {...writing("continuity")}><RefreshCw size={12}/> {busy==="continuity"?"Saving…":"Save continuity"}</button>{notesSaved.unsaved&&<button type="button" onClick={()=>discard(notesSaved,"the continuity notes")} {...writing()}>Discard changes</button>}{continuityNoteCount>0&&<button type="button" className="danger" onClick={clearContinuity} {...writing("continuity-clear")}><Trash2 size={12}/> {busy==="continuity-clear"?"Clearing…":"Clear notes"}</button>}</div>
+      </div>
+    </details>
+    <div className="goal-actions" onClickCapture={event=>pressOnce(event,pressed)}>
+      {alertAt("goal")}{changedNotes(goalSaved,GOAL_LABELS)}
+      <button className="primary" onClick={save} {...writing("save")}><RefreshCw size={12}/> {busy==="save"?"Saving…":goal?"Update goal":"Set goal"}</button>
+      {goalSaved.unsaved&&<button onClick={()=>discard(goalSaved,"this goal")} {...writing()}>Discard changes</button>}
+      {/* Pause and Resume are one button, so the keyboard stays on it as one takes the other's place. */}
+      {goal&&goal.status!=="complete"&&(goal.status==="active"?<button onClick={()=>setGoal({status:"paused"})} {...writing("paused")}><Pause size={12}/> {busy==="paused"?"Pausing…":"Pause"}</button>
+        :<button onClick={()=>onResume?resume():setGoal({status:"active"})} {...writing("active")}><Play size={12}/> {busy==="active"?"Resuming…":"Resume"}</button>)}
+      {goal&&goal.status!=="complete"&&<button onClick={()=>setGoal({status:"complete"})} {...writing("complete")}><CheckCircle2 size={12}/> {busy==="complete"?"Completing…":"Complete"}</button>}
+      {goal&&<button className="danger" onClick={clear} {...writing("clear")}><Trash2 size={12}/> {busy==="clear"?"Clearing…":"Clear"}</button>}
+    </div>
+  </div>;
+}

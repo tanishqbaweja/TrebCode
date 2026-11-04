@@ -1,0 +1,29 @@
+import React,{memo,useState} from "react";
+import { Brain, ChevronRight } from "lucide-react";
+import { reasoningPreview } from "../reasoning-text.js";
+import ChatMarkdown from "./LazyChatMarkdown.jsx";
+import "./ReasoningRow.css";
+
+// A row the person opened stays open when its finished thought moves from the live activity into the conversation.
+const openRows=new Set();
+
+// A harness's reasoning: a quiet "Reasoning…" line with the thought's latest line while it streams ("Reasoning" and its first line
+// once done), which opens to the whole text. messageId marks a conversation row (scroll anchors, find).
+const ReasoningRow=memo(function ReasoningRow({id,messageId,text="",active=false}){
+  const key=String(id||""),body=String(text||"").trim(),[open,setOpen]=useState(()=>openRows.has(key));
+  const line=reasoningPreview(body,{latest:active});
+  const toggle=()=>{const next=!open;if(next)openRows.add(key);else openRows.delete(key);setOpen(next)};
+  return <div className={"reasoning-row"+(active?" active":"")+(open?" open":"")} data-message-id={messageId||undefined} data-testid="reasoning-row">
+    <button type="button" className="reasoning-toggle" aria-expanded={open} disabled={!body} onClick={toggle} title={body?(open?"Hide reasoning":"Show reasoning"):undefined}>
+      <span className="reasoning-icon"><Brain size={13} aria-hidden="true"/></span>
+      <span className="reasoning-label">{active?"Reasoning…":"Reasoning"}</span>
+      <span className="reasoning-preview">{open?"":line}</span>
+      {body&&<ChevronRight className="reasoning-chevron" size={13} aria-hidden="true"/>}
+    </button>
+    {/* The opened thought reads as formatted text, as its one-line preview already does (no literal ** or backticks). A model's
+        thinking often puts one thought per line, so a single newline stays a line break. */}
+    {open&&body&&<div className="reasoning-text chat-markdown" data-testid="reasoning-text"><ChatMarkdown text={body} lineBreaks/></div>}
+  </div>;
+});
+
+export default ReasoningRow;

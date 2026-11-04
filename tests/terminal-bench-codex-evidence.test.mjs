@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { summarizeCodexSessionEvidence } from "../scripts/terminal-bench-codex-evidence.mjs";
+
+test("Codex session evidence recovers exact per-request token and cost metrics",()=>{
+  const rows=[
+    {type:"token_usage_record",payload:{usage:{input_tokens:1000,cached_input_tokens:900,cache_write_input_tokens:50,output_tokens:100,reasoning_output_tokens:60}}},
+    {type:"token_usage_record",payload:{usage:{input_tokens:2000,cached_input_tokens:1800,cache_write_input_tokens:100,output_tokens:200,reasoning_output_tokens:120}}},
+  ].map(JSON.stringify).join("\n");
+  const result=summarizeCodexSessionEvidence([rows]);
+  assert.equal(result.modelTurns,2);assert.equal(result.inputTokens,3000);assert.equal(result.cachedTokens,2700);
+  assert.equal(result.cacheWriteInputTokens,150);assert.equal(result.outputTokens,300);assert.equal(result.reasoningOutputTokens,180);
+  assert.equal(result.maxObservedInputTokens,2000);assert.equal(result.apiEquivalentCostBreakdown.contextPricingExact,true);assert.ok(result.apiEquivalentCostUsd>0);
+  assert.deepEqual(result.topOutputRequests.map(row=>row.request),[2,1]);
+  assert.deepEqual(result.topReasoningRequests.map(row=>row.request),[2,1]);
+  assert.deepEqual(result.topOutputRequests[0],{
+    request:2,inputTokens:2000,cachedInputTokens:1800,cacheWriteInputTokens:100,outputTokens:200,reasoningOutputTokens:120,
+  });
+});
+
+test("Codex session evidence prices the configured service tier",()=>{
+  const rows=[
+    {type:"token_usage_record",payload:{usage:{input_tokens:1000,cached_input_tokens:900,cache_write_input_tokens:50,output_tokens:100}}},
+  ].map(JSON.stringify).join("\n");
+  const standard=summarizeCodexSessionEvidence([rows],{serviceTier:"standard"});
+  const fast=summarizeCodexSessionEvidence([rows],{serviceTier:"fast"});
+  assert.equal(standard.apiEquivalentCostBreakdown.pricing.serviceTier,"standard");
+  assert.equal(fast.apiEquivalentCostBreakdown.pricing.serviceTier,"fast");
+  assert.ok(fast.apiEquivalentCostUsd>standard.apiEquivalentCostUsd);
+});
+
+test("Codex OAuth session evidence prices its unreported cache writes like the API lanes and keeps the reported price",()=>{
+  const rows=[
+    {type:"token_usage_record",payload:{usage:{input_tokens:10_000,cached_input_tokens:8_000,cache_write_input_tokens:0,output_tokens:100}}},
+  ].map(JSON.stringify).join("\n");
+  const api=summarizeCodexSessionEvidence([rows],{serviceTier:"fast"});
+  const oauth=summarizeCodexSessionEvidence([rows],{serviceTier:"fast",cacheWritesUnreported:true});
+  assert.ok(Math.abs(oauth.apiEquivalentCostUsd-api.apiEquivalentCostUsd-2_000*0.20*0.25/1e6)<1e-12);
+  assert.equal(oauth.apiEquivalentCostAsReportedUsd,api.apiEquivalentCostUsd);
+  assert.equal(api.apiEquivalentCostAsReportedUsd,api.apiEquivalentCostUsd);
+  assert.equal(oauth.cacheWriteInputTokens,0);
+});

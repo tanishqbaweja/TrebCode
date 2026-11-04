@@ -1,0 +1,639 @@
+import { spawn } from "node:child_process";
+import crossSpawn from "cross-spawn";
+import { randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { basename, join, resolve, posix } from "node:path";
+import { trebellHome } from "./paths.mjs";
+import { unreadableAttachment } from "./prompt-attachments.mjs";
+import { buildRuntimeEnvironment, CREDENTIAL_SETTING_WORDS } from "./runtime-environment.mjs";
+import { hostThemeReader, localThemeReader, readThemeFolder, THEME_FOLDER_LIMITS } from "./environment-themes.mjs";
+import { remoteToolPathPrelude } from "./remote-tool-path.mjs";
+
+export { remoteToolPathPrelude };
+
+const MAX_OUTPUT=2*1024*1024;
+const REMOTE_TRANSPORT_ENV_KEYS=["SSH_AUTH_SOCK","SSH_AGENT_PID","SSH_SK_PROVIDER","WSLENV","WSL_UTF8"];
+
+function cleanText(value=""){
+  return String(value).replace(/\u0000/g,"").replace(/\r/g,"").trimEnd();
+}
+
+function quotePosix(value){
+  return "'" + String(value).replace(/'/g,"'\\''") + "'";
+}
+
+// A home-relative path (~ or ~/...) is left for the host's shell to expand, as it would typed there: inside quotes it is not. So is
+// one under a named user's home (~bob or ~bob/...), which the host's shell looks up in its own users; anything else after the tilde
+// is quoted as it is. A user the host does not know is left unexpanded by its shell, which remoteHomeGuard refuses.
+const NAMED_HOME=/^~([A-Za-z0-9._][A-Za-z0-9._-]*)(?:\/([\s\S]*))?$/;
+export function remotePathExpression(value){
+  const raw=String(value||"").trim();
+  if(raw==="~")return '"$HOME"';
+  if(raw.startsWith("~/"))return '"$HOME"/'+quotePosix(raw.slice(2));
+  const named=NAMED_HOME.exec(raw);
+  if(named)return "~"+named[1]+(named[2]==null?"":"/"+(named[2]?quotePosix(named[2]):""));
+  return quotePosix(raw);
+}
+// The statement that refuses a path under a named user's home, held in a shell variable, when the host's shell left it unexpanded (no
+// such user there), with a message that says so; nothing for any other path.
+export function remoteHomeGuard(variable,value){
+  const raw=String(value||"").trim(),named=NAMED_HOME.exec(raw);if(!named)return "";
+  const message=`Trebell could not find the home folder of the user ${named[1]} on this host, so it cannot use ${raw}.`;
+  return 'case "$'+variable+'" in "~"*) printf \'%s\\n\' '+quotePosix(message)+' >&2; exit 127;; esac';
+}
+
+// The command word may be home-relative (a saved ~/.local/bin/codex); the arguments are passed as they are. One under a named user's
+// home runs through sh, which expands it and refuses a user the host does not know before anything runs.
+export function remoteCommandWords(command,args=[]){
+  const raw=String(command||"").trim();
+  if(NAMED_HOME.test(raw)){
+    const script=["trebell_command="+remotePathExpression(raw),remoteHomeGuard("trebell_command",raw),'exec "$trebell_command" "$@"'].join("\n");
+    return ["sh","-c",script,"trebell",...args].map(quotePosix).join(" ");
+  }
+  return [remotePathExpression(command),...args.map(quotePosix)].join(" ");
+}
+function shellCommand(command,args=[]){return remoteCommandWords(command,args)}
+
+// carriesCredentials as a function of the host's sh, which checks the host's own values there and decides as carriesCredentials
+// does, in sh patterns, only slightly wider: any @ after a :// counts as a URL's userinfo, and a \ is a character like any other.
+// A setting's name is the text before an = after the last character a name cannot have. A connect string's password is what
+// follows the last / before an @, and its user what comes before that / back to a space, :, =, a comma or ; or the value's start,
+// neither holding a / or a space.
+const caseless=word=>[...word].map(letter=>/[a-z]/i.test(letter)?"["+letter.toUpperCase()+letter.toLowerCase()+"]":letter).join("");
+const REMOTE_CREDENTIAL_CHECK=[
+  "trebell_carries(){ case $1 in *://*@*) return 0;; esac",
+  "trebell_rest=$1",
+  "while :; do case $trebell_rest in *=*) ;; *) break;; esac",
+  "trebell_key=${trebell_rest%%=*}; trebell_rest=${trebell_rest#*=}",
+  "case ${trebell_key##*[!A-Za-z0-9_.-]} in "+CREDENTIAL_SETTING_WORDS.map(word=>"*"+caseless(word)+"*").join("|")+") return 0;; esac",
+  "done",
+  "trebell_seen= trebell_rest=$1",
+  "while :; do case $trebell_rest in *@*) ;; *) return 1;; esac",
+  "trebell_head=$trebell_seen${trebell_rest%%@*}; trebell_seen=$trebell_head@; trebell_rest=${trebell_rest#*@}",
+  "case $trebell_head in */*) ;; *) continue;; esac",
+  "trebell_pass=${trebell_head##*/} trebell_lead=${trebell_head%/*}",
+  'case $trebell_pass in ""|*[[:space:]@]*) continue;; esac',
+  "trebell_user=${trebell_lead##*[[:space:]/:=,;@]}",
+  'case $trebell_user in "") continue;; esac',
+  'case $trebell_lead in "$trebell_user"|*[[:space:]:=,\\;]"$trebell_user") return 0;; esac',
+  "done; }",
+].join("; ");
+
+// names are forwarded from the host's shell as they are there. guarded names (Native's toolchain variables) are forwarded only
+// when the host sets them to something, so an unset one stays unset (cargo refuses an empty CARGO_TARGET_DIR, make runs an empty
+// CC), and not when the value carries credentials: a sh on the host checks each before env -i clears the rest.
+function isolatedRemoteEnvironment(command,names=[],environment={},guarded=[]){
+  const valid=name=>/^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+  const approved=[...new Set((Array.isArray(names)?names:[]).map(value=>String(value||"").trim()).filter(valid))];
+  const entries=Object.entries(environment&&typeof environment==="object"?environment:{})
+    .filter(([name,value])=>valid(String(name))&&value!=null)
+    .slice(0,200);
+  const explicit=entries.map(([name,value])=>String(name)+"="+quotePosix(String(value)));
+  const taken=new Set([...approved,...entries.map(([name])=>String(name))]);
+  const optional=[...new Set((Array.isArray(guarded)?guarded:[]).map(value=>String(value||"").trim()).filter(name=>valid(name)&&!taken.has(name)))];
+  if(!approved.length&&!explicit.length&&!optional.length)return command;
+  const assignments=[...approved.map(name=>name+'="$'+'{'+name+'-}"'),...explicit].join(" ");
+  if(!optional.length)return "env -i "+assignments+" "+command;
+  const script=REMOTE_CREDENTIAL_CHECK+"; for trebell_name in "+optional.join(" ")+'; do eval "trebell_value=\\${$trebell_name-}"; [ -n "$trebell_value" ] || continue; '+
+    'trebell_carries "$trebell_value" && continue; set -- "$trebell_name=$trebell_value" "$@"; done; exec env -i '+assignments+' "$@"';
+  return "sh -c "+quotePosix(script)+" trebell "+command;
+}
+
+export function remoteEnvironmentCommand(command,names=[],environment={},guarded=[]){return isolatedRemoteEnvironment(String(command||""),names,environment,guarded)}
+export function remoteTransportEnvironment(parent=process.env,{platform=process.platform}={}){
+  return buildRuntimeEnvironment("native",{parent,approved:REMOTE_TRANSPORT_ENV_KEYS,platform});
+}
+
+// The host's tool PATH (remote-tool-path.mjs), then prelude: lines the host runs before the cd and the command (a Codex profile's
+// home, agent-runtime-manager.mjs).
+function remoteShellCommand(command,working="",prelude=""){
+  const run=working?("cd "+quotePosix(working)+" && "+command):command;
+  return remoteToolPathPrelude()+"\n"+(prelude?prelude+"\n":"")+run;
+}
+
+// Ends a host process with the processes it started: taskkill /t on Windows; elsewhere the process group of a child spawned
+// detached (processGroup), or else the child alone.
+export function terminateHostProcessTree(child,{force=true,processGroup=false}={}){
+  const pid=Number(child?.pid),signal=force?"SIGKILL":"SIGTERM";
+  if(!Number.isInteger(pid)||pid<=0){try{child?.kill?.(signal)}catch{};return}
+  if(process.platform==="win32"){
+    try{
+      const args=["/pid",String(pid),"/t",...(force?["/f"]:[])],killer=spawn("taskkill",args,{windowsHide:true,stdio:"ignore"});
+      const fallback=()=>{try{child?.kill?.(signal)}catch{}};
+      killer.once("error",fallback);killer.once("close",fallback);killer.unref?.();return;
+    }catch{}
+  }else if(processGroup){
+    try{process.kill(-pid,signal);return}catch{}
+  }
+  try{child?.kill?.(signal)}catch{}
+}
+
+// The environment a theme catalog belongs to; Settings keys the theme a person follows by environmentKey, "local" for this machine.
+function themeCatalogOwner(profile){
+  const local={environmentId:null,environmentKey:"local",environmentName:"Local machine",environmentType:"local"};
+  if(!profile)return local;
+  return {environmentId:profile.id||local.environmentId,environmentKey:profile.id||local.environmentKey,environmentName:profile.name||local.environmentName,environmentType:profile.type||local.environmentType};
+}
+
+async function runProcess(command,args=[],{
+  cwd=undefined,
+  env=process.env,
+  timeoutMs=15000,
+  maxOutput=MAX_OUTPUT,
+  spawnProcess=spawn,
+}={}){
+  return await new Promise((resolve,reject)=>{
+    let settled=false;
+    let stdout="";
+    let stderr="";
+    let timedOut=false;
+    let terminationTimer=null;
+    const processGroup=process.platform!=="win32";
+    const child=spawnProcess(command,args,{cwd,env,windowsHide:true,stdio:["ignore","pipe","pipe"],detached:processGroup});
+    const append=(current,chunk)=>{
+      if(Buffer.byteLength(current,"utf8")>=maxOutput) return current;
+      const next=current+String(chunk);
+      return Buffer.byteLength(next,"utf8")>maxOutput
+        ? Buffer.from(next,"utf8").subarray(0,maxOutput).toString("utf8")
+        : next;
+    };
+    child.stdout?.on("data",chunk=>{stdout=append(stdout,chunk)});
+    child.stderr?.on("data",chunk=>{stderr=append(stderr,chunk)});
+    const finish=(error,code=null,signal=null)=>{
+      if(settled)return;
+      settled=true;clearTimeout(timer);if(terminationTimer)clearTimeout(terminationTimer);
+      error?reject(error):resolve({exitCode:code??1,signal,timedOut,stdout:cleanText(stdout),stderr:cleanText(stderr)});
+    };
+    const timer=setTimeout(()=>{
+      if(settled)return;timedOut=true;terminateHostProcessTree(child,{force:true,processGroup});
+      terminationTimer=setTimeout(()=>{
+        try{child.stdout?.destroy?.()}catch{}
+        try{child.stderr?.destroy?.()}catch{}
+        finish(null,null,"SIGKILL");
+      },2000);
+      terminationTimer.unref?.();
+    },Math.max(1000,Number(timeoutMs)||15000));
+    child.once("error",error=>{
+      finish(error);
+    });
+    child.once("close",(code,signal)=>{
+      finish(null,code,signal);
+    });
+  });
+}
+
+// The WSL distros `wsl --list --quiet` names that agents can run in. Docker Desktop's own (docker-desktop, and docker-desktop-data
+// in older versions) run its engine, so they are never offered; dockerOnly says a host has no other.
+const DOCKER_DESKTOP_DISTRO=/^docker-desktop(?:-data)?$/i;
+export function listedWslDistros(stdout){
+  const listed=cleanText(stdout).split("\n").map(name=>name.trim()).filter(Boolean),distros=listed.filter(name=>!DOCKER_DESKTOP_DISTRO.test(name));
+  return {distros,dockerOnly:listed.length>0&&!distros.length};
+}
+
+// On a WSL or SSH host the Codex executable saved for it stands in for the bare codex command, so the harness checks, signs in
+// and runs the Codex that host was set up with, as its app-server does (environment-app-server.mjs).
+function hostCommand(profile,command){
+  return command==="codex"&&profile?.codexPath?profile.codexPath:command;
+}
+
+// wsl.exe's arguments for a host command: with --exec wsl.exe starts bash -lc itself, so bash parses the command once, as an SSH
+// host's shell does. After -- wsl.exe would hand the rest of its command line, as Node quoted it for Windows, to the distro's
+// default shell, which parses it first; inside those double quotes single quotes protect nothing, so the command's $names, "$@"
+// and backquotes would be expanded before bash saw them (on a distro, wsl.exe -- sh -c 'x=1; echo "[$x]"' prints [], --exec [1]).
+function wslArgs(profile,command){
+  return [...(profile.distro?["-d",profile.distro]:[]),"--exec","bash","-lc",command];
+}
+
+function normalizedPort(value){
+  const n=Number(value||22);
+  return Number.isInteger(n)&&n>0&&n<=65535?n:22;
+}
+
+// What an ssh client says when nothing accepts the connection differs between OpenSSH builds: OpenSSH (Linux, macOS, Git for Windows)
+// says "ssh: connect to host H port P: Connection refused"; Windows' own OpenSSH, whose connect does not wait, meets the refusal in the
+// banner exchange, when it no longer knows the address ("banner exchange: Connection to UNKNOWN port -1: Connection refused"); and the
+// Windows socket layer's words for WSAECONNREFUSED are "No connection could be made because the target machine actively refused it."
+// It is said one way, with the host and port the client named, or the profile's where it did not know them. null for any other failure.
+const SSH_REFUSED=/connection refused|actively refused it|WSAECONNREFUSED/i;
+export function sshRefusedConnectionMessage(stderr,{host="",port=22}={}){
+  const text=String(stderr||"");if(!SSH_REFUSED.test(text))return null;
+  const named=/\bconnect(?:ion)? to (?:host )?(\S+) port (-?\d+)/i.exec(text);
+  const known=named&&named[1].toUpperCase()!=="UNKNOWN"&&Number(named[2])>0;
+  const target=known?`${named[1]} port ${named[2]}`:host?`${host} port ${normalizedPort(port)}`:"";
+  return target?`ssh could not connect to ${target}: Connection refused.`:"ssh could not connect: Connection refused.";
+}
+// A saved SSH profile's port: blank means 22; anything else must be a whole number from 1 to 65535.
+export function validatedSshPort(value){
+  if(value==null||String(value).trim()==="")return 22;
+  const n=Number(value);
+  if(!Number.isInteger(n)||n<1||n>65535)throw new Error("SSH port must be a whole number from 1 to 65535");
+  return n;
+}
+
+function validateProfile(input={}){
+  const type=["local","wsl","ssh"].includes(input.type)?input.type:"local";
+  const labels={local:"Local machine",wsl:"WSL",ssh:"SSH"};
+  const next={
+    id:String(input.id||randomUUID()),
+    name:String(input.name||labels[type]).trim().slice(0,100),
+    type,
+    enabled:input.enabled!==false,
+    cwd:String(input.cwd||"").trim(),
+    createdAt:Number(input.createdAt)||Date.now(),
+    updatedAt:Date.now(),
+  };
+  if(type==="wsl"){
+    next.distro=String(input.distro||"").trim().slice(0,120);
+  }
+  if(type==="ssh"){
+    next.host=String(input.host||"").trim().slice(0,255);
+    next.user=String(input.user||"").trim().slice(0,120);
+    next.port=validatedSshPort(input.port);
+    next.identityFile=String(input.identityFile||"").trim();
+    if(!next.host) throw new Error("SSH host is required");
+  }
+  // The Codex executable a WSL or SSH host starts its app-server with (environment-app-server.mjs); blank is codex on its PATH.
+  if(type!=="local")next.codexPath=String(input.codexPath||"").trim().slice(0,1024);
+  next.themeDirectory=String(input.themeDirectory||"").trim().slice(0,1024);
+  return next;
+}
+
+export class EnvironmentManager {
+  // discoveryRun: how host discovery runs ssh -V and wsl --list (offline browser E2E answers them as a fixed host instead,
+  // offline-e2e-host.mjs). spawnProcess: how the sessions and commands of an environment start (tests stand in for wsl.exe).
+  constructor({state,env=process.env,platform=process.platform,discoveryRun=runProcess,spawnProcess=spawn}={}){
+    if(!state) throw new Error("EnvironmentManager requires a TrebellStateStore");
+    this.state=state;
+    this.env=env;
+    this.platform=platform;
+    this.discoveryRun=discoveryRun;
+    this.spawnProcess=spawnProcess;
+  }
+
+  list(){ return this.state.environments(); }
+  get(id,{includeDisabled=false}={}){
+    const profile=this.state.environments().find(x=>x.id===id)||null;
+    return profile&&(includeDisabled||profile.enabled!==false)?profile:null;
+  }
+
+  upsert(profile){
+    const existing=profile?.id?this.state.environments().find(x=>x.id===profile.id):null;
+    return this.state.upsertEnvironment(validateProfile({...existing,...profile,createdAt:existing?.createdAt||profile?.createdAt}));
+  }
+
+  setEnabled(id,enabled){
+    const existing=this.get(id,{includeDisabled:true});
+    if(!existing)throw new Error("Environment profile was not found");
+    return this.state.setEnvironmentEnabled(id,enabled);
+  }
+
+  remove(id){ return this.state.removeEnvironment(id); }
+  #transportEnv(){return remoteTransportEnvironment(this.env,{platform:this.platform})}
+
+  async capabilities(){
+    let ssh={available:false,version:null,error:null};
+    try{
+      const result=await this.discoveryRun(this.platform==="win32"?"ssh.exe":"ssh",["-V"],{env:this.#transportEnv(),timeoutMs:5000});
+      const version=(result.stderr||result.stdout||"").split("\n")[0]||null;
+      ssh={available:result.exitCode===0||Boolean(version),version,error:result.exitCode===0?null:(result.stderr||null)};
+    }catch(error){ssh={available:false,version:null,error:error.message};}
+
+    let wsl={available:false,distros:[],error:null};
+    if(this.platform==="win32"){
+      try{
+        const result=await this.discoveryRun("wsl.exe",["--list","--quiet"],{env:this.#transportEnv(),timeoutMs:8000});
+        const {distros,dockerOnly}=listedWslDistros(result.stdout);
+        wsl={available:result.exitCode===0&&distros.length>0,distros,error:result.exitCode!==0?(result.stderr||"WSL is unavailable"):dockerOnly?"Only Docker Desktop's own distro, which agents do not use":null};
+      }catch(error){wsl={available:false,distros:[],error:error.message};}
+    }
+    return {local:{available:true,platform:this.platform},ssh,wsl};
+  }
+
+  async discover(){
+    const capabilities=await this.capabilities();
+    return {capabilities,profiles:this.list()};
+  }
+
+  themeDirectory(id=null){
+    const profile=id?this.get(id):null;
+    if(id&&!profile)throw new Error("Environment profile was not found");
+    if(!profile||profile.type==="local")return profile?.themeDirectory||join(trebellHome(this.env),"themes");
+    return profile.themeDirectory||".trebell/themes";
+  }
+
+  // The themes the environment publishes from its theme folder (environment-themes.mjs), for Settings.
+  async themeCatalog(id=null){
+    const profile=id?this.get(id):null;
+    if(id&&!profile)throw new Error("Environment profile was not found");
+    const directory=this.themeDirectory(id);
+    const onHost=Boolean(profile)&&profile.type!=="local";
+    const reader=onHost?hostThemeReader(options=>this.executeArgv(id,options),directory,profile.name):localThemeReader(directory);
+    return {...themeCatalogOwner(profile),directory,themes:await readThemeFolder(reader),limits:{...THEME_FOLDER_LIMITS}};
+  }
+
+  spawnSession(id,{command,cwd=null,stdio=["ignore","pipe","pipe"],detached=false,prelude=""}={}){
+    const profile=this.get(id);
+    if(!profile) throw new Error("Environment profile was not found");
+    const text=String(command||"").trim();
+    if(!text) throw new Error("command is required");
+    const working=String(cwd??profile.cwd??"").trim();
+    let executable,args;
+
+    if(profile.type==="local"){
+      executable=this.platform==="win32"?"cmd.exe":"/bin/sh";
+      args=this.platform==="win32"?["/d","/s","/c",text]:["-lc",text];
+      return this.spawnProcess(executable,args,{cwd:working||undefined,env:this.env,windowsHide:true,stdio,detached});
+    }
+    if(profile.type==="wsl"){
+      if(this.platform!=="win32") throw new Error("WSL environments are available only on Windows");
+      executable="wsl.exe";
+      args=wslArgs(profile,remoteShellCommand(text,working,prelude));
+      return this.spawnProcess(executable,args,{env:this.#transportEnv(),windowsHide:true,stdio,detached});
+    }
+    if(profile.type==="ssh"){
+      executable=this.platform==="win32"?"ssh.exe":"ssh";
+      args=["-o","BatchMode=yes","-o","ConnectTimeout=8","-o","ServerAliveInterval=15","-p",String(normalizedPort(profile.port))];
+      if(profile.identityFile) args.push("-i",profile.identityFile);
+      const target=profile.user?(profile.user+"@"+profile.host):profile.host;
+      args.push(target,remoteShellCommand(text,working,prelude));
+      return this.spawnProcess(executable,args,{env:this.#transportEnv(),windowsHide:true,stdio,detached});
+    }
+    throw new Error("Unsupported environment type");
+  }
+
+  terminalSpec(id,{cwd=null}={}){
+    const profile=id?this.get(id):null;
+    if(!profile||profile.type==="local"){
+      return {
+        environmentId:profile?.id||null,
+        environmentName:profile?.name||"Local machine",
+        environmentType:"local",
+        cwd:String(cwd??profile?.cwd??"").trim()||undefined,
+        shell:null,
+        args:null,
+      };
+    }
+    const working=String(cwd??profile.cwd??"").trim();
+    const remoteShell="\"$"+"{SHELL:-/bin/bash}\"";
+    const launch=working
+      ?"cd "+quotePosix(working)+" && exec "+remoteShell+" -l"
+      :"exec "+remoteShell+" -l";
+    if(profile.type==="wsl"){
+      if(this.platform!=="win32")throw new Error("WSL environments are available only on Windows");
+      const args=wslArgs(profile,launch);
+      return {
+        environmentId:profile.id,
+        environmentName:profile.name,
+        environmentType:"wsl",
+        cwd:undefined,
+        shell:"wsl.exe",
+        args,
+      };
+    }
+    if(profile.type==="ssh"){
+      const shell=this.platform==="win32"?"ssh.exe":"ssh";
+      const args=["-tt","-o","BatchMode=yes","-o","ConnectTimeout=8","-o","ServerAliveInterval=15","-p",String(normalizedPort(profile.port))];
+      if(profile.identityFile)args.push("-i",profile.identityFile);
+      const target=profile.user?(profile.user+"@"+profile.host):profile.host;
+      args.push(target,launch);
+      return {
+        environmentId:profile.id,
+        environmentName:profile.name,
+        environmentType:"ssh",
+        cwd:undefined,
+        shell,
+        args,
+      };
+    }
+    throw new Error("Unsupported environment type");
+  }
+
+  // prelude: lines the host runs before the command (a Codex profile's home, for its sign-in).
+  terminalArgvSpec(id,{command,args=[],cwd=null,prelude=""}={}){
+    const profile=id?this.get(id):null;
+    const executable=String(command||"").trim();
+    if(!executable)throw new Error("command is required");
+    if(!profile||profile.type==="local"){
+      return {
+        environmentId:profile?.id||null,
+        environmentName:profile?.name||"Local machine",
+        environmentType:"local",
+        cwd:String(cwd??profile?.cwd??"").trim()||undefined,
+        shell:executable,
+        args:[...args],
+      };
+    }
+    const working=String(cwd??profile.cwd??"").trim();
+    const remoteCommand=remoteToolPathPrelude()+"\n"+(prelude?prelude+"\n":"")+(working?("cd "+quotePosix(working)+" && "):"")+"exec "+shellCommand(hostCommand(profile,executable),args);
+    if(profile.type==="wsl"){
+      if(this.platform!=="win32")throw new Error("WSL environments are available only on Windows");
+      return {environmentId:profile.id,environmentName:profile.name,environmentType:"wsl",cwd:undefined,shell:"wsl.exe",args:wslArgs(profile,remoteCommand)};
+    }
+    if(profile.type==="ssh"){
+      const shell=this.platform==="win32"?"ssh.exe":"ssh";
+      const launchArgs=["-tt","-o","BatchMode=yes","-o","ConnectTimeout=8","-o","ServerAliveInterval=15","-p",String(normalizedPort(profile.port))];
+      if(profile.identityFile)launchArgs.push("-i",profile.identityFile);
+      const target=profile.user?(profile.user+"@"+profile.host):profile.host;
+      launchArgs.push(target,remoteCommand);
+      return {environmentId:profile.id,environmentName:profile.name,environmentType:"ssh",cwd:undefined,shell,args:launchArgs};
+    }
+    throw new Error("Unsupported environment type");
+  }
+
+  // prelude: lines a remote host runs before the command, outside its env -i (a Codex profile's home, agent-runtime-manager.mjs).
+  spawnArgv(id,{command,args=[],cwd=null,stdio=["pipe","pipe","pipe"],environmentNames=null,guardedEnvironmentNames=null,environment=null,detached=false,prelude=""}={}){
+    const profile=this.get(id);
+    if(!profile) throw new Error("Environment profile was not found");
+    const executable=String(command||"").trim();
+    if(!executable)throw new Error("command is required");
+    const working=String(cwd??profile.cwd??"").trim();
+    // A local argv command goes through cross-spawn, so Windows .cmd/.bat launchers run (through cmd.exe, arguments escaped).
+    if(profile.type==="local")return crossSpawn(executable,args,{cwd:working||undefined,env:environment&&typeof environment==="object"?environment:this.env,windowsHide:true,stdio,detached});
+    return this.spawnSession(id,{command:isolatedRemoteEnvironment(shellCommand(hostCommand(profile,executable),args),environmentNames,environment||{},guardedEnvironmentNames),cwd:working||null,stdio,detached,prelude});
+  }
+
+  async execute(id,{command,cwd=null,timeoutMs=30000,maxOutput=MAX_OUTPUT}={}){
+    const profile=this.state.environments().find(x=>x.id===id);
+    if(!profile) throw new Error("Environment profile was not found");
+    const text=String(command||"").trim();
+    if(!text) throw new Error("command is required");
+    const working=String(cwd??profile.cwd??"").trim();
+    let executable,args,options={env:this.env,timeoutMs:Math.min(300000,Math.max(1000,Number(timeoutMs)||30000)),maxOutput:Math.max(1024,Math.min(16*1024*1024,Number(maxOutput)||MAX_OUTPUT)),spawnProcess:this.spawnProcess};
+
+    if(profile.type==="local"){
+      executable=this.platform==="win32"?"cmd.exe":"/bin/sh";
+      args=this.platform==="win32"?["/d","/s","/c",text]:["-lc",text];
+      if(working) options.cwd=working;
+    }else if(profile.type==="wsl"){
+      if(this.platform!=="win32") throw new Error("WSL environments are available only on Windows");
+      executable="wsl.exe";
+      args=wslArgs(profile,remoteShellCommand(text,working));
+    }else if(profile.type==="ssh"){
+      executable=this.platform==="win32"?"ssh.exe":"ssh";
+      args=["-o","BatchMode=yes","-o","ConnectTimeout=8","-o","ServerAliveInterval=15","-p",String(normalizedPort(profile.port))];
+      if(profile.identityFile) args.push("-i",profile.identityFile);
+      const target=profile.user?(profile.user+"@"+profile.host):profile.host;
+      args.push(target,remoteShellCommand(text,working));
+    }else{
+      throw new Error("Unsupported environment type");
+    }
+    if(profile.type!=="local")options.env=this.#transportEnv();
+
+    const startedAt=Date.now();
+    const result=await runProcess(executable,args,options);
+    return {...result,profile:{id:profile.id,name:profile.name,type:profile.type},durationMs:Date.now()-startedAt};
+  }
+
+  async executeArgv(id,{command,args=[],cwd=null,timeoutMs=30000,maxOutput=MAX_OUTPUT,environmentNames=null}={}){
+    const profile=this.get(id);
+    if(!profile)throw new Error("Environment profile was not found");
+    if(profile.type==="local"){
+      const startedAt=Date.now();
+      const result=await runProcess(String(command||""),Array.isArray(args)?args:[],{cwd:String(cwd??profile.cwd??"").trim()||undefined,env:this.env,timeoutMs:Math.min(300000,Math.max(1000,Number(timeoutMs)||30000)),maxOutput:Math.max(1024,Math.min(16*1024*1024,Number(maxOutput)||MAX_OUTPUT)),spawnProcess:this.spawnProcess});
+      return {...result,profile:{id:profile.id,name:profile.name,type:profile.type},durationMs:Date.now()-startedAt};
+    }
+    return this.execute(id,{command:isolatedRemoteEnvironment(shellCommand(hostCommand(profile,String(command||"")),Array.isArray(args)?args:[]),environmentNames),cwd,timeoutMs,maxOutput});
+  }
+
+  async executeArgvInput(id,{command,args=[],input="",cwd=null,timeoutMs=30000,maxOutput=MAX_OUTPUT,environmentNames=null,environment=null}={}){
+    const profile=this.get(id);
+    if(!profile)throw new Error("Environment profile was not found");
+    const processGroup=process.platform!=="win32";
+    const child=this.spawnArgv(id,{command:String(command||""),args:Array.isArray(args)?args:[],cwd,stdio:["pipe","pipe","pipe"],environmentNames,environment,detached:processGroup});
+    const limit=Math.max(1024,Math.min(16*1024*1024,Number(maxOutput)||MAX_OUTPUT));
+    const append=(current,chunk)=>{
+      if(Buffer.byteLength(current,"utf8")>=limit)return current;
+      const next=current+String(chunk);
+      return Buffer.byteLength(next,"utf8")>limit?Buffer.from(next,"utf8").subarray(0,limit).toString("utf8"):next;
+    };
+    return new Promise((resolveInput,reject)=>{
+      let stdout="",stderr="",settled=false,timedOut=false,terminationTimer=null;
+      child.stdout?.on("data",chunk=>{stdout=append(stdout,chunk)});
+      child.stderr?.on("data",chunk=>{stderr=append(stderr,chunk)});
+      const finish=(error,code=null,signal=null)=>{
+        if(settled)return;settled=true;clearTimeout(timer);if(terminationTimer)clearTimeout(terminationTimer);
+        if(error)reject(error);
+        else resolveInput({exitCode:code??1,signal,stdout,stderr,timedOut,profile:{id:profile.id,name:profile.name,type:profile.type}});
+      };
+      const timer=setTimeout(()=>{
+        if(settled)return;timedOut=true;terminateHostProcessTree(child,{force:true,processGroup});
+        terminationTimer=setTimeout(()=>{
+          try{child.stdout?.destroy?.()}catch{}
+          try{child.stderr?.destroy?.()}catch{}
+          finish(null,null,"SIGKILL");
+        },2000);
+        terminationTimer.unref?.();
+      },Math.min(300000,Math.max(1000,Number(timeoutMs)||30000)));
+      child.once("error",error=>finish(error));
+      child.once("close",(code,signal)=>finish(null,code,signal));
+      child.stdin?.end(Buffer.from(String(input??""),"utf8"));
+    });
+  }
+
+  async probe(id){
+    const profile=this.state.environments().find(x=>x.id===id);
+    if(!profile) throw new Error("Environment profile was not found");
+    const command=profile.type==="local"&&this.platform==="win32"
+      ?"echo trebell-environment-ok && cd"
+      :"printf 'trebell-environment-ok\\n'; pwd; uname -s";
+    const result=await this.execute(id,{command,timeoutMs:12000});
+    const ok=result.exitCode===0&&!result.timedOut&&result.stdout.includes("trebell-environment-ok");
+    // ssh exits 255 for its own failures; a host that refuses the connection is said the same way whichever client said it.
+    const refused=!ok&&profile.type==="ssh"&&result.exitCode===255?sshRefusedConnectionMessage(result.stderr,{host:profile.host,port:profile.port}):null;
+    return refused?{...result,stderr:refused,clientStderr:result.stderr,ok}:{...result,ok};
+  }
+
+  async prepareAttachment(id,localPath){
+    const requested=resolve(String(localPath||""));
+    const lower=requested.toLowerCase();
+    const image=/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(lower);
+    const info=await stat(requested).catch(error=>{throw unreadableAttachment(image?"image":"file",requested,error)});
+    if(!info.isFile())throw new Error("Attachment path is not a file");
+    const maxBytes=image?10*1024*1024:50*1024*1024;
+    if(info.size>maxBytes)throw new Error(`${image?"Image":"Attachment"} is larger than ${Math.round(maxBytes/1024/1024)} MB`);
+    const profile=id?this.get(id):null;
+    if(!profile||profile.type==="local")return {path:requested,size:info.size,copied:false,environmentId:profile?.id||null};
+    const safe=basename(requested).replace(/[^a-zA-Z0-9._-]/g,"_").slice(-100)||"attachment.bin";
+    const root=String(profile.cwd||"/tmp").trim()||"/tmp";
+    const dir=posix.join(root,".trebell","attachments");
+    const remotePath=posix.join(dir,`${Date.now()}-${randomUUID().slice(0,8)}-${safe}`);
+    const child=this.spawnSession(profile.id,{command:`mkdir -p ${quotePosix(dir)} && cat > ${quotePosix(remotePath)}`,cwd:"",stdio:["pipe","pipe","pipe"]});
+    await new Promise((resolveCopy,reject)=>{
+      let stderr="",settled=false;
+      const finish=error=>{if(settled)return;settled=true;error?reject(error):resolveCopy()};
+      child.stderr?.on("data",chunk=>{stderr=(stderr+String(chunk)).slice(-128*1024)});
+      child.once("error",finish);
+      child.once("close",code=>code===0?finish():finish(new Error(stderr.trim()||`Remote attachment copy exited with code ${code}`)));
+      const input=createReadStream(requested);input.once("error",finish);input.pipe(child.stdin);
+    });
+    return {path:remotePath,size:info.size,copied:true,environmentId:profile.id};
+  }
+
+  async attachmentInfo(id,path){
+    const requested=String(path||"").trim();if(!requested)throw new Error("Attachment path is required");
+    const profile=id?this.get(id):null;
+    let size;
+    if(!profile||profile.type==="local"){
+      // A file gone since it was attached is refused by its name, not with Node's bare error.
+      const resolved=resolve(requested),image=/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(resolved);
+      const info=await stat(resolved).catch(error=>{throw unreadableAttachment(image?"image":"file",resolved,error)});if(!info.isFile())throw new Error("Attachment path is not a file");size=info.size;
+      return {path:resolved,size,image,environmentId:profile?.id||null};
+    }
+    const result=await this.execute(profile.id,{command:`if [ -f ${quotePosix(requested)} ]; then wc -c < ${quotePosix(requested)}; else exit 44; fi`,cwd:"",timeoutMs:12000});
+    if(result.exitCode!==0)throw new Error(result.stderr||`Attachment does not exist in ${profile.name}`);
+    size=Number(String(result.stdout||"").trim());if(!Number.isFinite(size)||size<0)throw new Error("Could not determine attachment size");
+    return {path:requested,size,image:/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(requested),environmentId:profile.id};
+  }
+
+  async writeTextFile(id,path,content){
+    const profile=this.get(id);
+    if(!profile)throw new Error("Environment profile was not found");
+    if(profile.type==="local")throw new Error("writeTextFile is only for remote environments");
+    const requested=String(path||"").trim();if(!requested)throw new Error("File path is required");
+    const dir=posix.dirname(requested);
+    const child=this.spawnSession(profile.id,{
+      command:"mkdir -p "+quotePosix(dir)+" && cat > "+quotePosix(requested),
+      cwd:"",
+      stdio:["pipe","pipe","pipe"],
+    });
+    const bytes=Buffer.isBuffer(content)?content:Buffer.from(String(content??""),"utf8");
+    await new Promise((resolveWrite,reject)=>{
+      let stderr="",settled=false;
+      const finish=error=>{if(settled)return;settled=true;error?reject(error):resolveWrite()};
+      child.stderr?.on("data",chunk=>{stderr=(stderr+String(chunk)).slice(-128*1024)});
+      child.once("error",finish);
+      child.once("close",code=>code===0?finish():finish(new Error(stderr.trim()||("Remote file write exited with code "+code))));
+      child.stdin.end(bytes);
+    });
+    return this.attachmentInfo(profile.id,requested);
+  }
+
+  streamFile(id,path,{start=null,length=null}={}){
+    const profile=this.get(id);
+    if(!profile)throw new Error("Environment profile was not found");
+    if(profile.type==="local")throw new Error("streamFile is only for remote environments");
+    const requested=String(path||"").trim();if(!requested)throw new Error("File path is required");
+    let command="cat "+quotePosix(requested);
+    if(start!=null&&length!=null){
+      const safeStart=Math.max(0,Math.trunc(Number(start)||0));
+      const safeLength=Math.max(0,Math.trunc(Number(length)||0));
+      command="tail -c +"+(safeStart+1)+" "+quotePosix(requested)+" | head -c "+safeLength;
+    }
+    return this.spawnSession(profile.id,{command,cwd:"",stdio:["ignore","pipe","pipe"]});
+  }
+
+  async validateAttachments(id,paths,{maxCount=100,maxImageBytes=80*1024*1024}={}){
+    const requested=Array.isArray(paths)?paths:[];if(requested.length>maxCount)throw new Error(`A message supports up to ${maxCount} attachments`);
+    const files=[];let imageBytes=0;
+    for(const path of requested){
+      const file=await this.attachmentInfo(id,path);const maxBytes=file.image?10*1024*1024:50*1024*1024;
+      if(file.size>maxBytes)throw new Error(`${file.image?"Image":"Attachment"} is larger than ${Math.round(maxBytes/1024/1024)} MB`);
+      if(file.image){imageBytes+=file.size;if(imageBytes>maxImageBytes)throw new Error("Images in one message cannot exceed 80 MiB total")}
+      files.push(file);
+    }
+    return {files,count:files.length,imageBytes,maxImageBytes};
+  }
+}
+
+export { runProcess };

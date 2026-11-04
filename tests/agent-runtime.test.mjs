@@ -1,0 +1,1063 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { realpathSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
+import { remoteCodexHomeSetup } from "../src/environment-app-server.mjs";
+import { TrebellStateStore } from "../src/trebell-state.mjs";
+import { AgentRuntimeManager, commandOnPath, openCodeCommandHolder, openCodeInstallOwner, parseCursorAboutResult, parseGrokModelsAuth, parseOpenCodeAuthList, runtimeCapabilities, runtimeExecutableCandidates } from "../src/agent-runtime-manager.mjs";
+import { harnessReleaseSupport } from "../src/harness-releases.mjs";
+import { openCodeReadiness } from "../src/harness-status-words.mjs";
+import { runtimeCapabilityKinds, sharedRuntimeCapabilities } from "../src/runtime-capabilities.mjs";
+import { AcpAgentSession } from "../src/acp-agent-session.mjs";
+import { AgentThreadStore } from "../src/agent-thread-store.mjs";
+
+test("agent runtime registry exposes real harnesses and capability-gates configured instances", async () => {
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-runtime-"));
+  try{
+    const state=new TrebellStateStore({...process.env,TREBELL_HOME:home});
+    const manager=new AgentRuntimeManager({state,env:{...process.env,TREBELL_HOME:home}});
+    assert.deepEqual(manager.definitions().map(item=>item.id),["native","codex","claude","cursor","grok","opencode","antigravity","muse"]);
+    const nativeStatus=await manager.probe("native");assert.equal(nativeStatus.available,true);assert.equal(nativeStatus.protocol,"native");assert.equal(nativeStatus.binary,null);
+    assert.throws(()=>manager.upsertInstance({id:"native-extra",kind:"native"}),/does not support additional runtime profiles/i);
+    const credential=["runtime","profile","credential"].join("-");
+    const fake=manager.upsertInstance({id:"cursor-fixture",kind:"cursor",displayName:"Fixture Cursor",binaryPath:process.execPath,environment:{CURSOR_API_KEY:credential,NODE_ENV:"test"}});
+    assert.deepEqual(fake.environment,{NODE_ENV:"test"});
+    assert.doesNotMatch(await readFile(join(home,"ui-state.json"),"utf8"),new RegExp(credential));
+    const status=await manager.probe(fake);
+    assert.equal(status.installed,true);
+    assert.equal(status.available,true);
+    const selected=await manager.setActive({runtime:"cursor",instanceId:fake.id});
+    assert.equal(selected.runtime,"cursor");
+    assert.equal(state.settings().agentRuntimeInstanceId,fake.id);
+    // A "Cursor" that cannot answer over ACP reports why, instead of a stand-in model.
+    const models=await manager.models(fake);
+    assert.deepEqual(models.models,[]);assert.match(models.error,/Cursor could not list its models/);
+    assert.equal(manager.capabilities("codex").nativeSandbox,true);
+    assert.equal(manager.capabilities("native").dynamicTools,true);
+    assert.equal(manager.capabilities("native").dynamicToolExpansion,true);
+    assert.equal(manager.capabilities("native").nativeSandbox,false);
+    assert.equal(manager.capabilities("native").mcpInjection,true);
+    assert.equal(manager.capabilities("native").languageIntelligence,true);
+    assert.equal(manager.capabilities("native").delegation,true);
+    assert.equal(manager.capabilities("opencode").nativeLsp,true);
+    assert.equal(manager.capabilities("opencode").detachedTasks,true);
+    assert.equal(manager.capabilities("opencode").multiModelFanout,true);
+    assert.equal(manager.capabilities("opencode").delegation,true);
+    assert.equal(manager.capabilities("opencode").backgroundProcesses,false);
+    assert.equal(manager.capabilities("claude").rewind,true);
+    assert.equal(manager.capabilities("claude").mcpInjection,true);
+    assert.equal(manager.capabilities("claude").detachedTasks,true);
+    assert.equal(manager.capabilities("claude").delegation,true);
+    assert.equal(manager.capabilities("claude").runtimeProfileSwitching,true);
+    assert.equal(manager.capabilities("cursor").fork,"runtime");
+    assert.equal(manager.capabilities("cursor").mcpInjection,true);
+    assert.equal(manager.capabilities("cursor").clientFilesystem,false,"Cursor runs its own file tools");
+    assert.equal(manager.capabilities("antigravity").clientFilesystem,true);
+    assert.equal(manager.capabilities("grok").clientTerminal,false);
+    assert.equal(manager.capabilities("cursor").nativeSandbox,false);
+  }finally{
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+test("runtime capabilities describe adapter behavior without pretending unsupported features exist",()=>{
+  assert.deepEqual(new Set(runtimeCapabilityKinds),new Set(["native","codex","claude","opencode","cursor","grok","antigravity","muse"]));
+  for(const runtime of runtimeCapabilityKinds)assert.deepEqual(runtimeCapabilities(runtime),sharedRuntimeCapabilities(runtime));
+  const codex=runtimeCapabilities("codex");
+  assert.equal(codex.dynamicTools,true);
+  assert.equal(codex.projectOwnership,true);
+  assert.equal(codex.dynamicToolExpansion,false);
+  assert.equal(codex.nativeQueue,true);
+  assert.equal(codex.mcpInjection,false);
+  assert.equal(codex.managedInference,false);
+  assert.equal(codex.backgroundProcesses,false,"Codex does not implement Trebell's thread/backgroundTerminals RPC surface");
+  const native=runtimeCapabilities("native");
+  assert.equal(native.projectOwnership,false);
+  assert.equal(native.dynamicTools,true);assert.equal(native.dynamicToolExpansion,true);assert.equal(native.contextReporting,true);assert.equal(native.nativeQueue,true);assert.equal(native.nativeHistoryPagination,true);assert.equal(native.threadSearch,true);assert.equal(native.languageIntelligence,true);assert.equal(native.nativeLsp,false);assert.equal(native.clientFilesystem,true);assert.equal(native.clientTerminal,true);assert.equal(native.fork,true);assert.equal(native.rewind,true);
+  assert.equal(native.mcpInjection,true);assert.equal(native.systemPromptInjection,true);assert.equal(native.compaction,true);assert.equal(native.delegation,true);assert.equal(native.steering,true);assert.equal(native.backgroundProcesses,true);assert.equal(native.managedInference,true);
+  const openCode=runtimeCapabilities("opencode");
+  assert.equal(openCode.compaction,true);
+  assert.equal(openCode.nativeLsp,true);
+  assert.equal(openCode.languageIntelligence,true);
+  assert.equal(openCode.mcpInjection,false);
+  assert.equal(openCode.detachedTasks,true);
+  assert.equal(openCode.multiModelFanout,true);
+  assert.equal(openCode.delegation,true,"Trebell supplies provider-neutral child-task delegation");
+  assert.equal(openCode.managedInference,false);
+  assert.equal(openCode.backgroundProcesses,false);
+  assert.equal(runtimeCapabilities("claude").runtimeProfileSwitching,true);
+  assert.equal(runtimeCapabilities("claude").delegation,true);
+  const acp=runtimeCapabilities("grok");
+  assert.equal(acp.queue,true,"Trebell supplies the queue for external runtimes");
+  assert.equal(acp.fork,"runtime","ACP forking must stay conditional on what the connected runtime advertises");
+  assert.equal(acp.rewind,true,"a Grok revert starts a fresh session");
+  assert.equal(runtimeCapabilities("antigravity").rewind,true);
+  assert.equal(runtimeCapabilities("cursor").rewind,false,"Cursor offers no rollback");
+  assert.equal(acp.delegation,true,"manual Trebell delegation stays available even when the runtime cannot invoke dynamic tools itself");
+  assert.equal(acp.videoAttachments,true);
+  assert.equal(runtimeCapabilities("antigravity").videoAttachments,false,"Antigravity attachment limits belong in the capability contract, not UI runtime-name checks");
+});
+
+test("runtime launch flags preserve Trebell permission-mode boundaries",()=>{
+  const manager=new AgentRuntimeManager();
+  const cursor={kind:"cursor"},grok={kind:"grok"};
+  assert.deepEqual(manager.acpArgs(cursor,"supervised"),["acp"]);
+  assert.deepEqual(manager.acpArgs(cursor,"edits"),["acp"],"Cursor edits mode must stay under Trebell ACP approvals instead of enabling broad Auto-review");
+  assert.deepEqual(manager.acpArgs(cursor,"auto"),["--auto-review","acp"]);
+  assert.deepEqual(manager.acpArgs(cursor,"full"),["--force","acp"]);
+  assert.deepEqual(manager.acpArgs(grok,"supervised"),["--permission-mode","default","agent","stdio"]);
+  assert.deepEqual(manager.acpArgs(grok,"edits"),["--permission-mode","default","agent","stdio"],"grok agent has no accept-edits mode (it treats acceptEdits as asking); Trebell answers its edit requests itself");
+  assert.deepEqual(manager.acpArgs(grok,"auto"),["--permission-mode","auto","agent","stdio"]);
+  assert.deepEqual(manager.acpArgs(grok,"full"),["agent","--always-approve","stdio"]);
+});
+
+test("Grok Build asks at every level but Auto and Full access, and only a switch to or from those relaunches it",()=>{
+  const manager=new AgentRuntimeManager(),grok={kind:"grok"},asking=["--permission-mode","default","agent","stdio"];
+  for(const level of ["read-only","plan","workspace-write","FULL","Auto","",null])assert.deepEqual(manager.acpArgs(grok,level),asking,`level ${level}`);
+  assert.deepEqual(manager.acpArgs(grok),asking,"no level is the supervised one");
+  // AcpAgentSession relaunches on a new level only when its arguments differ as JSON.
+  const launch=level=>JSON.stringify(manager.acpArgs(grok,level,"/work"));
+  assert.equal(launch("supervised"),launch("edits"));
+  assert.equal(new Set(["supervised","auto","full"].map(launch)).size,3);
+  const first=manager.acpArgs(grok,"full","/one"),second=manager.acpArgs(grok,"full","/two");
+  assert.deepEqual(first,second,"the working folder plays no part");
+  first.push("--extra");assert.deepEqual(manager.acpArgs(grok,"full"),["agent","--always-approve","stdio"],"each call gets its own array");
+});
+
+test("Windows runtime discovery includes current installer locations even when PATH is stale",()=>{
+  const env={USERPROFILE:"C:\\Users\\me",LOCALAPPDATA:"C:\\Users\\me\\AppData\\Local",APPDATA:"C:\\Users\\me\\AppData\\Roaming"};
+  assert.ok(runtimeExecutableCandidates("grok",{env,platform:"win32"}).some(path=>path.endsWith("xAI.GrokBuild_Microsoft.Winget.Source_8wekyb3d8bbwe\\grok.exe")));
+  const claudeCandidates=runtimeExecutableCandidates("claude",{env,platform:"win32"});
+  assert.ok(claudeCandidates.some(path=>path.endsWith(".local\\bin\\claude.exe")));
+  const npmClaudeBinary=claudeCandidates.findIndex(path=>path.endsWith("npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"));
+  assert.ok(npmClaudeBinary>=0&&npmClaudeBinary<claudeCandidates.findIndex(path=>path.endsWith("npm\\claude.cmd")),"the native binary behind npm's shim is preferred over the .cmd shim");
+  const openCodeCandidates=runtimeExecutableCandidates("opencode",{env,platform:"win32"});
+  assert.ok(openCodeCandidates[0].endsWith("AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe"));
+  assert.ok(openCodeCandidates.some(path=>path.endsWith("AppData\\Roaming\\npm\\opencode.cmd")));
+  const cursorCandidates=runtimeExecutableCandidates("cursor",{env,platform:"win32"});
+  assert.ok(cursorCandidates[0].endsWith("AppData\\Local\\cursor-agent\\cursor-agent.cmd"),"the official Cursor launcher is preferred over whatever cursor-agent PATH finds first");
+  assert.ok(cursorCandidates.some(path=>path.endsWith(".cursor\\bin\\cursor-agent.exe")));
+  assert.ok(cursorCandidates.some(path=>path.endsWith("AppData\\Local\\Programs\\cursor\\resources\\app\\bin\\cursor-agent.exe")));
+  assert.deepEqual(runtimeExecutableCandidates("grok",{env,platform:"linux"}),[]);
+});
+
+const CURSOR_LAUNCHER_FIXTURE=String.raw`
+import readline from "node:readline";
+const args=process.argv.slice(2);
+if(args[0]==="--version")process.stdout.write("2026.09.26-dd393fe\n");
+else if(args[0]==="about")process.stdout.write(args.join(" ")==="about --format json"?JSON.stringify({cliVersion:"2026.09.26-dd393fe",userEmail:"dev@example.test"})+"\n":"User Email          dev@example.test\n");
+else if(args.at(-1)==="acp"){
+  const send=message=>process.stdout.write(JSON.stringify(message)+"\n");
+  let picker=false;
+  readline.createInterface({input:process.stdin,crlfDelay:Infinity}).on("line",line=>{
+    let m;try{m=JSON.parse(line)}catch{return}
+    if(m.method==="initialize"){picker=m.params?.clientCapabilities?._meta?.parameterizedModelPicker===true;send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:1,agentInfo:{name:"cursor-launcher-fixture"},agentCapabilities:{sessionCapabilities:{close:{}}}}})}
+    // Cursor 2026.09 lists base model ids with per-model options only to a client with the parameterized model picker.
+    // A sample effort list: the CLI repeats a value as its name when Cursor's server gives that choice no display name.
+    else if(m.method==="cursor/list_available_models")send(picker
+      ?{jsonrpc:"2.0",id:m.id,result:{models:[{value:"default",name:"Auto",configOptions:[]},{value:"gpt-5.6-sol",name:"GPT-5.6 Sol",configOptions:[{id:"reasoning",name:"Reasoning",category:"thought_level",type:"select",currentValue:"medium",options:["none","low","medium","high"].map(value=>({value,name:value})).concat({value:"extra-high",name:"Extra high"})}]}]}}
+      :{jsonrpc:"2.0",id:m.id,error:{code:-32601,message:"Method not found"}});
+    else if(m.method==="session/new")send({jsonrpc:"2.0",id:m.id,result:{sessionId:"cursor-launcher-session",models:{currentModelId:"default",availableModels:[{modelId:"default",name:"Auto"}]},configOptions:[{id:"model",name:"Model",category:"model",type:"select",currentValue:"default",options:[{value:"default",name:"Auto"}]}]}});
+    else if(m.id!=null)send({jsonrpc:"2.0",id:m.id,result:{}});
+  });
+}else{process.stderr.write("unexpected arguments: "+args.join(" ")+"\n");process.exitCode=2}
+`;
+
+test("the official Cursor .cmd launcher wins over PATH and serves version, about and ACP sessions",{skip:process.platform!=="win32"&&"Windows-only launcher discovery"},async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-cursor-launcher-"));
+  const local=join(root,"Local"),launcherDir=join(local,"cursor-agent"),decoyBin=join(root,"npm"),fixture=join(launcherDir,"fixture.mjs"),launcher=join(launcherDir,"cursor-agent.cmd");
+  try{
+    await Promise.all([mkdir(launcherDir,{recursive:true}),mkdir(decoyBin,{recursive:true}),mkdir(join(root,"user"),{recursive:true})]);
+    await writeFile(fixture,CURSOR_LAUNCHER_FIXTURE,"utf8");
+    await writeFile(launcher,["@echo off",`"${process.execPath}" "${fixture}" %*`,""].join("\r\n"),"utf8");
+    // An unrelated npm package's cursor-agent shim that PATH would find first.
+    await writeFile(join(decoyBin,"cursor-agent.cmd"),["@echo off","echo spawn EINVAL 1>&2","exit /b 1",""].join("\r\n"),"utf8");
+    const parent=Object.fromEntries(Object.entries(process.env).filter(([key])=>key.toUpperCase()!=="PATH"));
+    const env={...parent,PATH:decoyBin+";"+String(process.env.PATH||""),TREBELL_HOME:join(root,"home"),LOCALAPPDATA:local,USERPROFILE:join(root,"user")};
+    const manager=new AgentRuntimeManager({state:new TrebellStateStore(env),env,platform:"win32"});
+    const instance=manager.instances().find(item=>item.id==="cursor-default");
+    assert.equal(manager.executable(instance),launcher,"the official launcher is used as-is because it is not an npm %~dp0 shim");
+    const status=await manager.probe(instance);
+    assert.equal(status.installed,true);assert.equal(status.available,true);assert.equal(status.binary,launcher);
+    assert.equal(status.version,"2026.09.26-dd393fe");assert.equal(status.authenticated,true);assert.equal(status.account?.email,"dev@example.test");
+    // The model list is Cursor's own, with names and per-model effort; Auto is the default. Every composer level Cursor lists is
+    // offered, None included (the earlier fixed list of Cursor levels left None out), and "extra-high" is xhigh by its letters.
+    const listed=await manager.models(instance);
+    assert.deepEqual(listed.models,["default","gpt-5.6-sol"]);assert.equal(listed.preferred,"default");assert.equal(listed.source,"live");
+    assert.equal(listed.metadata[1].name,"GPT-5.6 Sol");assert.deepEqual(listed.metadata[1].reasoningEfforts,["none","low","medium","high","xhigh"]);assert.equal(listed.metadata[1].defaultReasoningEffort,"medium");
+    const session=new AcpAgentSession({runtime:"cursor",command:manager.executable(instance),args:manager.acpArgs(instance,"supervised"),cwd:root,env:manager.childEnv(instance)});
+    try{
+      const started=await session.start();
+      assert.equal(started.session.sessionId,"cursor-launcher-session");assert.equal(started.initialize.agentInfo.name,"cursor-launcher-fixture");
+      assert.equal(session.model,"default","a thread with no model runs on Cursor's Auto, set explicitly because Cursor saves its model globally");
+    }finally{await session.close()}
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:100})}
+});
+
+test("runtime child environments inherit no key, approved or not, and the profile keeps only names",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-env-"));
+  try{
+    const state=new TrebellStateStore({...process.env,TREBELL_HOME:home});
+    const manager=new AgentRuntimeManager({
+      state,platform:"linux",
+      env:{PATH:"/usr/bin",HOME:"/home/test",ANTHROPIC_API_KEY:"claude-secret",OPENAI_API_KEY:"openai-secret",GITHUB_TOKEN:"github-secret",TEAM_PROXY:"http://proxy"},
+    });
+    // A key name is refused for a harness profile: a harness signs in with its own login or, set to API key, its vendor's key.
+    assert.throws(()=>manager.upsertInstance({id:"claude-safe",kind:"claude",approvedEnvironmentKeys:["TEAM_PROXY","GITHUB_TOKEN"]}),/GITHUB_TOKEN holds an API key or sign-in/);
+    const claude=manager.upsertInstance({id:"claude-safe",kind:"claude",displayName:"Claude safe",approvedEnvironmentKeys:["TEAM_PROXY"],environment:{CUSTOM_MODE:"safe",CURSOR_API_KEY:"must-not-persist"}});
+    assert.deepEqual(claude.environment,{CUSTOM_MODE:"safe"});
+    assert.deepEqual(claude.approvedEnvironmentKeys,["TEAM_PROXY"]);
+    const env=manager.childEnv(claude);
+    assert.equal(env.PATH,"/usr/bin");assert.equal(env.ANTHROPIC_API_KEY,undefined,"Claude Code on Sign in gets no Anthropic key");assert.equal(env.OPENAI_API_KEY,undefined);
+    assert.equal(env.GITHUB_TOKEN,undefined);assert.equal(env.TEAM_PROXY,"http://proxy","an approved name passes the current parent value without storing it");assert.equal(env.CUSTOM_MODE,"safe");
+    // A profile saved before approvals were checked keeps a key name in its list, and its launch still leaves the key out.
+    assert.equal(manager.childEnv({...claude,approvedEnvironmentKeys:["TEAM_PROXY","GITHUB_TOKEN","ANTHROPIC_API_KEY"]}).GITHUB_TOKEN,undefined);
+    const persisted=await readFile(join(home,"ui-state.json"),"utf8");
+    assert.doesNotMatch(persisted,/claude-secret|github-secret|http:\/\/proxy/);assert.match(persisted,/TEAM_PROXY/);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("remote runtime process spawning cannot escape the active workspace cwd",()=>{
+  const calls=[],state={settings:()=>({activeEnvironmentId:"ssh-fixture"})},profile={id:"ssh-fixture",type:"ssh",cwd:"/srv/app"};
+  const environments={get:id=>id===profile.id?profile:null,spawnArgv:(id,options)=>{calls.push({id,options});return {pid:123}}};
+  const manager=new AgentRuntimeManager({state,environments}),io=manager.remoteIo("/srv/app","ssh-fixture");
+  assert.ok(io);
+  io.spawn({command:"node",args:["script.js"],cwd:"subdir"});
+  assert.equal(calls[0].options.cwd,"/srv/app/subdir");
+  assert.throws(()=>io.spawn({command:"node",args:[],cwd:"/tmp/outside"}),/outside the active remote workspace/i);
+  assert.throws(()=>io.spawn({command:"node",args:[],cwd:"../outside"}),/outside the active remote workspace/i);
+  assert.equal(calls.length,1,"rejected remote cwd values must never reach the environment spawner");
+});
+
+test("remote runtime processes receive the same least-privilege environment-name allowlist",()=>{
+  const calls=[],profile={id:"ssh-fixture",type:"ssh",cwd:"/srv/app"};
+  const state={settings:()=>({activeEnvironmentId:"ssh-fixture"})};
+  const environments={get:id=>id===profile.id?profile:null,spawnArgv:(id,options)=>{calls.push({id,options});return {pid:123}}};
+  const manager=new AgentRuntimeManager({
+    state,environments,platform:"linux",
+    env:{PATH:"/usr/bin",HOME:"/home/test",ANTHROPIC_API_KEY:"claude-secret",OPENAI_API_KEY:"other-secret",TEAM_PROXY:"http://proxy"},
+  });
+  const instance={id:"claude-remote",kind:"claude",approvedEnvironmentKeys:["TEAM_PROXY"],environment:{}};
+  const spawnRuntime=manager.processSpawner(instance,"ssh-fixture");assert.ok(spawnRuntime);
+  spawnRuntime({args:["--version"],cwd:"/srv/app",stdio:["ignore","pipe","pipe"]});
+  const names=calls[0].options.environmentNames;
+  assert.ok(names.includes("PATH"));assert.ok(names.includes("HOME"));assert.ok(names.includes("TEAM_PROXY"));
+  assert.equal(names.includes("ANTHROPIC_API_KEY"),false,"a host's Claude Code on Sign in gets no key from the host's shell");assert.equal(names.includes("OPENAI_API_KEY"),false);
+});
+
+test("remote runtime spawns carry explicit variables, and the runtime CLI runs where the profile runs",async()=>{
+  const spawns=[],executes=[],profile={id:"ssh-fixture",type:"ssh",cwd:"/srv/app"};
+  const state={settings:()=>({activeEnvironmentId:"ssh-fixture"})};
+  const environments={get:id=>id===profile.id?profile:null,spawnArgv:(id,options)=>{spawns.push({id,options});return {pid:123}},executeArgv:async(id,options)=>{executes.push({id,options});return {exitCode:0,stdout:"",stderr:""}}};
+  const manager=new AgentRuntimeManager({state,environments,platform:"linux",env:{PATH:"/usr/bin",HOME:"/home/test",OPENAI_API_KEY:"other-secret"}});
+  const instance={id:"opencode-remote",kind:"opencode",approvedEnvironmentKeys:[],environment:{}};
+  const spawnRuntime=manager.processSpawner(instance,"ssh-fixture"),config=JSON.stringify({permission:{"*":"deny"}});
+  spawnRuntime({args:["acp"],cwd:"/srv/app",environment:{OPENCODE_CONFIG_CONTENT:config}});
+  spawnRuntime({args:["acp"],cwd:"/srv/app"});
+  assert.deepEqual(spawns[0].options.environment,{OPENCODE_CONFIG_CONTENT:config},"an explicit variable reaches the remote process");
+  assert.equal(Object.prototype.hasOwnProperty.call(spawns[1].options,"environment"),false,"a plain spawn adds no variables");
+  assert.equal(spawns[0].options.command,"opencode");assert.deepEqual(spawns[0].options.args,["acp"]);assert.ok(spawns[0].options.environmentNames.includes("PATH"));
+  const result=await manager.runCli(instance,["session","delete","ses_1"],{environmentId:"ssh-fixture",timeoutMs:15_000});
+  assert.equal(result.ok,true);assert.equal(executes.length,1);assert.equal(executes[0].id,"ssh-fixture");
+  assert.equal(executes[0].options.command,"opencode");assert.deepEqual(executes[0].options.args,["session","delete","ses_1"]);assert.equal(executes[0].options.timeoutMs,15_000);
+  assert.deepEqual(executes[0].options.environmentNames,spawns[0].options.environmentNames,"the CLI runs with the profile's variable allowlist");
+});
+
+test("Claude runtime profiles validate and persist auto-compact thresholds",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-claude-compact-"));
+  try{
+    const state=new TrebellStateStore({...process.env,TREBELL_HOME:home});
+    const manager=new AgentRuntimeManager({state,env:{...process.env,TREBELL_HOME:home}});
+    const saved=manager.upsertInstance({id:"claude-compact",kind:"claude",displayName:"Claude Compact",autoCompactWindow:"300000"});
+    assert.equal(saved.autoCompactWindow,300000);
+    assert.equal(manager.instances().find(item=>item.id==="claude-compact")?.autoCompactWindow,300000);
+    assert.throws(()=>manager.upsertInstance({id:"claude-bad",kind:"claude",autoCompactWindow:"99999"}),/between 100000 and 1000000/);
+    const cleared=manager.upsertInstance({...saved,autoCompactWindow:""});
+    assert.equal(cleared.autoCompactWindow,null);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("Claude models and plan usage come from Claude Code's own capability probe",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-claude-models-"));
+  try{
+    const env={...process.env,TREBELL_HOME:home};
+    const state=new TrebellStateStore(env);
+    const loads=[];let failure=null;
+    const probe={
+      models:[
+        {value:"default",displayName:"Default (recommended)",description:"Opus 5.5",supportedEffortLevels:["low","medium","high","xhigh","max"],supportsFastMode:true},
+        {value:"haiku",displayName:"Haiku",supportedEffortLevels:["low","high","ultra"]},
+      ],
+      commands:[{name:"review",description:"Review"}],agents:[{name:"Plan"}],usage:{rate_limits_available:true,rate_limits:{five_hour:{utilization:12,resets_at:"2026-10-09T22:59:59Z"}}},checkedAt:"2026-10-09T20:00:00.000Z",
+    };
+    const claudeCapabilitiesCache={load:async(input,options)=>{loads.push({input,options});if(failure)throw failure;return probe}};
+    const manager=new AgentRuntimeManager({state,env,claudeCapabilitiesCache});
+    manager.probe=async()=>({available:true,installed:true,authenticated:true});
+    const models=await manager.models("claude");
+    assert.deepEqual(models.models,["default","haiku"]);
+    assert.equal(models.preferred,"default","Claude Code's own default model is preselected");
+    assert.equal(models.source,"live");
+    assert.deepEqual(models.inventory,{commands:[{name:"review",description:"Review"}],agents:[{name:"Plan"}]},"the probe's commands and agents fill a new chat's menus");
+    assert.deepEqual(models.metadata[0],{id:"default",name:"Default (recommended)",provider:"claude",agent:"Claude Code",description:"Opus 5.5",supportedReasoningEfforts:["low","medium","high","xhigh","max"],supportsFastMode:true,supportedServiceTiers:["fast"]});
+    assert.deepEqual(models.metadata[1].supportedReasoningEfforts,["low","high"]);
+    assert.equal(loads[0].input.cwd,null);assert.equal(loads[0].input.spawnProcess,null);assert.equal(loads[0].input.scope,"");assert.equal(loads[0].input.withPlanUsage,true);
+    const usage=await manager.usageLimits("claude");
+    assert.deepEqual(usage.windows.map(window=>[window.id,window.label,window.usedPercent]),[["five_hour","Session",12]]);
+    failure=new Error("Claude Code did not report its capabilities in time.");
+    assert.deepEqual(await manager.models("claude"),{models:[],metadata:[],source:"unavailable",error:"Claude Code could not list its models: Claude Code did not report its capabilities in time."});
+    assert.deepEqual((await manager.usageLimits("claude")).unavailable,{reason:"probeFailed",message:"Claude Code could not read usage limits."});
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("runtime profile compatibility follows continuation identity instead of display names",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-compat-"));
+  try{
+    const nativeCodexHome=join(home,"codex-env"),env={...process.env,TREBELL_HOME:home,CODEX_HOME:nativeCodexHome,CLAUDE_CONFIG_DIR:join(home,"claude-default")};
+    const state=new TrebellStateStore(env);
+    const manager=new AgentRuntimeManager({state,env,platform:"win32"});
+    assert.equal(manager.childEnv(manager.instances().find(item=>item.id==="codex-default")).CODEX_HOME,nativeCodexHome);
+    assert.match(manager.continuationKey("codex-default").toLowerCase(),new RegExp(resolve(nativeCodexHome).replace(/[.*+?^${}()|[\]\\]/g,"\\$&").toLowerCase()));
+    const sharedCodex=join(home,"shared-codex");
+    manager.upsertInstance({id:"codex-work",kind:"codex",displayName:"Work",homePath:sharedCodex,shadowHomePath:join(home,"codex-work-auth")});
+    manager.upsertInstance({id:"codex-personal",kind:"codex",displayName:"Personal",homePath:sharedCodex,shadowHomePath:join(home,"codex-personal-auth")});
+    manager.upsertInstance({id:"codex-isolated",kind:"codex",displayName:"Isolated",homePath:join(home,"isolated-codex")});
+    assert.deepEqual(new Set(manager.compatibleInstanceIds("codex-work")),new Set(["codex-work","codex-personal"]));
+    assert.equal(manager.continuationKey("codex-work"),manager.continuationKey("codex-personal"));
+    assert.notEqual(manager.continuationKey("codex-work"),manager.continuationKey("codex-isolated"));
+
+    const sharedClaude=join(home,"claude-shared");
+    manager.upsertInstance({id:"claude-work",kind:"claude",displayName:"Claude Work",homePath:sharedClaude});
+    manager.upsertInstance({id:"claude-personal",kind:"claude",displayName:"Claude Personal",homePath:sharedClaude});
+    manager.upsertInstance({id:"claude-isolated",kind:"claude",displayName:"Claude Isolated",homePath:join(home,"claude-isolated")});
+    assert.deepEqual(new Set(manager.compatibleInstanceIds("claude-work")),new Set(["claude-work","claude-personal"]));
+    assert.notEqual(manager.continuationKey("claude-work"),manager.continuationKey("claude-isolated"));
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("runtime installer uses only official allowlisted packages in the selected environment", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-install-"));
+  const env={...process.env,TREBELL_HOME:home};const calls=[];let claudeThere=false;
+  try{
+    const state=new TrebellStateStore(env);state.updateSettings({activeEnvironmentId:"ssh-fixture"});
+    const environments={
+      get:id=>id==="ssh-fixture"?{id,name:"Fixture SSH",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(id,{command,args})=>{
+        calls.push({id,command,args:[...args]});
+        if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+        if(command==="npm"&&args[0]==="install"){claudeThere=true;return {exitCode:0,stdout:"installed\n",stderr:""}}
+        if(command==="claude"&&args[0]==="--version")return claudeThere?{exitCode:0,stdout:"claude 2.0.0\n",stderr:""}:{exitCode:127,stdout:"",stderr:"sh: 1: claude: not found\n"};
+        if(command==="claude"&&args[0]==="auth")return {exitCode:0,stdout:JSON.stringify({loggedIn:false}),stderr:""};
+        return {exitCode:1,stdout:"",stderr:"unexpected command"};
+      },
+    };
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const installed=await manager.install("claude");
+    assert.equal(installed.packageName,"@anthropic-ai/claude-code");
+    assert.equal(installed.status.installed,true);assert.equal(installed.status.authenticated,false);
+    assert.equal(installed.status.message,"Claude Code has no account signed in. Run `claude auth login`, then try again.");
+    // npm 12 runs no install script unless allowed, and Claude Code's puts its native binary in place.
+    assert.equal(calls.some(call=>call.command==="npm"&&call.args.join(" ")==="install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code"),true);
+    await assert.rejects(()=>manager.install("cursor"),/not installable/i);
+    const snapshot=await manager.snapshot();
+    assert.equal(snapshot.definitions.find(item=>item.id==="claude").installable,true);
+    // A new OpenCode is 1.x, the opencode-ai package; @opencode/cli is OpenCode 2.x, which an update of a 2.x keeps.
+    assert.equal(snapshot.definitions.find(item=>item.id==="opencode").packageName,"opencode-ai");
+    assert.equal(snapshot.definitions.find(item=>item.id==="opencode").installCommand,"npm install -g --allow-scripts=opencode-ai opencode-ai (OpenCode 1.x)");
+    assert.equal(snapshot.definitions.find(item=>item.id==="claude").installCommand,"npm install -g --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code");
+    assert.equal(snapshot.definitions.find(item=>item.id==="cursor").installable,false);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("OpenCode's release support blocks known-broken managed updates and pins releases that work",async()=>{
+  assert.equal(harnessReleaseSupport("opencode","opencode 1.14.18").status,"broken");
+  assert.equal(harnessReleaseSupport("opencode","v1.14.19").status,"supported");
+  assert.equal(harnessReleaseSupport("opencode","1.18.32").status,"supported");
+  assert.equal(harnessReleaseSupport("opencode","dev-build").status,"unknown");
+  // OpenCode 2.x uses a different server protocol, but Trebell has a dedicated adapter for it.
+  const v2=harnessReleaseSupport("opencode","opencode v2.0.18");
+  assert.equal(v2.status,"supported");
+  const home=await mkdtemp(join(tmpdir(),"trebell-opencode-compat-"));const env={...process.env,TREBELL_HOME:home};
+  try{
+    const state=new TrebellStateStore(env);const calls=[];let candidate="1.14.18",installedVersion="1.14.10",installTakes=true;
+    const environments={
+      get:id=>id==="ssh-fixture"?{id,name:"Fixture SSH",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(id,{command,args})=>{
+        calls.push({id,command,args:[...args]});
+        if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+        if(command==="npm"&&args[0]==="view")return {exitCode:0,stdout:JSON.stringify(candidate)+"\n",stderr:""};
+        if(command==="npm"&&args[0]==="install"){if(installTakes)installedVersion=args.at(-1).split("@").at(-1);return {exitCode:0,stdout:"installed\n",stderr:""}}
+        if(command==="opencode"&&args[0]==="--version")return {exitCode:0,stdout:"opencode "+installedVersion+"\n",stderr:""};
+        if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"— 1 credentials\n",stderr:""};
+        return {exitCode:1,stdout:"",stderr:"unexpected command"};
+      },
+    };
+    state.updateSettings({activeEnvironmentId:"ssh-fixture"});
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const installs=()=>calls.filter(call=>call.command==="npm"&&call.args[0]==="install").map(call=>call.args.join(" "));
+    await assert.rejects(()=>manager.install("opencode"),{message:"OpenCode 1.14.18 has a known fault that keeps it from working with Trebell Code. Install OpenCode 1.14.19 or a later 1.x or 2.x release."});
+    assert.deepEqual(installs(),[]);
+    candidate="1.14.19";
+    const installed=await manager.install("opencode");
+    assert.equal(installed.targetVersion,"1.14.19");assert.equal(installed.packageName,"opencode-ai");assert.equal(installed.method,"npm");
+    assert.equal(installed.compatibility.status,"supported");
+    // OpenCode 1.x's own package, with its install script allowed (npm 12 skips it otherwise); never 2.x's @opencode/cli.
+    assert.deepEqual(installs(),["install -g --allow-scripts=opencode-ai opencode-ai@1.14.19"]);
+    assert.equal(installed.status.version,"opencode 1.14.19");assert.equal(installed.status.compatibility.status,"supported");
+    // Already the newest release: nothing is installed again.
+    assert.match((await manager.install("opencode")).output,/already the newest/i);assert.equal(installs().length,1);
+    // An install that leaves the OpenCode this profile runs on its old version is reported, not shown as ready.
+    candidate="1.14.20";installTakes=false;
+    await assert.rejects(()=>manager.install("opencode"),/OpenCode 1\.14\.20 was installed, but the OpenCode this profile runs .* still reports 1\.14\.19/);
+    // OpenCode 2.x is supported, but Trebell does not replace it with the separate OpenCode 1.x npm package.
+    installedVersion="v2.0.24";const before=calls.length;
+    await assert.rejects(()=>manager.install("opencode"),/supports OpenCode 2\.x but will not replace it with the separate OpenCode 1\.x npm package/);
+    assert.deepEqual(calls.slice(before).map(call=>call.command+" "+call.args.join(" ")),["opencode --version"]);
+    // A remote 2.x is supported too; remote OpenCode continues to run through its ACP surface.
+    const remote2x=await manager.probe("opencode",{fresh:true});
+    assert.equal(remote2x.compatibility.status,"supported");assert.equal(remote2x.authenticated,true);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// One install or update of a harness runs at a time: Settings opened again while an update ran offered Update once more, and the
+// server started every install it was asked for, so two npm installs of opencode-ai ran at once (each up to 180 s). The second is
+// refused with the reason, another harness installs meanwhile, and once the first has ended, failed or not, the next one runs.
+test("a second install of a harness asked for while one runs is refused, and the next once it has ended runs",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-install-once-"));const env={...process.env,TREBELL_HOME:home};
+  // OpenCode's npm install runs until release(); fail is the error the next one ends with.
+  const installs=[],held=[],release=()=>{for(const resolve of held.splice(0))resolve()};let installed="1.14.10",fail="",claudeThere=false;
+  try{
+    const state=new TrebellStateStore(env);state.updateSettings({activeEnvironmentId:"ssh-fixture"});
+    const environments={
+      get:id=>id==="ssh-fixture"?{id,name:"Fixture SSH",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(id,{command,args})=>{
+        if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+        if(command==="npm"&&args[0]==="view")return {exitCode:0,stdout:JSON.stringify("1.14.19")+"\n",stderr:""};
+        if(command==="npm"&&args[0]==="install"){
+          const spec=args.at(-1);installs.push(spec);if(!spec.startsWith("opencode-ai@")){claudeThere=true;return {exitCode:0,stdout:"installed\n",stderr:""}}
+          await new Promise(resolve=>held.push(resolve));
+          if(fail){const stderr=fail;fail="";return {exitCode:1,stdout:"",stderr}}
+          installed=spec.split("@").at(-1);return {exitCode:0,stdout:"installed\n",stderr:""};
+        }
+        if(command==="opencode"&&args[0]==="--version")return {exitCode:0,stdout:"opencode "+installed+"\n",stderr:""};
+        if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"— 1 credentials\n",stderr:""};
+        // Claude Code is not there until npm installs it.
+        if(command==="claude"&&args[0]==="--version")return claudeThere?{exitCode:0,stdout:"claude 2.0.0\n",stderr:""}:{exitCode:127,stdout:"",stderr:"sh: 1: claude: not found\n"};
+        if(command==="claude"&&args[0]==="auth")return {exitCode:0,stdout:JSON.stringify({loggedIn:true}),stderr:""};
+        return {exitCode:1,stdout:"",stderr:"unexpected command"};
+      },
+    };
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const npmRan=async count=>{while(installs.length<count)await new Promise(resolve=>setTimeout(resolve,5))};
+    const first=manager.install("opencode").then(value=>value,error=>error);
+    await npmRan(1);
+    // Asked again while npm installs it: refused at once, with nothing run.
+    const second=await Promise.race([manager.install("opencode").then(()=>"installed a second time",error=>error),new Promise(resolve=>setTimeout(()=>resolve("no answer after 1.5 s"),1500))]);
+    assert.deepEqual(installs,["opencode-ai@1.14.19"],"npm installs OpenCode once at a time");
+    assert.equal(second?.message??second,"OpenCode is already being installed or updated. Wait for it to finish first.");
+    assert.equal((await manager.install("claude")).packageName,"@anthropic-ai/claude-code","another harness installs meanwhile");
+    // The first fails, and OpenCode can be installed again.
+    fail="npm ERR! code E404 opencode-ai@1.14.19 is not in the npm registry";release();
+    assert.match(String((await first)?.message),/^npm ERR! code E404/);
+    const third=manager.install("opencode");await npmRan(3);release();
+    assert.equal((await third).targetVersion,"1.14.19");
+    assert.deepEqual(installs,["opencode-ai@1.14.19","@anthropic-ai/claude-code","opencode-ai@1.14.19"]);
+  }finally{release();await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// A window that did not start an install (another tab, or the window reloaded, which forgets the install it started) learns of it
+// from the harness list: the installs on their way, by the id the window that asked gave them, and how the last one of each harness
+// ended. It can wait for the one on its way and gets its answer, failure included, and a second install asked for meanwhile is
+// refused with the id of the one that runs. Before, nothing but the window that asked knew of an install, so a reloaded window offered
+// Update at once and never learnt how the update went.
+test("the harness list names an install on its way and how the last one ended, and a wait for it gets its answer",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-install-known-"));const env={...process.env,TREBELL_HOME:home};
+  // OpenCode's npm install runs until release(); fail is the error the next one ends with. installed is the OpenCode the profile runs.
+  const installs=[],held=[],release=()=>{for(const resolve of held.splice(0))resolve()};let fail="",installed="1.14.10";
+  try{
+    const state=new TrebellStateStore(env);state.updateSettings({activeEnvironmentId:"ssh-fixture"});
+    const environments={
+      get:id=>id==="ssh-fixture"?{id,name:"Fixture SSH",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(id,{command,args})=>{
+        if(command==="npm"&&args[0]==="--version")return {exitCode:0,stdout:"11.0.0\n",stderr:""};
+        if(command==="npm"&&args[0]==="view")return {exitCode:0,stdout:JSON.stringify("1.14.19")+"\n",stderr:""};
+        if(command==="npm"&&args[0]==="install"){
+          const spec=args.at(-1);installs.push(spec);await new Promise(resolve=>held.push(resolve));
+          if(fail){const stderr=fail;fail="";return {exitCode:1,stdout:"",stderr}}
+          installed=spec.split("@").at(-1);return {exitCode:0,stdout:"installed\n",stderr:""};
+        }
+        if(command==="opencode"&&args[0]==="--version")return {exitCode:0,stdout:"opencode "+installed+"\n",stderr:""};
+        if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"— 1 credentials\n",stderr:""};
+        return {exitCode:1,stdout:"",stderr:"unexpected command"};
+      },
+    };
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const npmRan=async count=>{while(installs.length<count)await new Promise(resolve=>setTimeout(resolve,5))};
+    const named=list=>list.map(({runtime,id,ok,error})=>({runtime,id,...(ok===undefined?{}:{ok,error})}));
+    assert.deepEqual(manager.installs(),{running:[],ended:[]});
+    assert.equal(manager.waitForInstall("opencode"),null,"no install to wait for");
+    const first=manager.install("opencode",{id:"window-one"}).then(value=>value,error=>error);
+    await npmRan(1);
+    assert.deepEqual(named(manager.installs().running),[{runtime:"opencode",id:"window-one"}],"the install on its way, by its window's id");
+    const refused=await manager.install("opencode",{id:"window-two"}).then(()=>null,error=>error);
+    assert.equal(refused?.code,"install-running");assert.equal(refused?.installId,"window-one","the refusal names the install that runs");
+    const waited=manager.waitForInstall("opencode").then(value=>value,error=>error);
+    assert.equal(manager.waitForInstall("claude"),null,"no install of Claude Code runs");
+    release();
+    const answer=await first;
+    assert.equal(answer?.targetVersion,"1.14.19");assert.equal(await waited,answer,"the wait gets the install's own answer");
+    assert.deepEqual(named(manager.installs().running),[]);
+    assert.deepEqual(named(manager.installs().ended),[{runtime:"opencode",id:"window-one",ok:true,error:null}],"how the last one ended");
+    assert.equal(manager.waitForInstall("opencode"),null,"nothing to wait for once it has ended");
+    // One asked for without an id gets one, and its failure is named as the last one's end and given to the wait.
+    installed="1.14.10";fail="npm ERR! code E404 opencode-ai@1.14.19 is not in the npm registry";
+    const second=manager.install("opencode").then(value=>value,error=>error);await npmRan(2);
+    const [{id}]=manager.installs().running;assert.match(id,/^[0-9a-f-]{36}$/);
+    const failedWait=manager.waitForInstall("opencode").then(value=>value,error=>error);
+    release();
+    assert.match(String((await second)?.message),/^npm ERR! code E404/);
+    assert.equal((await failedWait)?.message,(await second).message,"the wait gets the failure");
+    assert.deepEqual(named(manager.installs().ended),[{runtime:"opencode",id,ok:false,error:(await second).message}]);
+  }finally{release();await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// The Windows command shim npm writes for a package's bin.
+const npmShim=target=>["@ECHO off","GOTO start",":find_dp0","SET dp0=%~dp0","EXIT /b",":start","SETLOCAL","CALL :find_dp0",`"%dp0%\\${target}"   %*`,""].join("\r\n");
+
+test("Trebell updates an OpenCode only the way it was installed, judged from where its binary really is",()=>{
+  const exists=paths=>path=>paths.includes(path);
+  assert.deepEqual(openCodeInstallOwner("/home/dev/.opencode/bin/opencode",{platform:"linux"}),{method:"native"});
+  assert.deepEqual(openCodeInstallOwner("C:\\Users\\dev\\.opencode\\bin\\opencode.exe",{platform:"win32"}),{method:"native"});
+  assert.deepEqual(openCodeInstallOwner("/usr/local/lib/node_modules/opencode-ai/bin/opencode",{platform:"linux"}),{method:"npm",prefix:"/usr/local"});
+  const roaming="C:\\Users\\dev\\AppData\\Roaming\\npm";
+  assert.deepEqual(openCodeInstallOwner(roaming+"\\node_modules\\opencode-ai\\bin\\opencode.exe",{platform:"win32",exists:exists([roaming+"\\opencode.cmd"])}),{method:"npm",prefix:roaming});
+  // Without npm's shim beside node_modules the folder is not a global prefix (a project's node_modules, for one).
+  assert.equal(openCodeInstallOwner("C:\\work\\app\\node_modules\\opencode-ai\\bin\\opencode.exe",{platform:"win32",exists:exists([])}),null);
+  assert.equal(openCodeInstallOwner("/work/app/node_modules/.pnpm/node_modules/opencode-ai/bin/opencode",{platform:"linux"}),null);
+  assert.equal(openCodeInstallOwner("/usr/local/lib/node_modules/tool/node_modules/opencode-ai/bin/opencode",{platform:"linux"}),null);
+  // OpenCode 2.x's package, Homebrew and other installs are not Trebell's to update.
+  assert.equal(openCodeInstallOwner(roaming+"\\node_modules\\@opencode\\cli\\bin\\opencode.exe",{platform:"win32",exists:exists([roaming+"\\opencode.cmd"])}),null);
+  assert.equal(openCodeInstallOwner("/opt/homebrew/Cellar/opencode/1.18.32/bin/opencode",{platform:"darwin"}),null);
+  // npm does not replace a command another package installed, so an npm update needs the prefix's opencode command to be opencode-ai's.
+  const missing=()=>{throw Object.assign(new Error("missing"),{code:"ENOENT"})};
+  assert.equal(openCodeCommandHolder(roaming,{platform:"win32",read:()=>npmShim("node_modules\\@opencode\\cli\\bin\\opencode.exe")}),"@opencode/cli");
+  assert.equal(openCodeCommandHolder(roaming,{platform:"win32",read:()=>npmShim("node_modules\\opencode-ai\\bin\\opencode.exe")}),null);
+  assert.equal(openCodeCommandHolder(roaming,{platform:"win32",read:missing}),null,"npm creates a command that is not there yet");
+  assert.equal(openCodeCommandHolder("/usr/local",{platform:"linux",readLink:()=>"../lib/node_modules/@opencode/cli/bin/opencode"}),"@opencode/cli");
+  assert.equal(openCodeCommandHolder("/usr/local",{platform:"linux",readLink:()=>"../lib/node_modules/opencode-ai/bin/opencode"}),null);
+  assert.equal(openCodeCommandHolder("/usr/local",{platform:"linux",readLink:missing}),null);
+  assert.equal(openCodeCommandHolder("/usr/local",{platform:"linux",readLink:()=>{throw Object.assign(new Error("not a link"),{code:"EINVAL"})}}),"/usr/local/bin/opencode");
+  // A bare command is found as cross-spawn finds it: on PATH, with PATHEXT on Windows.
+  const bin="C:\\tools\\bin";
+  assert.equal(commandOnPath("opencode",{platform:"win32",env:{PATH:"C:\\empty;"+bin,PATHEXT:".EXE;.CMD"},exists:exists([bin+"\\opencode.CMD"])}),bin+"\\opencode.CMD");
+  assert.equal(commandOnPath("opencode",{platform:"linux",env:{PATH:"/usr/bin:/home/dev/.opencode/bin"},exists:exists(["/home/dev/.opencode/bin/opencode"])}),"/home/dev/.opencode/bin/opencode");
+  assert.equal(commandOnPath("/opt/opencode",{platform:"linux",env:{},exists:exists([])}),null);
+  assert.equal(commandOnPath("C:\\oc\\opencode.exe",{platform:"win32",env:{},exists:exists(["C:\\oc\\opencode.exe"])}),"C:\\oc\\opencode.exe");
+  // The status wording, from the providers OpenCode's server reports connected.
+  assert.equal(openCodeReadiness({providers:4}),"OpenCode is ready, listing models from the 4 providers it is connected to.");
+  assert.equal(openCodeReadiness({providers:1,ownServer:true}),"The OpenCode server at this profile's URL is ready, listing models from the provider it is connected to.");
+  assert.equal(openCodeReadiness({providers:0}),"No provider is connected to OpenCode yet. Add one with opencode auth login, then press Refresh.");
+});
+
+// A stand-in OpenCode CLI (`--version`, `upgrade`, `serve`) and npm, run through Windows command launchers. They keep their state in
+// one JSON file: the installed version, the provider list the server reports, and every call.
+const FAKE_OPENCODE_CLI=String.raw`
+import { readFileSync, writeFileSync } from "node:fs";
+import http from "node:http";
+const file=process.env.FAKE_OPENCODE_STATE,state=JSON.parse(readFileSync(file,"utf8")),save=()=>writeFileSync(file,JSON.stringify(state));
+const args=process.argv.slice(2);state.calls.push(["opencode",...args]);save();
+if(args[0]==="--version"){process.stdout.write(state.version+"\n");process.exit(0)}
+if(args[0]==="upgrade"){state.version=args[1];save();process.stdout.write("upgraded\n");process.exit(0)}
+if(args[0]!=="serve")process.exit(1);
+if(state.serveFails){process.stderr.write("config is broken\n");process.exit(2)}
+const port=Number((args.find(arg=>arg.startsWith("--port="))||"").slice(7)),json=(res,value)=>{res.writeHead(200,{"content-type":"application/json"});res.end(JSON.stringify(value))};
+http.createServer((req,res)=>{
+  const path=new URL(req.url,"http://127.0.0.1").pathname;
+  if(path==="/provider")return json(res,state.providers);
+  if(path==="/config"||path==="/skill")return json(res,path==="/config"?{}:[]);
+  if(path==="/command")return json(res,[{name:"init"}]);
+  if(path==="/agent")return json(res,[{name:"build",mode:"primary"},{name:"general",mode:"subagent"}]);
+  if(path==="/instance/dispose")return json(res,true);
+  res.writeHead(404);res.end();
+}).listen(port,"127.0.0.1",()=>process.stdout.write("opencode server listening on http://127.0.0.1:"+port+"\n"));
+`;
+const FAKE_NPM=String.raw`
+import { readFileSync, writeFileSync } from "node:fs";
+const file=process.env.FAKE_OPENCODE_STATE,state=JSON.parse(readFileSync(file,"utf8")),args=process.argv.slice(2);
+state.calls.push(["npm",...args]);
+if(args[0]==="--version")process.stdout.write("11.0.0\n");
+else if(args[0]==="view")process.stdout.write(JSON.stringify(state.latest)+"\n");
+else if(args[0]==="install")state.version=args.at(-1).split("@").at(-1);
+writeFileSync(file,JSON.stringify(state));
+`;
+const FIXTURE_PROVIDERS={connected:["opencode","openai"],default:{opencode:"muse"},all:[{id:"opencode",name:"OpenCode Zen",models:{muse:{id:"muse",name:"Muse"}}},{id:"openai",name:"OpenAI",models:{gpt:{id:"gpt",name:"GPT"}}}]};
+async function openCodeCliFixture(root,{version="1.18.30",latest="1.18.35"}={}){
+  const scripts=join(root,"scripts");await mkdir(scripts,{recursive:true});
+  await writeFile(join(scripts,"opencode.mjs"),FAKE_OPENCODE_CLI,"utf8");await writeFile(join(scripts,"npm.mjs"),FAKE_NPM,"utf8");
+  const statePath=join(root,"state.json"),write=value=>writeFile(statePath,JSON.stringify(value),"utf8");
+  await write({version,latest,providers:FIXTURE_PROVIDERS,calls:[]});
+  const launcher=async(path,script)=>{await mkdir(join(path,".."),{recursive:true});await writeFile(path,["@echo off",`"${process.execPath}" "${join(scripts,script)}" %*`,""].join("\r\n"),"utf8")};
+  const bin=join(root,"bin");await launcher(join(bin,"npm.cmd"),"npm.mjs");
+  const env={...process.env};for(const key of Object.keys(env))if(key.toUpperCase()==="PATH")delete env[key];
+  env.PATH=bin+";"+(process.env.PATH||"");env.TREBELL_HOME=join(root,"home");env.FAKE_OPENCODE_STATE=statePath;env.XDG_STATE_HOME=join(root,"xdg-state");
+  return {env,launcher,read:async()=>JSON.parse(await readFile(statePath,"utf8")),update:async patch=>write({...JSON.parse(await readFile(statePath,"utf8")),...patch})};
+}
+const WINDOWS_ONLY={skip:process.platform!=="win32"&&"runs Windows command launchers"};
+
+test("a local OpenCode's status counts the providers its own server connects, once per binary and version",WINDOWS_ONLY,async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-opencode-status-"));
+  try{
+    const fixture=await openCodeCliFixture(root),binary=join(root,"oc","opencode.cmd");await fixture.launcher(binary,"opencode.mjs");
+    const manager=new AgentRuntimeManager({state:new TrebellStateStore(fixture.env),env:fixture.env,platform:"win32"});
+    manager.upsertInstance({id:"opencode-default",kind:"opencode",binaryPath:binary,approvedEnvironmentKeys:["FAKE_OPENCODE_STATE","XDG_STATE_HOME"]});
+    const serves=async()=>(await fixture.read()).calls.filter(call=>call[1]==="serve").length;
+    const status=await manager.probe("opencode");
+    assert.deepEqual({available:status.available,authenticated:status.authenticated,account:status.account,message:status.message},{available:true,authenticated:true,account:{connectedProviders:2},message:"OpenCode is ready, listing models from the 2 providers it is connected to."});
+    // Thread starts check the status again; they reuse that read, and a model list right after it does too.
+    await manager.probe("opencode");
+    const listed=await manager.models("opencode");
+    assert.equal(await serves(),1);
+    assert.deepEqual(listed.models,["opencode/muse","openai/gpt"]);assert.deepEqual(listed.metadata.map(item=>item.name),["Muse","GPT"]);
+    assert.deepEqual({commands:listed.inventory.commands.map(item=>item.name),agents:listed.inventory.agents.map(item=>item.name)},{commands:["init"],agents:["build"]});
+    assert.equal((await fixture.read()).calls.some(call=>call[1]==="auth"),false,"the provider count comes from OpenCode's server, not its credential list");
+    // This fixture implements the 1.x HTTP surface only. OpenCode 2.x protocol coverage is exercised by its dedicated adapter and live tour.
+    assert.equal(harnessReleaseSupport("opencode","opencode v2.0.24").status,"supported");
+    // A server that cannot start makes OpenCode unavailable, with its reason.
+    await fixture.update({version:"1.18.31",serveFails:true});
+    const broken=await manager.probe("opencode",{fresh:true});
+    assert.equal(broken.available,false);assert.match(broken.message,/^OpenCode could not list its providers: OpenCode server exited with code 2\. config is broken/);
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200})}
+});
+
+test("updating npm's global opencode-ai installs into the prefix that holds the binary Trebell runs",WINDOWS_ONLY,async()=>{
+  const root=await mkdtemp(join(tmpdir(),"trebell-opencode-npm-"));
+  try{
+    const fixture=await openCodeCliFixture(root),prefix=join(root,"npm"),binary=join(prefix,"node_modules","opencode-ai","bin","opencode.cmd");
+    await fixture.launcher(binary,"opencode.mjs");await writeFile(join(prefix,"opencode.cmd"),npmShim("node_modules\\opencode-ai\\bin\\opencode.exe"),"utf8");
+    const manager=new AgentRuntimeManager({state:new TrebellStateStore(fixture.env),env:fixture.env,platform:"win32"});
+    manager.upsertInstance({id:"opencode-default",kind:"opencode",binaryPath:binary,approvedEnvironmentKeys:["FAKE_OPENCODE_STATE","XDG_STATE_HOME"]});
+    const plan=await manager.openCodeInstallPlan();
+    assert.deepEqual({method:plan.method,installedVersion:plan.installedVersion,targetVersion:plan.targetVersion,command:plan.command,args:plan.args},{method:"npm",installedVersion:"1.18.30",targetVersion:"1.18.35",command:"npm",args:["install","-g","--prefix",realpathSync(prefix),"--allow-scripts=opencode-ai","opencode-ai@1.18.35"]});
+    const installed=await manager.install("opencode");
+    assert.equal(installed.status.version,"1.18.35");assert.equal(installed.status.message,"OpenCode is ready, listing models from the 2 providers it is connected to.");
+    // An OpenCode Trebell cannot tell who installed is left alone.
+    const custom=join(root,"custom","opencode.cmd");await fixture.launcher(custom,"opencode.mjs");
+    manager.upsertInstance({id:"opencode-default",kind:"opencode",binaryPath:custom,approvedEnvironmentKeys:["FAKE_OPENCODE_STATE","XDG_STATE_HOME"]});
+    await fixture.update({calls:[]});
+    await assert.rejects(()=>manager.install("opencode"),/cannot tell what installed .*custom.*opencode\.cmd: update it the way you installed it\. Nothing was installed\.$/);
+    assert.deepEqual((await fixture.read()).calls,[["opencode","--version"]]);
+    // Once OpenCode 2.x (@opencode/cli) holds the prefix's opencode command, npm would refuse to replace it: Trebell runs no npm.
+    manager.upsertInstance({id:"opencode-default",kind:"opencode",binaryPath:binary,approvedEnvironmentKeys:["FAKE_OPENCODE_STATE","XDG_STATE_HOME"]});
+    await writeFile(join(prefix,"opencode.cmd"),npmShim("node_modules\\@opencode\\cli\\bin\\opencode.exe"),"utf8");await fixture.update({version:"1.18.30",calls:[]});
+    await assert.rejects(()=>manager.install("opencode"),/^Error: npm cannot update opencode-ai in .*npm: the opencode command there runs @opencode\/cli, and npm does not replace another package's command\. Trebell Code changes neither install\./);
+    assert.deepEqual((await fixture.read()).calls,[["opencode","--version"]]);
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200})}
+});
+
+test("an OpenCode from its own installer updates with opencode upgrade to the newest 1.x release",WINDOWS_ONLY,async()=>{
+  // OpenCode's installer puts its binary in ~/.opencode/bin on macOS and Linux; the launcher stands in for that binary.
+  const root=await mkdtemp(join(tmpdir(),"trebell-opencode-native-"));
+  try{
+    const fixture=await openCodeCliFixture(root),binary=join(root,"home-dir",".opencode","bin","opencode");
+    await fixture.launcher(binary+".cmd","opencode.mjs");await writeFile(binary,"","utf8");
+    const fetched=[];
+    const fetchImpl=async url=>{fetched.push(String(url));return new Response(JSON.stringify({name:"opencode-ai",version:"1.18.40"}),{status:200,headers:{"content-type":"application/json"}})};
+    const manager=new AgentRuntimeManager({state:new TrebellStateStore(fixture.env),env:fixture.env,platform:"linux",fetchImpl});
+    manager.upsertInstance({id:"opencode-default",kind:"opencode",binaryPath:binary,approvedEnvironmentKeys:["FAKE_OPENCODE_STATE","XDG_STATE_HOME"]});
+    const installed=await manager.install("opencode");
+    assert.equal(installed.method,"native");assert.equal(installed.targetVersion,"1.18.40");assert.equal(installed.status.version,"1.18.40");
+    assert.deepEqual(fetched,["https://registry.npmjs.org/opencode-ai/latest"]);
+    const calls=(await fixture.read()).calls;
+    assert.deepEqual(calls.find(call=>call[1]==="upgrade"),["opencode","upgrade","1.18.40"]);
+    assert.equal(calls.some(call=>call[0]==="npm"),false,"OpenCode's own installer needs no npm");
+  }finally{await rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:200})}
+});
+
+test("a host's Cursor, Grok and OpenCode usage reads no variable or file there and calls no one",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-remote-usage-"));const env={...process.env,TREBELL_HOME:home};
+  try{
+    const state=new TrebellStateStore(env);state.updateSettings({activeEnvironmentId:"ssh-usage",agentRuntime:"cursor",agentRuntimeInstanceId:"cursor-default"});
+    const calls=[];
+    const encoded=value=>Buffer.from(value,"utf8").toString("base64");
+    const environments={
+      get:id=>id==="ssh-usage"?{id,name:"Remote usage",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(id,{command,args})=>{
+        calls.push({id,command,args:[...args]});
+        if(command==="uname")return {exitCode:0,stdout:"Linux\n",stderr:""};
+        if(command==="sh")return {exitCode:0,stdout:"HOME="+encoded("/home/dev")+"\nCURSOR_AUTH_TOKEN="+encoded("remote-private-token")+"\n",stderr:""};
+        return {exitCode:1,stdout:"",stderr:"not found"};
+      },
+    };
+    let fetched=0;
+    const manager=new AgentRuntimeManager({state,env,environments,fetchImpl:async()=>{fetched++;return new Response("{}",{status:200})}});
+    for(const kind of ["cursor","grok","opencode"]){
+      const limits=await manager.usageLimits(kind);
+      assert.deepEqual(limits.windows,[]);assert.equal(limits.unavailable.reason,"unsupported");assert.match(limits.unavailable.message,/never reads the sign-in/);
+    }
+    assert.equal(fetched,0);assert.deepEqual(calls,[]);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("provider auth probes distinguish authenticated, unauthenticated and unknown CLI states",()=>{
+  assert.deepEqual(parseCursorAboutResult({stdout:JSON.stringify({cliVersion:"2026.03",userEmail:"dev@example.test"}),stderr:"",code:0}),{authenticated:true,email:"dev@example.test"});
+  assert.deepEqual(parseCursorAboutResult({stdout:JSON.stringify({cliVersion:"2026.03",userEmail:null}),stderr:"",code:0}),{authenticated:false,email:null});
+  assert.deepEqual(parseCursorAboutResult({stdout:"CLI Version 2026.03\nUser Email          Not logged in\n",stderr:"",code:0}),{authenticated:false,email:null});
+  assert.equal(parseGrokModelsAuth("You are logged in\n- grok-4.6 (default)"),true);
+  assert.equal(parseGrokModelsAuth("Not authenticated. Run grok login."),false);
+  assert.equal(parseGrokModelsAuth("- grok-4.6"),null);
+  assert.deepEqual(parseOpenCodeAuthList("— 0 credentials\n— 2 environment variables\n"),{connected:2,authenticated:true});
+  assert.deepEqual(parseOpenCodeAuthList("— 0 credentials\n— 0 environment variables\n"),{connected:0,authenticated:null});
+});
+
+test("Grok Build's sign-in reads its wording as written, through colours, with the signed-in line first",()=>{
+  for(const [said,signedIn] of [
+    ["\x1b[1;32mYou are logged in\x1b[0m with grok.com.\n",true],
+    ["You are \x1b[1mlogged\x1b[22m in.\n",true],
+    ["\x1b[31mYou are not authenticated.\x1b[0m\n",false],
+    ["\x1b[2KNot logged \x1b[33min\x1b[0m. Run grok login.\n",false],
+    ["YOU ARE LOGGED IN\n",true],
+    ["not logged in\nYou are logged in with grok.com.\n",true],
+    ["You are logged in\nNot authenticated for team models\n",true],
+    ["You are not logged in. Run grok login.\n",false],
+    ["You are logged out.\n",null],
+    ["you are  logged in\n",null],
+    ["not\nauthenticated\n",null],
+    ["You are logged \u0130n\n",null],
+    ["Not logged \u0130n\n",null],
+    ["",null],
+    [undefined,null],
+    [null,null],
+  ])assert.equal(parseGrokModelsAuth(said),signedIn,JSON.stringify(said));
+});
+
+test("a local harness's version check is kept until its binary changes, and a fresh probe checks it again",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-probe-version-")),binary=join(home,"grok");
+  try{
+    await writeFile(binary,"build 1");
+    const calls=[];let clock=0;
+    const runFn=async(_command,args)=>{calls.push(args[0]);return {ok:true,code:0,error:null,stdout:args[0]==="models"?"You are logged in\n":"grok 1.2.0\n",stderr:""}};
+    const state={settings:()=>({agentRuntimeInstances:[{id:"grok-default",kind:"grok",binaryPath:binary}]})};
+    const manager=new AgentRuntimeManager({state,platform:"linux",env:{PATH:"/usr/bin",HOME:home},now:()=>clock,runFn});
+    assert.equal((await manager.probe("grok")).version,"grok 1.2.0");
+    clock+=61_000;await manager.probe("grok");
+    assert.deepEqual(calls,["--version","models","models"],"a minute later only the sign-in check runs again");
+    await writeFile(binary,"build 2, a newer one");clock+=61_000;await manager.probe("grok");
+    await manager.probe("grok",{fresh:true});
+    assert.deepEqual(calls,["--version","models","models","--version","models","--version","models"]);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+// npm i -g or the harness's own updater replaces the binary; Settings polls /api/runtime every 5 s, which probes without fresh.
+test("a probe answer is asked again once the local binary changes, so a harness upgraded outside Trebell shows its new version",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-probe-upgrade-")),binary=join(home,"grok");
+  try{
+    await writeFile(binary,"build 1");
+    const calls=[];let clock=0,version="grok 1.2.0";
+    const runFn=async(_command,args)=>{calls.push(args[0]);return {ok:true,code:0,error:null,stdout:args[0]==="models"?"You are logged in\n":version+"\n",stderr:""}};
+    const state={settings:()=>({agentRuntimeInstances:[{id:"grok-default",kind:"grok",binaryPath:binary}]})};
+    const manager=new AgentRuntimeManager({state,platform:"linux",env:{PATH:"/usr/bin",HOME:home},now:()=>clock,runFn});
+    assert.equal((await manager.probe("grok")).version,"grok 1.2.0");
+    clock+=5000;await manager.probe("grok");assert.deepEqual(calls,["--version","models"],"an unchanged binary's answer is reused");
+    await writeFile(binary,"build 2, a newer one");version="grok 1.3.0";clock+=5000;
+    assert.equal((await manager.probe("grok")).version,"grok 1.3.0");
+    clock+=5000;await manager.probe("grok");
+    assert.deepEqual(calls,["--version","models","--version","models"],"the new binary's answer is reused in turn");
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// The relay probes before it starts a harness session (ensureSession) and refuses the chat on an answer that cannot run, with the
+// harness's own advice ("Run `claude auth login` and try again"); that answer must not outlive a sign-in the person then makes.
+function claudeSignIn(){
+  const auth={signedIn:false,hold:null},launches=[];
+  const profile={id:"ssh-sign-in",type:"ssh",cwd:"/srv/app"};
+  const environments={
+    get:id=>id===profile.id?profile:null,
+    // The sign-in state is read as the check starts; hold keeps that check running.
+    executeArgv:async(_id,{args})=>{launches.push(args.join(" "));if(args[0]!=="auth")return {exitCode:0,stdout:"2.1.0 (Claude Code)\n",stderr:""};const loggedIn=auth.signedIn;await auth.hold;return {exitCode:0,stdout:JSON.stringify({loggedIn}),stderr:""}},
+    spawnArgv:()=>{throw new Error("not used")},
+  };
+  const manager=new AgentRuntimeManager({state:{settings:()=>({activeEnvironmentId:profile.id,agentRuntime:"claude"})},environments,platform:"linux",env:{PATH:"/usr/bin",HOME:"/home/test"}});
+  return {auth,launches,manager,chatStart:()=>manager.probe(manager.instances().find(item=>item.kind==="claude"),{environmentId:profile.id})};
+}
+test("a probe that finds the harness unable to run is asked again, so a chat started after a sign-in outside Trebell starts",async()=>{
+  const {auth,launches,manager,chatStart}=claudeSignIn();
+  // Settings' poll or the bootstrap finds Claude Code signed out; the person runs `claude auth login` in a terminal of their own.
+  assert.equal((await manager.probe("claude")).available,false);
+  auth.signedIn=true;
+  const status=await chatStart();assert.equal(status.available,true,"the chat start was refused: "+status.message);
+  // A ready answer is reused, as before.
+  const asked=launches.length;await chatStart();await manager.probe("claude");assert.equal(launches.length,asked);
+});
+test("a chat start that joins a running probe asks again when that probe finds the harness unable to run",async()=>{
+  const {auth,launches,manager,chatStart}=claudeSignIn();let release;auth.hold=new Promise(resolve=>{release=resolve});
+  // The poll's check began before the sign-in finished; the chat starts while it still runs.
+  const polled=manager.probe("claude");await new Promise(resolve=>setImmediate(resolve));
+  auth.signedIn=true;const started=chatStart(),again=chatStart();
+  auth.hold=null;release();
+  assert.equal((await polled).available,false,"the poll keeps its own answer");
+  assert.equal((await started).available,true);assert.equal((await again).available,true);
+  assert.equal(launches.filter(line=>line==="auth status").length,2,"the two chat starts share one check made after they asked");
+});
+// OpenCode with no provider connected still runs (authenticated null), as Cursor or Grok do when Trebell cannot read their sign-in.
+// The person then signs in with the harness's own CLI in a terminal of their own (`opencode auth login`, `grok login`), and Settings'
+// next 5-s poll probes without fresh.
+test("a probe that finds no sign-in is asked again, so a provider connected outside Trebell shows at the next poll",async()=>{
+  const auth={credentials:0,grok:"- grok-4.6\n"},launches=[];
+  const profile={id:"ssh-no-sign-in",type:"ssh",cwd:"/srv/app"};
+  const environments={
+    get:id=>id===profile.id?profile:null,
+    executeArgv:async(_id,{command,args})=>{
+      launches.push(command+" "+args[0]);
+      if(args[0]==="--version")return {exitCode:0,stdout:"1.20.0\n",stderr:""};
+      if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"— "+auth.credentials+" credentials\n— 0 environment variables\n",stderr:""};
+      if(command==="grok"&&args[0]==="models")return {exitCode:0,stdout:auth.grok,stderr:""};
+      return {exitCode:1,stdout:"",stderr:"unexpected command"};
+    },
+    spawnArgv:()=>{throw new Error("not used")},
+  };
+  const manager=new AgentRuntimeManager({state:{settings:()=>({activeEnvironmentId:profile.id})},environments,platform:"linux",env:{PATH:"/usr/bin",HOME:"/home/test"}});
+  const before=await manager.probe("opencode");
+  assert.deepEqual([before.available,before.authenticated,before.account?.connectedProviders],[true,null,0],"no credentials yet");
+  auth.credentials=1;
+  const poll=await manager.probe("opencode");
+  assert.deepEqual([poll.authenticated,poll.account?.connectedProviders,poll.message],[true,1,"OpenCode has 1 connected credential source."]);
+  assert.equal((await manager.probe("grok")).authenticated,null,"Grok's sign-in cannot be read yet");
+  auth.grok="You are logged in\n- grok-4.6\n";
+  assert.equal((await manager.probe("grok")).authenticated,true);
+  // A signed-in answer is reused, as before.
+  const asked=launches.length;await manager.probe("opencode");await manager.probe("grok");assert.equal(launches.length,asked);
+});
+
+test("runtime auth commands use the provider's real interactive CLI flow",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-auth-command-"));const env={...process.env,TREBELL_HOME:home};
+  try{
+    const state=new TrebellStateStore(env);const manager=new AgentRuntimeManager({state,env,platform:"linux"});
+    assert.deepEqual(manager.authCommand("claude"),{runtime:"claude",instanceId:"claude-default",name:"Claude Code",command:"claude",args:["auth","login"]});
+    assert.deepEqual(manager.authCommand("cursor"),{runtime:"cursor",instanceId:"cursor-default",name:"Cursor",command:"cursor-agent",args:["login"]});
+    assert.deepEqual(manager.authCommand("grok"),{runtime:"grok",instanceId:"grok-default",name:"Grok Build",command:"grok",args:["login"]});
+    assert.deepEqual(manager.authCommand("opencode"),{runtime:"opencode",instanceId:"opencode-default",name:"OpenCode",command:"opencode",args:["auth","login"]});
+    const codexAuth=manager.authCommand("codex");
+    assert.equal(codexAuth.runtime,"codex");assert.equal(codexAuth.instanceId,"codex-default");assert.equal(codexAuth.name,"Codex");assert.deepEqual(codexAuth.args,["login"]);assert.ok(codexAuth.command);
+    const external=manager.upsertInstance({id:"opencode-external",kind:"opencode",serverUrl:"https://opencode.example.test"});
+    assert.throws(()=>manager.authCommand(external),/external server/i);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// Codex's sign-in writes its auth.json into the profile's home: one typed as ~name/... for a user this machine does not have was a
+// folder named ~name where Trebell runs. The sign-in is refused before its terminal opens; on an SSH or WSL host that home is the
+// host's to expand (environment-app-server), so a sign-in there is not refused here.
+test("a local Codex sign-in for a profile whose home is under a user this machine does not have is refused with a message",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-auth-named-home-"));const env={...process.env,TREBELL_HOME:home};
+  try{
+    const state=new TrebellStateStore(env);
+    const environments={get:id=>id==="ssh-named"?{id,name:"Named SSH",type:"ssh",host:"example.test",cwd:"/srv/app"}:null};
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const shared=manager.upsertInstance({id:"codex-named-home",kind:"codex",homePath:"~trebell-no-such-user-7f3a/.codex"});
+    const shadowed=manager.upsertInstance({id:"codex-named-shadow",kind:"codex",homePath:join(home,"codex-shared"),shadowHomePath:"~trebell-no-such-user-7f3a/.codex-work"});
+    assert.throws(()=>manager.authCommand(shared),{message:"Trebell could not find the home folder of the user trebell-no-such-user-7f3a on this machine, so it cannot use ~trebell-no-such-user-7f3a/.codex."});
+    assert.throws(()=>manager.authCommand(shadowed),{message:"Trebell could not find the home folder of the user trebell-no-such-user-7f3a on this machine, so it cannot use ~trebell-no-such-user-7f3a/.codex-work."});
+    assert.deepEqual(manager.authCommand(shared,{environmentId:"ssh-named"}).args,["login"]);
+    // Nothing else about the profile fails for it: its continuation key and child environment are read as before.
+    assert.equal(typeof manager.continuationKey(shared),"string");
+    assert.ok(manager.compatibleInstanceIds(shared).includes(shared.id));
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("remote runtime probes use provider-native auth status without treating unknown as signed out",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-auth-"));const env={...process.env,TREBELL_HOME:home};
+  try{
+    const state=new TrebellStateStore(env);state.updateSettings({activeEnvironmentId:"ssh-auth"});
+    let cursorLoggedIn=false,grokLoggedIn=false,claudeAuth=null;
+    const environments={
+      get:id=>id==="ssh-auth"?{id,name:"Auth SSH",type:"ssh",cwd:"/srv/app"}:null,
+      executeArgv:async(_id,{command,args})=>{
+        if(args[0]==="--version")return {exitCode:0,stdout:"1.20.0\n",stderr:""};
+        // claudeAuth null: `claude auth status` printed nothing before its 8 s ran out (load, a slow link).
+        if(command==="claude"&&args[0]==="auth")return claudeAuth?{exitCode:claudeAuth.loggedIn?0:1,stdout:JSON.stringify(claudeAuth),stderr:""}:{exitCode:null,timedOut:true,stdout:"",stderr:""};
+        if(command==="cursor-agent"&&args[0]==="about")return {exitCode:0,stdout:JSON.stringify({userEmail:cursorLoggedIn?"dev@example.test":null}),stderr:""};
+        if(command==="grok"&&args[0]==="models")return {exitCode:0,stdout:grokLoggedIn?"You are logged in\n- grok-4.6\n":"Not logged in\n",stderr:""};
+        if(command==="opencode"&&args[0]==="auth")return {exitCode:0,stdout:"— 0 credentials\n— 0 environment variables\n",stderr:""};
+        return {exitCode:1,stdout:"",stderr:"unexpected command"};
+      },
+    };
+    const manager=new AgentRuntimeManager({state,env,environments});
+    const cursorSignedOut=await manager.probe("cursor");assert.equal(cursorSignedOut.authenticated,false);assert.equal(cursorSignedOut.available,false);
+    // After a sign-in Settings checks again; a probe answer is otherwise reused for a minute.
+    cursorLoggedIn=true;const cursorReady=await manager.probe("cursor",{fresh:true});assert.equal(cursorReady.authenticated,true);assert.equal(cursorReady.available,true);assert.equal(cursorReady.account.email,"dev@example.test");
+    const grokSignedOut=await manager.probe("grok");assert.equal(grokSignedOut.authenticated,false);assert.equal(grokSignedOut.available,false);
+    grokLoggedIn=true;assert.equal((await manager.probe("grok",{fresh:true})).authenticated,true);
+    const openCode=await manager.probe("opencode");assert.equal(openCode.authenticated,null);assert.equal(openCode.available,true);assert.equal(openCode.account.connectedProviders,0);
+    // A Claude Code sign-in check that did not answer is unknown, never a sign-out, and is not kept: the next probe reads the answer.
+    const claudeUnknown=await manager.probe("claude");
+    assert.deepEqual([claudeUnknown.available,claudeUnknown.authenticated,claudeUnknown.message],[true,null,"Claude Code is installed, but Trebell could not verify its authentication status."]);
+    claudeAuth={loggedIn:false};const claudeSignedOut=await manager.probe("claude");
+    assert.deepEqual([claudeSignedOut.available,claudeSignedOut.authenticated,claudeSignedOut.message],[false,false,"Claude Code has no account signed in. Run `claude auth login`, then try again."]);
+    claudeAuth={loggedIn:true};assert.equal((await manager.probe("claude")).authenticated,true);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// A `codex app-server` on stdio as a signed-in host runs it: it answers initialize and account/read, and exits once its input ends
+// or it is killed.
+function signedInCodexAppServer(){
+  const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
+  let buffer="",exited=false;
+  child.stdin.on("data",chunk=>{
+    buffer+=chunk;
+    for(let at=buffer.indexOf("\n");at>=0;at=buffer.indexOf("\n")){
+      const message=JSON.parse(buffer.slice(0,at));buffer=buffer.slice(at+1);
+      if(message.id===undefined)continue;
+      const result=message.method==="initialize"?{userAgent:"codex_cli_rs/0.0.0"}:message.method==="account/read"?{account:{type:"chatgpt",planType:"plus"},requiresOpenaiAuth:true}:{};
+      child.stdout.write(JSON.stringify({id:message.id,result})+"\n");
+    }
+  });
+  child.kill=()=>{if(exited)return;exited=true;setImmediate(()=>child.emit("exit",0,null))};
+  child.stdin.on("finish",()=>child.kill());
+  return child;
+}
+
+// A remote Codex profile's account check runs in the profile's home (its own CODEX_HOME or its shadow home, set up there first by
+// remoteCodexHomeSetup), so the ready answer it keeps for a minute is that home's: the same profile with another home asks the host
+// again, and the same home answers from the kept one. Kept under the profile alone, the old home's sign-in showed for up to a minute
+// after the home changed in Settings.
+test("a remote Codex account check's kept answer is its home's: another home asks the host again, the same home answers from it",async()=>{
+  const profile={id:"ssh-codex",name:"Build box",type:"ssh",cwd:"/srv/app"},checks=[];
+  const environments={
+    get:id=>id===profile.id?profile:null,
+    executeArgv:async(_id,{args})=>args[0]==="--version"?{exitCode:0,stdout:"codex-cli 0.0.0\n",stderr:""}:{exitCode:1,stdout:"",stderr:"unexpected command"},
+    // Each account check, with the home lines the host runs before it.
+    spawnArgv:(_id,options)=>{checks.push(options.prelude||"");return signedInCodexAppServer()},
+  };
+  const manager=new AgentRuntimeManager({state:{settings:()=>({activeEnvironmentId:profile.id})},environments,platform:"linux",env:{PATH:"/usr/bin",HOME:"/home/test"}});
+  const own={id:"codex-remote",kind:"codex",displayName:"Codex",homePath:"~/.codex-own"},moved={...own,homePath:"~/.codex-moved"};
+  // Each probe is fresh, as Settings' listing asks, so each one reads the account: from the host, or from a ready answer kept for
+  // the same home.
+  for(const instance of [own,own,moved,moved,own]){
+    const status=await manager.probe(instance,{environmentId:profile.id,fresh:true});
+    assert.deepEqual([status.available,status.authenticated,status.message],[true,true,"Signed in with ChatGPT Plus"]);
+  }
+  assert.deepEqual(checks,[remoteCodexHomeSetup(own),remoteCodexHomeSetup(moved)]);
+  assert.match(checks[1],/\.codex-moved/);
+});
+
+// Antigravity is the one harness offered the client's files; no harness is offered its terminal.
+test("ACP agent session serves Antigravity bounded client files end to end and refuses the terminal it does not offer", async () => {
+  const root=await mkdtemp(join(tmpdir(),"trebell-acp-session-"));
+  const fixture=join(root,"fake-acp.mjs");
+  const input=join(root,"input.txt");
+  const output=join(root,"output.txt");
+  const mcpPayload=join(root,"mcp.json");
+  await writeFile(input,"INPUT_OK","utf8");
+  await writeFile(fixture,String.raw`
+import readline from "node:readline";
+import { writeFile } from "node:fs/promises";
+let next=1000; const pending=new Map(); let sessionId="fixture-session";
+function send(x){process.stdout.write(JSON.stringify(x)+"\n")}
+function request(method,params){const id="s"+(next++);send({jsonrpc:"2.0",id,method,params});return new Promise((resolve,reject)=>pending.set(id,{resolve,reject}))}
+async function handle(m){
+  if(m.id!=null&&!m.method&&pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);m.error?p.reject(new Error(m.error.message)):p.resolve(m.result);return}
+  if(!m.method||m.id==null)return;
+  if(m.method==="initialize")return send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:1,agentInfo:{name:"fixture",version:"1"},agentCapabilities:{loadSession:true,sessionCapabilities:{resume:{},close:{}}}}});
+  if(m.method==="session/new"||m.method==="session/resume"||m.method==="session/load"){await writeFile(${JSON.stringify(mcpPayload)},JSON.stringify(m.params.mcpServers||[]));return send({jsonrpc:"2.0",id:m.id,result:{sessionId,models:{currentModelId:"fake-model",availableModels:[{modelId:"fake-model",name:"Fake"}]},configOptions:[],modes:{currentModeId:"build",availableModes:[]}}})}
+  if(m.method==="session/set_model")return send({jsonrpc:"2.0",id:m.id,result:{}});
+  if(m.method==="session/close")return send({jsonrpc:"2.0",id:m.id,result:{}});
+  if(m.method==="session/prompt"){
+    const read=await request("fs/read_text_file",{sessionId,path:${JSON.stringify(input)}});
+    await request("fs/write_text_file",{sessionId,path:${JSON.stringify(output)},content:"READ:"+read.content});
+    let terminal="TERM_RAN";try{await request("terminal/create",{sessionId,command:process.execPath,args:["-e","process.stdout.write('TERM_OK')"],cwd:${JSON.stringify(root)},env:[]})}catch(error){terminal="TERM_REFUSED:"+error.message}
+    send({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:{sessionUpdate:"tool_call",toolCallId:"tool-1",title:"Fixture command",kind:"execute",status:"completed",rawOutput:terminal}}});
+    send({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:{sessionUpdate:"usage_update",used:12,size:128}}});
+    send({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"FAKE_OK"}}}});
+    return send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});
+  }
+}
+readline.createInterface({input:process.stdin,crlfDelay:Infinity}).on("line",line=>{try{handle(JSON.parse(line)).catch(e=>send({jsonrpc:"2.0",id:null,error:{code:-32603,message:e.message}}))}catch{}});
+`,"utf8");
+  const updates=[];
+  const session=new AcpAgentSession({runtime:"antigravity",command:process.execPath,args:[fixture],cwd:root,permissionMode:"full",onUpdate:update=>updates.push(update),mcpServers:[{name:"Fixture tools",command:"/opt/fixture-mcp",args:["--stdio"],env:[{name:"TOKEN",value:"secret"}]}]});
+  try{
+    const started=await session.start({model:"fake-model"});
+    assert.equal(started.session.sessionId,"fixture-session");
+    assert.deepEqual(JSON.parse(await readFile(mcpPayload,"utf8")),[{name:"Fixture tools",command:"/opt/fixture-mcp",args:["--stdio"],env:[{name:"TOKEN",value:"secret"}]}]);
+    const result=await session.prompt([{type:"text",text:"run"}]);
+    assert.equal(result.stopReason,"end_turn");
+    assert.equal(await readFile(output,"utf8"),"READ:INPUT_OK");
+    assert.ok(updates.some(item=>item.update?.sessionUpdate==="agent_message_chunk"&&item.update.content?.text==="FAKE_OK"));
+    assert.ok(updates.some(item=>item.update?.sessionUpdate==="tool_call"&&String(item.update.rawOutput||"").startsWith("TERM_REFUSED:")),"terminal/create is refused");
+    assert.ok(updates.some(item=>item.update?.sessionUpdate==="usage_update"&&item.update.used===12));
+    await assert.rejects(()=>session.client.request("fs/read_text_file",{sessionId:"fixture-session",path:join(root,"..","escape.txt")},1000));
+  }finally{
+    await session.close().catch(()=>{});
+    await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+test("external active turns become queued restart recoveries only when enabled", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-recovery-"));
+  const env={...process.env,TREBELL_HOME:home};
+  try{
+    const first=new AgentThreadStore(env);const thread=first.create({runtime:"opencode",cwd:home,providerSessionId:"ses_saved",model:"fixture/model"});const turn=first.addTurn(thread.id,{inputText:"Keep working"});
+    const restarted=new AgentThreadStore(env);const recovered=restarted.reconcileRestart({continueAfterRestart:true});
+    assert.deepEqual(recovered.map(item=>item.threadId),[thread.id]);
+    const pending=restarted.get(thread.id);assert.equal(pending.recovery?.pending,true);assert.equal(pending.recovery?.turnId,turn.id);assert.equal(pending.turns[0].status,"interrupted");assert.equal(pending.status.type,"idle");
+    const resumed=restarted.restartTurn(thread.id,turn.id);assert.equal(resumed.status,"inProgress");assert.equal(restarted.get(thread.id).status.type,"active");
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("restart recovery refuses to auto-repeat an unresolved tool action", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-uncertain-recovery-"));
+  const env={...process.env,TREBELL_HOME:home};
+  try{
+    const first=new AgentThreadStore(env);const thread=first.create({runtime:"native",cwd:home,providerSessionId:"native-saved",model:"fixture/model"});const turn=first.addTurn(thread.id,{inputText:"Deploy the change"});
+    first.addItem(thread.id,turn.id,{type:"dynamicToolCall",id:"tool-1",namespace:"trebell_browser",tool:"click",arguments:{ref:"submit"},status:"inProgress"});
+    const restarted=new AgentThreadStore(env);assert.deepEqual(restarted.reconcileRestart({continueAfterRestart:true}),[]);
+    const blocked=restarted.get(thread.id);assert.equal(blocked.status.type,"systemError");assert.equal(blocked.turns[0].status,"interrupted");assert.equal(blocked.recovery?.pending,false);assert.equal(blocked.recovery?.blocked,true);assert.equal(blocked.recovery?.reason,"uncertain_tool_action");assert.equal(blocked.recovery?.uncertainTools?.[0]?.id,"tool-1");assert.equal(blocked.recovery?.uncertainTools?.[0]?.tool,"click");assert.match(blocked.turns[0].error?.message||"",/Inspect its real-world state before repeating/i);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+// A turn a Trebell restart ends after a crash or kill keeps no call pending, as a turn the relay stops or fails does (finishTurn): a
+// harness may run a call it calls pending (Antigravity's commands, Cursor's edits), so one cut off may have run and ends stopped, not as
+// a call its completed turn never started. It is still what blocks an automatic continuation, as it was pending when Trebell stopped.
+// Work that runs on past its turn (runsPastTurn) is left as it was, as the relay leaves it.
+test("a call still pending when Trebell restarts ends stopped with its turn, and still blocks the turn's automatic continuation", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-restart-pending-"));
+  const env={...process.env,TREBELL_HOME:home};
+  try{
+    const first=new AgentThreadStore(env);
+    const deploy=first.create({runtime:"antigravity",cwd:home,providerSessionId:"agy-saved",model:"fixture/model"}),deployTurn=first.addTurn(deploy.id,{inputText:"Deploy the docs"});
+    first.addItem(deploy.id,deployTurn.id,{type:"commandExecution",id:"deploy",command:"npm run deploy",cwd:"",processId:null,source:"agent",status:"pending",commandActions:[],aggregatedOutput:null,exitCode:null,durationMs:null});
+    first.addItem(deploy.id,deployTurn.id,{type:"dynamicToolCall",id:"agent",namespace:"agent",tool:"Workflow · alpha",arguments:{},status:"pending",runsPastTurn:true});
+    const notes=first.create({runtime:"cursor",cwd:home,providerSessionId:""}),notesTurn=first.addTurn(notes.id,{inputText:"Edit the notes"});
+    first.addItem(notes.id,notesTurn.id,{type:"fileChange",id:"read",status:"completed",changes:[{path:"todo.md",kind:"edit"}]});
+    first.addItem(notes.id,notesTurn.id,{type:"fileChange",id:"edit",status:"pending",changes:[{path:"notes.txt",kind:"edit"}]});
+    const restarted=new AgentThreadStore(env);assert.deepEqual(restarted.reconcileRestart({continueAfterRestart:true}),[]);
+    const statuses=id=>Object.fromEntries(restarted.get(id).turns[0].items.filter(item=>item.type!=="userMessage").map(item=>[item.id,item.status]));
+    const blocked=restarted.get(deploy.id);
+    assert.equal(blocked.turns[0].status,"interrupted");assert.equal(blocked.recovery?.blocked,true);
+    assert.deepEqual(blocked.recovery.uncertainTools.map(tool=>[tool.id,tool.status]),[["deploy","pending"],["agent","pending"]],"the calls pending when Trebell stopped block its continuation");
+    assert.deepEqual(statuses(deploy.id),{deploy:"stopped",agent:"pending"});
+    assert.equal(restarted.get(notes.id).turns[0].status,"failed");
+    assert.deepEqual(statuses(notes.id),{read:"completed",edit:"stopped"});
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("restart recovery still auto-resumes when all recorded tool actions are settled", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-settled-recovery-"));
+  const env={...process.env,TREBELL_HOME:home};
+  try{
+    const first=new AgentThreadStore(env);const thread=first.create({runtime:"opencode",cwd:home,providerSessionId:"ses-settled",model:"fixture/model"});const turn=first.addTurn(thread.id,{inputText:"Continue"});
+    first.addItem(thread.id,turn.id,{type:"dynamicToolCall",id:"tool-done",namespace:"trebell_repo",tool:"search_symbols",arguments:{query:"Session"},status:"completed",success:true});
+    const restarted=new AgentThreadStore(env);const recovered=restarted.reconcileRestart({continueAfterRestart:true});assert.deepEqual(recovered.map(item=>item.threadId),[thread.id]);assert.equal(restarted.get(thread.id).recovery?.pending,true);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});
+
+test("external active turns settle as interrupted errors when restart recovery is disabled", async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-agent-no-recovery-"));
+  const env={...process.env,TREBELL_HOME:home};
+  try{
+    const first=new AgentThreadStore(env);const thread=first.create({runtime:"claude",cwd:home,providerSessionId:"claude-session"});first.addTurn(thread.id,{inputText:"Do work"});
+    const restarted=new AgentThreadStore(env);assert.deepEqual(restarted.reconcileRestart({continueAfterRestart:false}),[]);
+    const settled=restarted.get(thread.id);assert.equal(settled.turns[0].status,"failed");assert.match(settled.turns[0].error?.message||"",/interrupted by a Trebell restart/i);assert.equal(settled.status.type,"systemError");assert.equal(settled.recovery,undefined);
+  }finally{await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250})}
+});

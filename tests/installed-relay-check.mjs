@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { WebSocket } from "ws";
+
+const packageVersion=JSON.parse(await readFile(new URL("../package.json",import.meta.url),"utf8")).version;
+
+const base=process.argv[2] || "http://127.0.0.1:3210";
+
+async function rpc(ws,id,method,params={}) {
+  return await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error(method+" timed out")),15000);
+    const handler=(data)=>{
+      let msg;
+      try{msg=JSON.parse(String(data));}catch{return;}
+      if(msg.id!==id) return;
+      clearTimeout(timer);
+      ws.off("message",handler);
+      if(msg.error) reject(new Error(msg.error.message||JSON.stringify(msg.error)));
+      else resolve(msg.result);
+    };
+    ws.on("message",handler);
+    ws.send(JSON.stringify({id,method,params}));
+  });
+}
+
+const boot=await fetch(base+"/api/bootstrap").then(r=>r.json());
+assert.equal(boot.version,packageVersion);
+assert.equal(boot.agentRuntime,"codex","packaged relay smoke must run against the deterministic Codex release profile");
+assert.equal(boot.appServerReady,true);
+assert.match(boot.wsUrl,/\/api\/codex\/ws$/);
+
+const ws=new WebSocket(boot.wsUrl,{origin:"http://trebell-installed-test.local"});
+try{
+  await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error("installed relay websocket did not open")),10000);
+    ws.once("open",()=>{clearTimeout(timer);resolve();});
+    ws.once("error",error=>{clearTimeout(timer);reject(error);});
+  });
+  await rpc(ws,1,"initialize",{
+    clientInfo:{name:"trebell-installed-test",title:"Trebell Installed Test",version:packageVersion},
+    capabilities:{experimentalApi:true},
+  });
+  ws.send(JSON.stringify({method:"initialized",params:{}}));
+  const threads=await rpc(ws,2,"thread/list",{limit:3,sortKey:"updated_at",sortDirection:"desc"});
+  assert.ok(Array.isArray(threads.data));
+
+  const result=await rpc(ws,3,"command/exec",{
+    command:["cmd.exe","/d","/s","/c","echo trebell-installed-relay-ok"],
+    timeoutMs:10000,
+    sandboxPolicy:{type:"dangerFullAccess"},
+  });
+  assert.equal(result.exitCode,0,JSON.stringify(result));
+  assert.match(result.stdout,/trebell-installed-relay-ok/i);
+  console.log("Installed Trebell relay + Codex command execution verified.");
+} finally {
+  ws.close();
+}

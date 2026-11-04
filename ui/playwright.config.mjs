@@ -1,0 +1,83 @@
+import { defineConfig } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { e2eHome } from "./e2e/test-home.js";
+
+const hostedBaseUrl=String(process.env.TREBELL_E2E_BASE_URL||"").trim();
+const browserChannel=String(process.env.TREBELL_E2E_BROWSER_CHANNEL||"").trim();
+const allowExternalNetwork=String(process.env.TREBELL_E2E_ALLOW_NETWORK||"").trim()==="1";
+const configuredPort=Number(process.env.TREBELL_E2E_PORT);
+// Ask the OS for a free loopback port. A random pick from a fixed range can land in a Windows excluded port
+// range (Hyper-V/WSL reservations), where binding fails and the whole suite stops before its first test.
+function freeLoopbackPort(){
+  const script="const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()})";
+  return Number(execFileSync(process.execPath,["-e",script],{encoding:"utf8",windowsHide:true}).trim());
+}
+const localPort=Number.isInteger(configuredPort)&&configuredPort>=1024&&configuredPort<=65535?configuredPort:freeLoopbackPort();
+process.env.TREBELL_E2E_PORT=String(localPort);
+process.env.TREBELL_E2E_OFFLINE=allowExternalNetwork?"0":"1";
+const localBaseUrl="http://127.0.0.1:"+localPort;
+const localTestHome=e2eHome();
+const localTestUiDist=join(localTestHome,"ui-dist");
+const localCodexHome=join(localTestHome,"codex-home");
+const localClaudeConfigDir=join(localTestHome,"claude-config");
+const workerProcess=process.env.TEST_WORKER_INDEX!=null;
+const repoRoot=fileURLToPath(new URL("../",import.meta.url));
+// The specs import the server's modules from the repository's src/, which are plain ESM that Node runs as written, so
+// Playwright's Babel transform adds nothing to them. Its transpiled copy of src/acp-session-config.mjs, cached under TEMP,
+// has been flagged and quarantined by Windows Defender's script heuristic (Trojan:Script/ObfusScript.A!ml) on every run
+// that loaded it since 2026-10-31, so src/ stays out of the transform. Playwright also tests a RegExp against the path
+// with forward slashes, which this one is written for.
+const serverSources=new RegExp("^"+join(repoRoot,"src").replace(/\\/g,"/").replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"/","i");
+const viteBin=fileURLToPath(new URL("../node_modules/vite/bin/vite.js",import.meta.url));
+const viteConfig=fileURLToPath(new URL("./vite.config.mjs",import.meta.url));
+if(process.platform==="win32"&&process.env.COMSPEC) process.env.COMSPEC=process.env.COMSPEC.trim();
+if(!hostedBaseUrl&&!workerProcess){
+  execFileSync(process.execPath,[viteBin,"build","--config",viteConfig],{cwd:repoRoot,env:process.env,stdio:"inherit",windowsHide:true});
+  rmSync(localTestHome,{recursive:true,force:true,maxRetries:50,retryDelay:100});
+  mkdirSync(localTestHome,{recursive:true});
+  mkdirSync(localCodexHome,{recursive:true});
+  mkdirSync(localClaudeConfigDir,{recursive:true});
+  cpSync(fileURLToPath(new URL("./dist/",import.meta.url)),localTestUiDist,{recursive:true});
+  process.env.TREBELL_E2E_HOME=localTestHome;
+}
+
+export default defineConfig({
+  testDir: "./e2e",
+  build: { external: [serverSources] },
+  timeout: 30000,
+  workers: 1,
+  expect: { timeout: 5000 },
+  use: {
+    baseURL: hostedBaseUrl||localBaseUrl,
+    viewport: { width: 1600, height: 980 },
+    trace: "off",
+    ...(!allowExternalNetwork?{proxy:{server:"http://127.0.0.1:9",bypass:"127.0.0.1,localhost"}}:{}),
+    ...(browserChannel?{channel:browserChannel}:{}),
+  },
+  webServer: hostedBaseUrl?undefined:{
+    command: "node src/gui-server.mjs --port "+localPort,
+    cwd: repoRoot,
+    env:{
+      ...process.env,
+      TREBELL_GUI_MOCK:"1",
+      TREBELL_E2E_OFFLINE:allowExternalNetwork?"0":"1",
+      TREBELL_HOME:localTestHome,
+      TREBELL_UI_DIST:localTestUiDist,
+      CODEX_HOME:localCodexHome,
+      CLAUDE_CONFIG_DIR:localClaudeConfigDir,
+      OPENAI_API_KEY:"",
+      ANTHROPIC_API_KEY:"",
+      GEMINI_API_KEY:"",
+      GOOGLE_API_KEY:"",
+      XAI_API_KEY:"",
+      META_API_KEY:"",
+    },
+    url: localBaseUrl+"/api/health",
+    reuseExistingServer: false,
+    timeout: 20000,
+  },
+  reporter: [["line"]],
+});

@@ -1,0 +1,584 @@
+import { test, expect } from "@playwright/test";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { e2eHome } from "./test-home.js";
+import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const auditDir=fileURLToPath(new URL("../../visual-audit/",import.meta.url));mkdirSync(auditDir,{recursive:true});
+// Saves the page in visual-audit in dark and light, switched with the header's theme button as a person switches it.
+async function shootBothModes(page,name){
+  for(const mode of ["dark","light"]){
+    if(await page.locator("html").getAttribute("data-mode")!==mode){await page.getByTestId("appearance-toggle").first().click();await expect(page.locator("html")).toHaveAttribute("data-mode",mode)}
+    await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+".png",fullPage:true});
+  }
+}
+
+// The mock server keeps its state for the whole run: put back what the first test adds (the SSH environment, its project and its
+// defaults, the published and the custom theme, slower panels, the project's icon), so the specs after this one start as they expect.
+test.afterEach(async({request})=>{
+  await rm(join(e2eHome(),"themes","e2e-published.json"),{force:true});
+  const {projects=[]}=await (await request.get("/api/projects")).json();
+  for(const project of projects)if(project.environmentId==="ssh-palette")await request.delete("/api/projects?id="+encodeURIComponent(project.id));
+  await request.delete("/api/environments?id=ssh-palette");
+  const {settings={}}=await (await request.get("/api/state")).json(),{"ssh-palette":_,...environmentDefaults}=settings.environmentDefaults||{};
+  await request.post("/api/settings",{data:{appearance:"dark",appearanceMode:"dark",customThemes:[],environmentThemeSelections:{},panelAnimationMs:0,environmentDefaults}});
+  const boot=await (await request.get("/api/bootstrap")).json();
+  await request.post("/api/projects",{data:{path:boot.cwd,icon:null,worktreeSubmodules:null}});
+});
+
+async function expectModelCatalog(page,labels){
+  const picker=page.getByTestId("model-picker");await expect(picker).toBeVisible();await expect(picker).toBeEnabled({timeout:15_000});await picker.click();
+  const menu=page.locator(".model-picker-menu");await expect(menu).toBeVisible();
+  await expect(menu.locator("> button strong")).toHaveText(labels);
+  await picker.click();await expect(menu).toBeHidden();
+}
+async function selectProvider(page,value){
+  const selector=page.getByTestId("provider-selector");
+  await selector.selectOption(value);
+  await expect(page.getByTestId("provider-settings-card")).toHaveAttribute("aria-busy","false",{timeout:15_000});
+  await expect(selector).toHaveValue(value);
+}
+
+test("Trebell Code renders the harness and scopes Trebell Native models to the selected provider", async ({ page,request }) => {
+  test.setTimeout(90_000);
+  const publishedThemes=join(e2eHome(),"themes");
+  await mkdir(publishedThemes,{recursive:true});
+  await writeFile(join(publishedThemes,"e2e-published.json"),JSON.stringify({name:"E2E Published",appearance:"dark",canvas:"#111827",accent:"#35c98b"}));
+  await page.addInitScript(()=>{
+    const snapshot={url:"http://fixture.local",title:"Preview fixture",text:"Checkout",elements:[{ref:"e7",tag:"button",text:"Submit order",href:""}]};
+    window.__trebellZoomFactor=1;window.__previewZoomKeys=[];
+    Object.defineProperty(window,"trebellDesktop",{configurable:true,value:{
+      zoom:{
+        get:async()=>({factor:window.__trebellZoomFactor}),
+        set:async factor=>({factor:window.__trebellZoomFactor=Number(factor)}),
+        reset:async()=>({factor:window.__trebellZoomFactor=1}),
+        previewKeys:open=>{window.__previewZoomKeys.push(Boolean(open))},
+      },
+      browser:{navigate:async()=>({ok:true}),show:async()=>({ok:true}),snapshot:async()=>snapshot,screenshot:async()=>({dataUrl:"data:image/png;base64,iVBORw0KGgo="}),importCookies:async()=>({ok:true,imported:2,failed:0}),importSources:async()=>({platform:"win32",sources:[{id:"firefox",name:"Firefox",installed:true,running:false,profiles:[{id:"C:/Profiles/Test",name:"Test profile"}]},{id:"helium",name:"Helium",installed:true,running:false,profiles:[{id:"C:/Helium/Default",name:"Default"}]}]}),importProfile:async(sourceId,profileId)=>sourceId==="helium"?({ok:true,sourceId,profileId,profileName:"Default",imported:5,failed:0,skipped:1}):({ok:true,sourceId,profileId,profileName:"Test profile",imported:7,failed:0}),close:async()=>({ok:true})}
+    }});
+  });
+  await request.post("/api/settings",{data:{onboardingComplete:true,appearance:"dark",appearanceMode:"dark",agentRuntime:"native",agentRuntimeInstanceId:"native-default",modelProvider:"openai"}});
+  const boot=await (await request.get("/api/bootstrap")).json();
+  await request.post("/api/projects",{data:{path:boot.cwd,name:"E2E Project",worktreeSubmodules:"top-level",icon:{kind:"monogram",value:"E2",color:"#4f8cff"}}});
+  await request.post("/api/environments",{data:{id:"ssh-palette",name:"E2E SSH",type:"ssh",host:"example.invalid",cwd:"/srv/app"}});
+  await request.post("/api/projects",{data:{path:"/srv/app",environmentId:"ssh-palette",name:"Remote App"}});
+  await page.goto("/");
+  await page.evaluate(()=>{
+    window.__copiedText=[];
+    Object.defineProperty(navigator.clipboard,"writeText",{configurable:true,value:async text=>{window.__copiedText.push(String(text))}});
+  });
+  const onboarding=page.getByTestId("onboarding");
+  if(await onboarding.isVisible().catch(()=>false))await onboarding.getByRole("button",{name:"Finish setup"}).click();
+  await expect(page.getByText("Trebell Code").first()).toBeVisible();
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await page.keyboard.press("Control+b");
+  await expect(page.locator(".app-shell")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.getByRole("button",{name:"Open sidebar"})).toBeVisible();
+  await page.keyboard.press("Control+b");
+  await expect(page.locator(".app-shell")).not.toHaveClass(/sidebar-collapsed/);
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.mode)).toBe("dark");
+  const initialShell=await page.evaluate(()=>({
+    sidebar:getComputedStyle(document.querySelector(".sidebar")).backgroundColor,
+    main:getComputedStyle(document.querySelector(".main-frame")).backgroundColor,
+    header:getComputedStyle(document.querySelector(".workspace-header")).backgroundColor,
+    composer:getComputedStyle(document.querySelector(".composer-wrap")).backgroundColor,
+  }));
+  // The redesign's dark tokens (ui/src/theme.css): sidebar and composer on --bg1, the main frame on --bg0 and the header on
+  // its translucent --bgtop.
+  expect(initialShell.sidebar).toBe("rgb(11, 11, 14)");
+  expect(initialShell.main).toBe("rgb(7, 7, 9)");
+  expect(initialShell.header).toMatch(/^rgba?\(7, 7, 9/);
+  expect(initialShell.composer).toMatch(/^rgba?\(11, 11, 14/);
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("command-palette")).toBeVisible();
+  await expect(page.getByTestId("command-palette")).not.toContainText("Open workspace folder");
+  await expect(page.getByTestId("command-palette")).toContainText("E2E Project");
+  await expect(page.getByTestId("command-palette")).toContainText("Remote App");
+  await expect(page.getByTestId("command-palette")).toContainText("E2E SSH · /srv/app");
+  const paletteSearch=page.getByPlaceholder("Search commands, threads, and messages…");
+  await paletteSearch.fill(">settings");
+  await expect(page.getByTestId("command-palette")).toContainText("Settings");
+  await expect(page.getByTestId("command-palette")).not.toContainText("E2E Project");
+  await paletteSearch.fill("");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("command-palette")).toBeHidden();
+  await page.getByRole("button",{name:"Environments"}).click();
+  const remoteEnvironmentRow=page.locator(".environment-list > div").filter({hasText:"E2E SSH"});
+  await remoteEnvironmentRow.getByRole("button",{name:"Switch off"}).click();
+  await expect(remoteEnvironmentRow).toContainText("switched off");
+  await expect(remoteEnvironmentRow.getByRole("button",{name:"Use for agent"})).toBeDisabled();
+  await expect.poll(async()=>{
+    const environments=await (await request.get("/api/environments")).json();
+    return environments.profiles.find(item=>item.id==="ssh-palette")?.enabled;
+  }).toBe(false);
+  await remoteEnvironmentRow.getByRole("button",{name:"Switch on"}).click();
+  await expect.poll(async()=>{
+    const environments=await (await request.get("/api/environments")).json();
+    return environments.profiles.find(item=>item.id==="ssh-palette")?.enabled;
+  }).toBe(true);
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expect(page.getByTestId("model-picker")).toBeVisible();
+  await expectModelCatalog(page,["test/coding-fast","test/coding-large"]);
+  await expect(page.getByRole("button",{name:"New thread"})).toBeVisible();
+  await expect(page.getByTestId("right-panel-toggle")).toBeVisible();
+  await expect(page.getByTestId("terminal-toggle")).toBeVisible();
+
+  await page.mouse.move(500,500);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0,-600);
+  await page.keyboard.up("Control");
+  await expect.poll(()=>page.evaluate(()=>window.__trebellZoomFactor)).toBeGreaterThan(1);
+  await page.evaluate(()=>window.trebellDesktop.zoom.reset());
+
+  const composer=page.getByTestId("composer");
+  await composer.fill("x".repeat(200001));
+  await expect(page.getByTestId("send")).toBeDisabled();
+  await expect(page.getByText(/maximum 200,000/)).toBeVisible();
+  await composer.fill("Build and validate a private local converter.");
+  await page.getByTestId("send").click();
+
+  await expect(page.getByText("Mock direct reply: Build and validate a private local converter.")).toBeVisible({timeout:10000});
+  await expect(page.getByRole("group").getByText("OpenAI API direct response")).toBeVisible();
+
+  const assistantResponse=page.locator(".assistant-message-text").last();
+  await assistantResponse.evaluate(node=>{
+    const selection=window.getSelection();selection.removeAllRanges();selection.selectAllChildren(node);document.dispatchEvent(new Event("selectionchange"));
+  });
+  await page.getByTestId("assistant-selection-cite").click();
+  await expect(page.getByTestId("context-chips")).toContainText("Assistant excerpt");
+
+  await page.getByTestId("right-panel-toggle").click();
+  await expect(page.getByTestId("right-panel")).toBeVisible();
+  const stackLayers=[
+    {position:1,number:1,title:"Layer one",state:"OPEN",isDraft:false,url:"https://github.com/acme/widget/pull/1",headRefName:"layer-one",headSha:"old1",baseRefName:"main",baseSha:"base0"},
+    {position:2,number:2,title:"Layer two",state:"OPEN",isDraft:false,url:"https://github.com/acme/widget/pull/2",headRefName:"layer-two",headSha:"old2",baseRefName:"layer-one",baseSha:"old1"},
+  ];
+  const stackSummary={number:42,size:2,position:2,baseRefName:"main",baseSha:"base0"};
+  const prItems=stackLayers.map(layer=>({provider:"github",number:layer.number,title:layer.title,state:layer.state,isDraft:false,url:layer.url,headRefName:layer.headRefName,baseRefName:layer.baseRefName,stack:{...stackSummary,position:layer.position}}));
+  // This scenario uses a fixture code host; its repository must not depend on whether the application source has a .git directory.
+  await page.route("**/api/git/info?**",route=>{
+    const params=new URL(route.request().url()).searchParams,cwd=params.get("path")||boot.cwd;
+    return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({isGit:true,cwd,root:cwd,environmentId:params.get("environmentId")||null,branch:"main",branches:["main"],status:[],remotes:[{name:"origin",url:"https://github.com/acme/widget.git",type:"fetch"}],worktrees:[]})});
+  });
+  const stackActions=[];
+  let diagnosticsCalls=0,releaseDiagnosticsRefresh=null;
+  await page.route("**/api/source-control/diagnostics?**",async route=>{
+    diagnosticsCalls++;
+    if(diagnosticsCalls===2)await new Promise(resolve=>{releaseDiagnosticsRefresh=resolve});
+    await route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({selectedProvider:"github",detectedProvider:"github",git:{version:"git version test"},providers:{github:{label:"GitHub",installed:true,authenticated:true}},capabilities:{github:{create:true,edit:true,comment:true,editComments:true,review:true,merge:true,autoMerge:true,updateBranch:true,checkout:true,reviewers:true,viewedFiles:"host",approveWorkflows:true,revert:true,stacks:true}}})});
+  });
+  await page.route("**/api/source-control/prs?**",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({ok:true,provider:"github",capabilities:{create:true,edit:true,comment:true,editComments:true,review:true,merge:true,autoMerge:true,updateBranch:true,checkout:true,reviewers:true,viewedFiles:"host",approveWorkflows:true,revert:true,stacks:true},items:prItems})}));
+  await page.route("**/api/source-control/pr-detail?**",route=>{
+    const url=new URL(route.request().url());const number=Number(url.searchParams.get("number"))||2;const layer=stackLayers.find(item=>item.number===number)||stackLayers[1];
+    return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({ok:true,provider:"github",capabilities:{create:true,edit:true,comment:true,editComments:true,review:true,merge:true,autoMerge:true,updateBranch:true,checkout:true,reviewers:true,viewedFiles:"host",approveWorkflows:true,revert:true,stacks:true},item:{...layer,body:"Stacked change",comments:[],reviews:[],files:[],statusCheckRollup:[],stack:{...stackSummary,position:layer.position,layers:stackLayers,selectedNumber:number}}})});
+  });
+  await page.route("**/api/source-control/pr-viewed?**",route=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({ok:true,provider:"github",store:"host",files:[],headSha:"old2"})}));
+  await page.route("**/api/source-control/pr-action",async route=>{stackActions.push(route.request().postDataJSON());await route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({ok:true,provider:"github"})})});
+  await page.getByTestId("right-panel").locator('.context-panel-tab-scroll button[aria-label="Git"]').click();
+  const sourcePanel=page.getByTestId("right-panel");
+  await expect(sourcePanel.getByText("Git: git version test",{exact:true})).toBeVisible();
+  const refreshClick=sourcePanel.getByRole("button",{name:"Refresh pull requests",exact:true}).click();
+  await expect.poll(()=>diagnosticsCalls).toBe(2);
+  await expect(sourcePanel.getByText("Git: git version test",{exact:true})).toBeVisible();
+  await expect(sourcePanel.getByText("Git: checking…",{exact:true})).toHaveCount(0);
+  releaseDiagnosticsRefresh?.();
+  await refreshClick;
+  await expect(page.getByText("stack 2/2",{exact:false})).toBeVisible();
+  await page.getByRole("button",{name:/#2 Layer two/}).click();
+  await expect(page.getByText("GitHub stack #42")).toBeVisible();
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"c",ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true})));
+  await expect.poll(()=>page.evaluate(()=>window.__copiedText.at(-1))).toBe("https://github.com/acme/widget/pull/2");
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"k",ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true})));
+  await expect.poll(()=>page.evaluate(()=>window.__copiedText.at(-1))).toBe("#2");
+  await expect(page.getByLabel("Stack merge method")).toHaveValue("squash");
+  await page.getByLabel("Stack merge method").selectOption("rebase");
+  // Merge through asks in the app's own dialog, never the browser's: Escape merges nothing, and the keyboard says yes.
+  const nativeDialogs=[];page.on("dialog",dialog=>{nativeDialogs.push(dialog.type()+": "+dialog.message());dialog.dismiss().catch(()=>{})});
+  const appQuestion=page.locator("dialog.inspector-text-prompt"),mergeThrough=page.getByRole("button",{name:"Merge through #2"});
+  await mergeThrough.click();
+  await expect(appQuestion.locator("p")).toHaveText(/^Merge .*#2 using rebase as one GitHub stack operation\?/);
+  await expect(appQuestion.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+  await page.keyboard.press("Escape");await expect(appQuestion).toHaveCount(0);await expect(mergeThrough).toBeFocused();
+  expect(stackActions).toEqual([]);
+  await page.keyboard.press("Enter");await page.keyboard.press("Tab");
+  await expect(appQuestion.getByRole("button",{name:"Merge through #2",exact:true})).toBeFocused();await page.keyboard.press("Enter");
+  await expect.poll(()=>stackActions.length).toBe(1);
+  expect(nativeDialogs).toEqual([]);
+  expect(stackActions[0].action).toBe("merge");
+  expect(stackActions[0].number).toBe(2);
+  expect(stackActions[0].method).toBe("rebase");
+  await page.getByRole("button",{name:"Maximize right panel"}).click();
+  await expect(page.locator(".workspace-shell")).toHaveClass(/right-maximized/);
+  await page.getByRole("button",{name:"Restore right panel"}).click();
+  await expect(page.locator(".workspace-shell")).not.toHaveClass(/right-maximized/);
+  await page.getByTestId("right-panel").getByRole("button",{name:"Diff"}).click();
+  await expect(page.getByText("Changes",{exact:true}).first()).toBeVisible();
+  await page.getByRole("button",{name:"Close right panel"}).click();
+  await expect(page.getByTestId("right-panel")).toBeHidden();
+
+  await page.getByTestId("terminal-toggle").click();
+  await expect(page.getByTestId("drawer")).toBeVisible();
+  const createTerminal=page.getByRole("button",{name:"Create terminal"});
+  await expect(createTerminal).toBeVisible();
+  await createTerminal.click();
+  await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  await page.locator(".terminal-command-line input").first().click();
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"d",ctrlKey:true,bubbles:true,cancelable:true})));
+  await expect(page.locator(".terminal-pane")).toHaveCount(2);
+  await expect(page.locator(".terminal-panes")).toHaveClass(/horizontal/);
+  await page.locator(".terminal-command-line input").last().click();
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"d",ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true})));
+  await expect(page.locator(".terminal-pane")).toHaveCount(3);
+  await expect(page.locator(".terminal-panes")).toHaveClass(/vertical/);
+  await page.locator(".terminal-command-line input").last().click();
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true,cancelable:true})));
+  await expect(page.locator(".terminal-pane")).toHaveCount(2);
+  await page.getByRole("button",{name:"Close terminal",exact:true}).click();
+  await expect(page.getByTestId("drawer")).toBeHidden();
+
+  await page.getByRole("button",{name:"Projects",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Projects"})).toBeVisible();
+  await expect(page.getByText("Clone repository")).toBeVisible();
+  await page.getByLabel("Clone environment").selectOption("ssh-palette");
+  await expect(page.getByLabel("Clone parent directory")).toHaveValue("/srv/app");
+  await expect(page.getByLabel("Clone environment").locator('option[value="local"]')).toHaveCount(0);
+  const e2eProject=page.locator(".project-card").filter({hasText:"E2E Project"});
+  await expect(e2eProject.locator(".project-icon")).toHaveText("E2");
+  await expect(e2eProject.getByLabel("Submodules")).toHaveValue("top-level");
+  await expect(e2eProject.getByLabel("Submodules").locator("option:checked")).toHaveText("First level");
+  await expect(e2eProject.getByLabel("Remove worktrees automatically")).toHaveValue("inherit");
+  await page.getByRole("button",{name:/No project · General chat/}).click();
+  await expect(page.getByRole("heading",{name:"What do you want to think through?"})).toBeVisible();
+  await expect(page.getByRole("button",{name:"No project",exact:true})).toBeVisible();
+  await expect(page.getByText("This is a General chat with no attached project.")).toBeVisible();
+  await page.getByRole("button",{name:"Projects",exact:true}).click();
+  await page.locator(".project-card").filter({hasText:"E2E Project"}).locator(".project-open").click();
+  await expect(page.getByRole("heading",{name:"What do you want to build?"})).toBeVisible();
+
+  await page.getByRole("button",{name:"Browser"}).click();
+  await expect(page.getByTestId("right-panel")).toBeVisible();
+  const previewUrl=page.locator(".preview-bar input");
+  await expect(previewUrl).toHaveAttribute("title","Preview zoom 100%");
+  // The open preview tells the desktop shell its zoom keys are the page's (desktop/main.mjs leaves them to it), and Ctrl+= and
+  // Ctrl+0 zoom the preview, not the window.
+  await expect.poll(()=>page.evaluate(()=>window.__previewZoomKeys.at(-1))).toBe(true);
+  await page.keyboard.press("Control+Equal");
+  await expect(previewUrl).toHaveAttribute("title","Preview zoom 110%");
+  await page.keyboard.press("Control+Digit0");
+  await expect(previewUrl).toHaveAttribute("title","Preview zoom 100%");
+  expect(await page.evaluate(()=>window.__trebellZoomFactor)).toBe(1);
+  // With the palette open the preview's binding does not apply: the keys zoom the window, as they do away from the preview.
+  await page.keyboard.press("Control+k");await expect(page.getByTestId("command-palette")).toBeVisible();
+  await page.keyboard.press("Control+Equal");
+  await expect.poll(()=>page.evaluate(()=>window.__trebellZoomFactor)).toBeCloseTo(1.1,5);
+  await page.keyboard.press("Control+Digit0");
+  await expect.poll(()=>page.evaluate(()=>window.__trebellZoomFactor)).toBe(1);
+  await page.keyboard.press("Escape");await expect(page.getByTestId("command-palette")).toHaveCount(0);
+  await expect(previewUrl).toHaveAttribute("title","Preview zoom 100%");
+  await page.evaluate(()=>window.dispatchEvent(new KeyboardEvent("keydown",{key:"l",ctrlKey:true,bubbles:true,cancelable:true})));
+  await expect.poll(()=>page.evaluate(()=>document.activeElement?.matches?.(".preview-bar input"))).toBe(true);
+  await page.getByRole("button",{name:"Open agent browser"}).click();
+  await page.getByRole("button",{name:"Import profile"}).click();
+  await expect(page.getByTestId("browser-profile-import")).toContainText("Test profile");
+  await expect(page.getByTestId("browser-profile-import")).toContainText("Helium");
+  await page.getByTestId("browser-profile-import").getByRole("button",{name:/Test profile/}).click();
+  await expect(page.getByTestId("browser-cookie-status")).toHaveText("Imported 7 cookies from Test profile");
+  await page.getByRole("button",{name:"Import cookie JSON"}).click();
+  await expect(page.getByTestId("browser-cookie-status")).toHaveText("Imported 2 cookies");
+  await page.getByRole("button",{name:/Submit order/}).click();
+  await page.getByTestId("preview-annotation").locator("textarea").fill("Use this button to submit the checkout flow.");
+  await page.getByRole("button",{name:"Attach annotation"}).click();
+  await expect(page.getByTestId("preview-annotation")).toContainText("Annotation attached");
+
+  await page.getByRole("button",{name:"Settings"}).click();
+  await expect(page.getByRole("heading",{name:"Settings"})).toBeVisible();
+  await expect(page.getByText("Messages sent during a turn")).toBeVisible();
+  await page.getByRole("button",{name:/Appearance/}).click();
+  await page.getByLabel("Panel motion").fill("200");
+  await expect.poll(()=>page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue("--panel-animation-ms").trim())).toBe("200ms");
+  await page.getByRole("button",{name:"light",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.mode)).toBe("light");
+  await page.getByRole("button",{name:/Workspace/}).click();
+  await expect(page.getByTestId("scoped-settings-card").getByLabel("Remove worktrees automatically")).toHaveValue("off");
+  await expect(page.getByTestId("scoped-settings-card").getByLabel("Submodules in new worktrees").locator("option")).toHaveText(["All levels","First level","None"]);
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expect(page.locator(".workspace-header")).toBeVisible();
+  const lightShell=await page.evaluate(()=>({
+    sidebar:getComputedStyle(document.querySelector(".sidebar")).backgroundColor,
+    main:getComputedStyle(document.querySelector(".main-frame")).backgroundColor,
+    header:getComputedStyle(document.querySelector(".workspace-header")).backgroundColor,
+    provider:getComputedStyle(document.querySelector(".sidebar-provider")).backgroundColor,
+    composer:getComputedStyle(document.querySelector(".composer-wrap")).backgroundColor,
+  }));
+  // The redesign's light tokens: sidebar and composer on --bg1 (white), the main frame on --bg0, the header on --bgtop.
+  expect(lightShell.sidebar).toBe("rgb(255, 255, 255)");
+  expect(lightShell.main).toBe("rgb(247, 247, 248)");
+  expect(lightShell.header).toMatch(/^rgba?\(247, 247, 248/);
+  expect(lightShell.provider).not.toBe("rgb(255, 255, 255)");
+  expect(lightShell.composer).toMatch(/^rgba?\(255, 255, 255/);
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Appearance/}).click();
+  await page.getByRole("button",{name:"Midnight",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.theme)).toBe("midnight");
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("command-palette")).toContainText("Appearance: System");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button",{name:"dark",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.mode)).toBe("dark");
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.theme)).toBe("midnight");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expect(page.locator(".workspace-header")).toBeVisible();
+  const darkShell=await page.evaluate(()=>({
+    sidebar:getComputedStyle(document.querySelector(".sidebar")).backgroundColor,
+    main:getComputedStyle(document.querySelector(".main-frame")).backgroundColor,
+    composer:getComputedStyle(document.querySelector(".composer-wrap")).backgroundColor,
+  }));
+  // The redesign's Midnight tokens: --bg1 for the sidebar and composer, --bg0 for the main frame.
+  expect(darkShell.sidebar).toBe("rgb(10, 12, 21)");
+  expect(darkShell.main).toBe("rgb(6, 7, 13)");
+  expect(darkShell.composer).toMatch(/^rgba?\(10, 12, 21/);
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Appearance/}).click();
+  await expect(page.getByRole("button",{name:"E2E Published",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"E2E Published",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.theme)).toBe("environment-local-e2e-published");
+  await expect.poll(()=>page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue("--purple").trim())).toBe("#35c98b");
+  await page.getByRole("button",{name:"Midnight",exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.theme)).toBe("midnight");
+  await page.getByRole("button",{name:"Create theme"}).click();
+  await page.locator(".theme-editor").getByLabel("Name").fill("E2E Theme");
+  await page.locator(".theme-editor").getByLabel("Accent").fill("#4f8cff");
+  await page.getByRole("button",{name:"Save & apply"}).click();
+  await expect.poll(()=>page.evaluate(()=>document.documentElement.dataset.customTheme)).toBe("true");
+  await expect.poll(()=>page.evaluate(()=>getComputedStyle(document.documentElement).getPropertyValue("--purple").trim())).toBe("#4f8cff");
+  await page.getByRole("button",{name:/General/}).click();
+  await page.getByRole("button",{name:/Workspace/}).click();
+  const scopedSettings=page.getByTestId("scoped-settings-card");
+  const settingsScope=page.getByTestId("settings-scope-sentence");
+  await settingsScope.getByLabel("Environment scope").selectOption("ssh-palette");
+  await scopedSettings.getByLabel("Permissions").selectOption("full");
+  await scopedSettings.getByLabel("Automatic pull").selectOption("true");
+  await scopedSettings.getByLabel("Default PR merge").selectOption("rebase");
+  await scopedSettings.getByLabel("Git text style").selectOption("custom");
+  await scopedSettings.getByLabel("Git text model").selectOption("test/coding-fast");
+  await scopedSettings.getByLabel("Follow PR templates").selectOption("false");
+  await scopedSettings.getByLabel("Custom Git instructions").fill("Prefix titles with the ticket ID.");
+  await scopedSettings.getByLabel("Custom Git instructions").blur();
+  await expect.poll(async()=>{
+    const remoteDefaults=await (await request.get("/api/scoped-settings?environmentId=ssh-palette")).json();
+    return {permission:remoteDefaults.effective.defaultPermissionMode,autoPull:remoteDefaults.effective.autoPull,merge:remoteDefaults.effective.sourceControlMergeMethod,style:remoteDefaults.effective.sourceControlTextStyle,textModel:remoteDefaults.effective.sourceControlTextModel,instructions:remoteDefaults.effective.sourceControlCustomInstructions,templates:remoteDefaults.effective.sourceControlFollowTemplates};
+  }).toEqual({permission:"full",autoPull:true,merge:"rebase",style:"custom",textModel:"test/coding-fast",instructions:"Prefix titles with the ticket ID.",templates:false});
+  await settingsScope.getByLabel("Project scope").selectOption({label:"Remote App"});
+  await expect(scopedSettings.getByLabel("Permissions")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Automatic pull")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Default PR merge")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Git text style")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Git text model")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Follow PR templates")).toHaveValue("__inherit__");
+  await expect(scopedSettings.getByLabel("Custom Git instructions")).toHaveValue("Prefix titles with the ticket ID.");
+  await scopedSettings.getByLabel("Permissions").selectOption("edits");
+  const projectListing=await (await request.get("/api/projects")).json();
+  const remoteProject=projectListing.projects.find(item=>item.environmentId==="ssh-palette"&&item.path==="/srv/app");
+  await expect.poll(async()=>{
+    const remoteProjectScope=await (await request.get("/api/scoped-settings?environmentId=ssh-palette&projectId="+encodeURIComponent(remoteProject.id))).json();
+    return {override:remoteProjectScope.overrides.defaultPermissionMode,effective:remoteProjectScope.effective.defaultPermissionMode};
+  }).toEqual({override:"edits",effective:"edits"});
+  await settingsScope.getByLabel("Environment scope").selectOption("local");
+  await expect(settingsScope.getByLabel("Project scope")).toHaveValue("");
+  await expect(settingsScope.getByLabel("Project scope").locator("option",{hasText:"Remote App"})).toHaveCount(0);
+  await expect(settingsScope.getByLabel("Project scope").locator("option",{hasText:"E2E Project"})).toHaveCount(1);
+  await expect(scopedSettings).toHaveAttribute("aria-busy","false");
+  await page.getByRole("button",{name:"Usage"}).click();
+  await expect(page.getByRole("heading",{name:"Usage",exact:true})).toBeVisible();
+  await expect(page.getByText("Total tokens",{exact:true})).toBeVisible();
+  await page.locator(".usage-environment-filter summary").click();
+  await expect(page.locator(".usage-environment-filter")).toContainText("E2E SSH");
+  await page.getByLabel("E2E SSH").check();
+  await expect(page.locator(".usage-environment-filter summary")).toContainText("E2E SSH");
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Agents & models/}).click();
+
+  const providerSelector=page.getByTestId("provider-selector");
+
+  await selectProvider(page,"justworker");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expectModelCatalog(page,["claude-opus-4-8"]);
+  await expect(page.getByTestId("model-picker")).toContainText("claude-opus-4-8");
+
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Agents & models/}).click();
+  await selectProvider(page,"hcnsec");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expectModelCatalog(page,["glm-5.3"]);
+  await expect(page.getByTestId("model-picker")).toContainText("glm-5.3");
+
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Agents & models/}).click();
+  await selectProvider(page,"vyceai");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expectModelCatalog(page,[
+    "claude-sonnet-4-6",
+    "gpt-astra",
+    "deepseek-v4.1",
+    "auto",
+  ]);
+
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Agents & models/}).click();
+  await selectProvider(page,"agentrouter");
+  await expect.poll(async()=>{
+    const providerState=await (await request.get("/api/providers")).json();
+    return providerState.selected;
+  }).toBe("agentrouter");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expectModelCatalog(page,[
+    "gpt-5.6-sol",
+    "gpt-6-astra",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "deepseek-v4-flash",
+  ]);
+
+  await page.getByRole("button",{name:"Settings"}).click();
+  await page.getByRole("button",{name:/Agents & models/}).click();
+  await selectProvider(page,"openai");
+  await page.getByRole("button",{name:"Threads"}).click();
+  await expectModelCatalog(page,["test/coding-fast","test/coding-large"]);
+  await expect(page.locator(".sidebar-provider")).toContainText("OpenAI API inference");
+
+  await shootBothModes(page,"trebell-code-ui");
+});
+
+test("onboarding can import matching local conversation history",async({page,request})=>{
+  const boot=await (await request.get("/api/bootstrap")).json();
+  await request.post("/api/projects",{data:{path:boot.cwd,name:"History Workspace",activate:true}});
+  let imported=false;let importBody=null;
+  await page.route("**/api/history-import",async route=>{
+    if(route.request().method()==="POST"){
+      importBody=route.request().postDataJSON();imported=true;
+      return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({ok:true,results:[{id:"history-1",source:"claude",status:"imported",threadId:"imported-thread"}]})});
+    }
+    return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({
+      codexImportAvailable:true,
+      sessions:[{id:"history-1",source:"claude",providerSessionId:"claude-history-1",cwd:boot.cwd,title:"Fix the onboarding importer",preview:"Fix the onboarding importer",alreadyImported:imported}],
+    })});
+  });
+  await request.post("/api/settings",{data:{onboardingComplete:false}});
+  await expect.poll(async()=>{
+    const state=await (await request.get("/api/state")).json();
+    return state.settings?.onboardingComplete;
+  }).toBe(false);
+  await page.goto("/");
+  const onboarding=page.getByTestId("onboarding");
+  await expect(onboarding).toBeVisible();
+  await expect(onboarding.getByText("4. Conversation history")).toBeVisible();
+  await expect(onboarding.getByText(/1 recent conversation can be copied into Trebell/)).toBeVisible();
+  await onboarding.getByRole("button",{name:"Import history"}).click();
+  await expect.poll(()=>importBody?.sessionIds).toEqual(["history-1"]);
+  await expect(onboarding.getByText(/already imported/)).toBeVisible();
+  await onboarding.getByRole("button",{name:"Finish setup"}).click();
+  await expect(onboarding).toBeHidden();
+});
+
+// The desktop window's own controls, with the bridge as desktop/preload.cjs gives it: the shell says each change of the window's
+// maximised state, however it came (the Maximize button, a double click on the title bar, Win+Up, a snap), and the window keeps it
+// across a reload of the page.
+test("the desktop window's controls are named Minimize, Maximize and Close, and Maximize turns into Restore while the window is maximised",async({page,request})=>{
+  await page.addInitScript(()=>{
+    window.__windowCalls=[];const listeners=new Set();let maximized=sessionStorage.getItem("e2e-window-maximized")==="1";
+    window.__maximizeWindow=value=>{maximized=value;sessionStorage.setItem("e2e-window-maximized",value?"1":"0");for(const listener of listeners)listener(value)};
+    Object.defineProperty(window,"trebellDesktop",{configurable:true,value:{
+      minimize:()=>window.__windowCalls.push("minimize"),
+      maximize:()=>{window.__windowCalls.push("maximize");setTimeout(()=>window.__maximizeWindow(!maximized),30)},
+      close:()=>window.__windowCalls.push("close"),
+      maximized:async()=>maximized,
+      onMaximized:listener=>{listeners.add(listener);return()=>listeners.delete(listener)},
+    }});
+  });
+  await request.post("/api/settings",{data:{onboardingComplete:true,panelAnimationMs:0}});
+  await page.goto("/");
+  await expect(page.getByTestId("composer")).toBeVisible();
+  const controls=page.locator(".window-controls-pinned");
+  const minimize=controls.getByRole("button",{name:"Minimize",exact:true}),maximize=controls.getByRole("button",{name:"Maximize",exact:true});
+  const restore=controls.getByRole("button",{name:"Restore",exact:true}),close=controls.getByRole("button",{name:"Close",exact:true});
+  // A screen reader names them for what they do, not by the glyphs drawn on them.
+  await expect(minimize).toBeVisible();await expect(maximize).toBeVisible();await expect(close).toBeVisible();
+  await expect(restore).toHaveCount(0);
+  const maximizeGlyph=await maximize.textContent();
+  // Maximize clicked: once the window is maximised the button is Restore, with its own glyph and tooltip.
+  await maximize.click();
+  await expect(restore).toBeVisible();await expect(maximize).toHaveCount(0);
+  await expect(restore).toHaveAttribute("title","Restore");
+  expect(await restore.textContent(),"Restore shows the restore glyph, not Maximize's").not.toBe(maximizeGlyph);
+  // From the keyboard: Tab from the composer to Restore, Enter restores the window and Space maximises it again.
+  await page.getByTestId("composer").click();
+  for(let i=0;i<40&&!await restore.evaluate(node=>node===document.activeElement);i++)await page.keyboard.press("Tab");
+  await expect(restore).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(maximize).toBeFocused();await expect(maximize).toHaveAttribute("title","Maximize");
+  await expect.poll(async()=>await maximize.textContent()).toBe(maximizeGlyph);
+  await page.keyboard.press("Space");
+  await expect(restore).toBeFocused();
+  await shootBothModes(page,"desktop-window-controls-restore");
+  // Restored and maximised by the system, not the button (Win+Down, a double click on the title bar): the button follows the window.
+  await page.evaluate(()=>window.__maximizeWindow(false));
+  await expect(maximize).toBeVisible();
+  await page.evaluate(()=>window.__maximizeWindow(true));
+  await expect(restore).toBeVisible();
+  // A reload while the window is maximised starts with Restore.
+  await page.reload();
+  await expect(page.getByTestId("composer")).toBeVisible();
+  await expect(restore).toBeVisible();await expect(maximize).toHaveCount(0);
+  await minimize.click();await close.click();
+  expect(await page.evaluate(()=>window.__windowCalls)).toEqual(["minimize","close"]);
+});
+
+// The desktop window's zoom as desktop/main.mjs keeps it: Ctrl+=, Ctrl+- and Ctrl+0 zoom the window in the shell before the page sees
+// them (its before-input-event), while Ctrl+wheel is the page's to step through the bridge, whose calls take a moment to answer.
+test("Ctrl+wheel zooms the desktop window a step from its zoom as it is, also after the zoom keys or Ctrl+0 changed it",async({page,request})=>{
+  await page.addInitScript(()=>{
+    window.__zoom=1;let previewKeys=false;
+    const zoomTo=value=>window.__zoom=Math.min(2.5,Math.max(0.7,Math.round(Number(value)*100)/100));
+    const answer=value=>new Promise(resolve=>setTimeout(()=>resolve({factor:value()}),40));
+    window.addEventListener("keydown",event=>{
+      const key=String(event.key).toLowerCase();if(previewKeys||!event.ctrlKey||!["=","+","-","0"].includes(key))return;
+      event.preventDefault();event.stopImmediatePropagation();
+      zoomTo(key==="0"?1:window.__zoom+(key==="-"?-0.1:0.1));
+    },true);
+    Object.defineProperty(window,"trebellDesktop",{configurable:true,value:{zoom:{
+      get:()=>answer(()=>window.__zoom),
+      set:factor=>answer(()=>zoomTo(factor)),
+      reset:()=>answer(()=>zoomTo(1)),
+      previewKeys:open=>{previewKeys=Boolean(open)},
+    }}});
+  });
+  await request.post("/api/settings",{data:{onboardingComplete:true,panelAnimationMs:0}});
+  await page.goto("/");
+  await expect(page.getByTestId("composer")).toBeVisible();
+  await expect(page.getByTestId("model-picker")).toBeEnabled({timeout:10_000});
+  const zoom=()=>page.evaluate(()=>window.__zoom);
+  // Notches of the mouse wheel with Ctrl held, over the conversation, as a person zooms.
+  const notches=async(direction,count=1)=>{await page.mouse.move(700,400);await page.keyboard.down("Control");for(let i=0;i<count;i++)await page.mouse.wheel(0,direction==="in"?-100:100);await page.keyboard.up("Control")};
+  await page.keyboard.press("Control+Equal");await page.keyboard.press("Control+Equal");
+  await expect.poll(zoom).toBe(1.2);
+  await notches("in");
+  await expect.poll(zoom,{message:"a notch in after Ctrl+= twice zooms in from 120%"}).toBe(1.3);
+  await page.keyboard.press("Control+Digit0");
+  await expect.poll(zoom).toBe(1);
+  await notches("in");
+  await expect.poll(zoom,{message:"the first notch in after Ctrl+0 zooms to 110%"}).toBe(1.1);
+  await notches("in");
+  await expect.poll(zoom).toBe(1.2);
+  await page.keyboard.press("Control+Minus");
+  await expect.poll(zoom).toBe(1.1);
+  await notches("in");
+  await expect.poll(zoom,{message:"a notch in after Ctrl+- zooms in from 110%"}).toBe(1.2);
+  await notches("out");
+  await expect.poll(zoom).toBe(1.1);
+  // Two notches that come faster than the shell answers both count.
+  await notches("in",2);
+  await expect.poll(zoom).toBe(1.3);
+  await page.keyboard.press("Control+Digit0");
+  await expect.poll(zoom).toBe(1);
+});

@@ -1,0 +1,16 @@
+/node_modules/
+/.validation/
+/.release-smoke/
+/desktop-dist/
+/ui/dist/
+/visual-audit/
+/test-results/
+/playwright-report/
+/.cache/
+/.trebell-code/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

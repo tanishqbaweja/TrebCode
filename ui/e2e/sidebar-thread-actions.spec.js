@@ -1,0 +1,842 @@
+import { test,expect } from "@playwright/test";
+import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { replyItem,routeRelayApp,startRelayHarness } from "./relay-history-harness.js";
+
+// The sidebar's bulk actions and the Snooze dialog over Trebell Native threads on the real agent relay, with a proxy on the page's
+// socket that refuses what a test names (a harness refusing a thread's move or archive).
+const auditDir=fileURLToPath(new URL("../../visual-audit/",import.meta.url));mkdirSync(auditDir,{recursive:true});
+const json=(route,value)=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(value)});
+const names=["Bulk one","Bulk two","Bulk three","Bulk four"];
+
+test("archiving a thread stays saved when its earlier workspace-context read finishes later",async({page})=>{
+  const {harness,meta,id}=await openSidebarApp(page);
+  let release;const gate=new Promise(resolve=>{release=resolve});let held=0;
+  try{
+    await page.route("**/api/git/info?**",async route=>{held++;await gate;await route.fallback()});
+    await threadRow(page,"Bulk two").locator(".thread-main").click();
+    await expect(page.locator(".conversation-column")).toContainText("Done with bulk two.");
+    await expect.poll(()=>held).toBeGreaterThan(0);
+    await (await rowMenu(page,"Bulk two")).getByRole("button",{name:"Archive",exact:true}).click();
+    await expect(undoToast(page)).toContainText("Thread archived");
+    await expect.poll(()=>meta[id("Bulk two")]?.archived).toBe(true);
+    const lateSave=page.waitForResponse(response=>{
+      if(new URL(response.url()).pathname!=="/api/thread-meta"||response.request().method()!=="POST")return false;
+      const body=response.request().postDataJSON();return body?.threadId===id("Bulk two")&&Boolean(body.patch?.cwd);
+    });
+    release();await lateSave;
+    expect(meta[id("Bulk two")].archived).toBe(true);
+    await expect(threadRow(page,"Bulk two")).toHaveCount(0);
+    expect(harness.threadStore.get(id("Bulk two")).archived).toBe(true);
+  }finally{release();await harness.close()}
+});
+
+// refuse(message) names an error to answer a request with instead of the relay. stop() stops the harness as far as the page can
+// tell: its socket closes and every reconnect is turned away, until start() lets the page's next reconnect through.
+async function proxyRelay(page,harness){
+  const proxy={refuse:()=>null,stopped:false,sockets:[]};
+  await page.routeWebSocket(harness.wsUrl,ws=>{
+    if(proxy.stopped){ws.close({code:1011,reason:"harness stopped"});return}
+    const server=ws.connectToServer();proxy.sockets.push(ws);
+    ws.onMessage(message=>{
+      let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+      const refusal=parsed?.id!=null&&parsed.method?proxy.refuse(parsed):null;
+      if(refusal){ws.send(JSON.stringify({id:parsed.id,error:{code:-32000,message:refusal}}));return}
+      server.send(message);
+    });
+  });
+  proxy.stop=()=>{proxy.stopped=true;for(const ws of proxy.sockets.splice(0))ws.close({code:1011,reason:"harness stopped"})};
+  proxy.start=()=>{proxy.stopped=false};
+  return proxy;
+}
+
+// The threads in list (the four Bulk ones unless given), a minute apart, with the first open. meta is what Trebell keeps of each
+// thread (its snooze time among it), as the GUI server keeps it.
+async function openSidebarApp(page,list=names){
+  const harness=await startRelayHarness();
+  for(const name of list)harness.seedThread(name,[{user:"Work on "+name.toLowerCase(),items:[replyItem("seed-reply-"+harness.threads.length,"Done with "+name.toLowerCase()+".")]}]);
+  const base=Math.floor(Date.now()/1000)-3600;harness.threads.forEach((thread,index)=>harness.threadStore.update(thread.id,{updatedAt:base-index*60},{touch:false}));
+  await routeRelayApp(page,harness);
+  const meta=Object.fromEntries(harness.threads.map(thread=>[thread.id,{projectless:false,environmentId:null,cwd:harness.repo,runtime:"native",runtimeInstanceId:"native-default"}]));
+  await page.route(/\/api\/thread-meta(?:\?.*)?$/,route=>{
+    const request=route.request(),body=request.method()==="POST"?request.postDataJSON()||{}:{},id=String(body.threadId||new URL(request.url()).searchParams.get("threadId")||"");
+    if(request.method()==="POST")meta[id]={...(meta[id]||{}),...(body.patch||{})};
+    return json(route,meta[id]||{});
+  });
+  await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+  await page.route(/\/api\/recovery$/,route=>json(route,{enabled:false,items:[]}));
+  const proxy=await proxyRelay(page,harness);
+  await page.setViewportSize({width:1280,height:800});
+  await page.goto("/");
+  await expect.poll(()=>groups(page)).toEqual([["Active",list]]);
+  const row=threadRow(page,list[0]);await row.locator(".thread-main").click();
+  await expect(row).toHaveClass(/active/);await expect(page.getByTestId("composer")).not.toHaveAttribute("placeholder","Opening thread…");
+  const id=name=>harness.threads.find(thread=>thread.name===name).id;
+  return {harness,proxy,meta,id};
+}
+const groups=page=>page.locator(".thread-sections section").evaluateAll(sections=>sections.map(section=>[section.querySelector("h4 .thread-group-name").textContent,[...section.querySelectorAll(".thread-main")].map(node=>node.title)]));
+const threadRow=(page,name)=>page.locator(".thread-row").filter({has:page.locator(`.thread-main[title="${name}"]`)});
+const selected=page=>page.locator(".thread-row").evaluateAll(rows=>rows.filter(row=>row.querySelector(".thread-select")?.checked).map(row=>row.querySelector(".thread-main").title));
+const bulkBar=page=>page.locator(".bulk-bar");
+const undoToast=page=>page.getByTestId("thread-undo-toast");
+const sidebarAlert=page=>page.locator(".sidebar .sidebar-action-error");
+const snoozeDialog=page=>page.getByRole("dialog",{name:/^Snooze/});
+// Thread actions opens bulk mode with the first thread ticked; a person ticks the others in turn.
+async function selectThreads(page,list){
+  await page.getByRole("button",{name:"Thread actions",exact:true}).click();
+  await expect(page.locator(".thread-select").first()).toBeVisible();
+  for(const name of list)if(!(await selected(page)).includes(name))await threadRow(page,name).locator(".thread-select").click();
+  for(const name of await selected(page))if(!list.includes(name))await threadRow(page,name).locator(".thread-select").click();
+  await expect(bulkBar(page).locator("span")).toHaveText(list.length+" selected");
+}
+async function rowMenu(page,name){
+  const row=threadRow(page,name);await row.hover();await row.locator(".thread-menu summary").click();
+  await expect(row.locator(".thread-menu")).toHaveAttribute("open","");return row;
+}
+// The header's theme button, as a person switches between dark and light, and the window at 1280x800 and 900x800 in that mode.
+async function switchMode(page,mode){
+  const html=page.locator("html");if(await html.getAttribute("data-mode")===mode)return;
+  await page.getByTestId("appearance-toggle").first().click();await expect(html).toHaveAttribute("data-mode",mode);
+}
+async function shoot(page,name){
+  const mode=await page.locator("html").getAttribute("data-mode");
+  for(const width of [1280,900]){await page.setViewportSize({width,height:800});await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+width+"x800.png"})}
+  await page.setViewportSize({width:1280,height:800});
+}
+
+test("a bulk Pin or Archive tries every thread, says which one failed and why, offers Undo for the rest and keeps the failed one selected",async({page})=>{
+  test.setTimeout(120_000);
+  const {harness,proxy,id}=await openSidebarApp(page);
+  try{
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      // The harness refuses to move Bulk two; Bulk one and Bulk three, before and after it, are pinned all the same.
+      proxy.refuse=message=>message.method==="thread/section/move"&&message.params?.threadId===id("Bulk two")?"Second pin refused":null;
+      await selectThreads(page,["Bulk one","Bulk two","Bulk three"]);
+      await bulkBar(page).getByRole("button",{name:"Pin",exact:true}).click();
+      await expect(sidebarAlert(page)).toHaveText("Could not pin “Bulk two”: Second pin refused.");
+      await expect.poll(()=>groups(page)).toEqual([["Pinned",["Bulk one","Bulk three"]],["Active",["Bulk two","Bulk four"]]]);
+      await expect(undoToast(page)).toContainText("2 threads pinned");
+      await expect(bulkBar(page).locator("span")).toHaveText("1 selected");expect(await selected(page)).toEqual(["Bulk two"]);
+      await shoot(page,"sidebar-bulk-pin-partial");
+      // Undo puts back the two it pinned.
+      await undoToast(page).getByRole("button",{name:"Undo",exact:true}).click();
+      await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+      proxy.refuse=()=>null;
+      await page.getByRole("button",{name:"Thread actions",exact:true}).click();await expect(bulkBar(page)).toHaveCount(0);
+    }
+    await switchMode(page,"dark");
+    // Archive: the harness refuses Bulk three, the last one tried; the others are archived, and Undo brings them back.
+    proxy.refuse=message=>message.method==="thread/archive"&&message.params?.threadId===id("Bulk three")?"Archive is read-only":null;
+    await selectThreads(page,["Bulk two","Bulk three","Bulk four"]);
+    await bulkBar(page).getByRole("button",{name:"Archive",exact:true}).click();
+    await expect(sidebarAlert(page)).toHaveText("Could not archive “Bulk three”: Archive is read-only.");
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk three"]]]);
+    await expect(undoToast(page)).toContainText("2 threads archived");
+    expect(await selected(page)).toEqual(["Bulk three"]);
+    proxy.refuse=()=>null;
+    await undoToast(page).getByRole("button",{name:"Undo",exact:true}).click();
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    expect(harness.threadStore.list("native").filter(thread=>thread.archived).length).toBe(0);
+  }finally{await harness.close()}
+});
+
+test("a bulk Snooze the harness refuses for one thread snoozes the rest with Undo, and the dialog stays on the refused one with the reason",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,proxy,meta,id}=await openSidebarApp(page);
+  try{
+    proxy.refuse=message=>message.method==="thread/section/move"&&message.params?.threadId===id("Bulk three")&&message.params?.sectionId?"Sections are read-only":null;
+    await selectThreads(page,["Bulk two","Bulk three","Bulk four"]);
+    await bulkBar(page).getByRole("button",{name:"Snooze",exact:true}).click();
+    const dialog=snoozeDialog(page);await expect(dialog).toBeVisible();await expect(dialog.locator("#snooze-dialog-title")).toHaveText("Snooze 3 threads");
+    await dialog.getByRole("button",{name:"Snooze",exact:true}).click();
+    await expect(dialog.getByRole("alert")).toHaveText("Could not snooze “Bulk three”: Sections are read-only.");
+    await expect(dialog.locator("#snooze-dialog-title")).toHaveText("Snooze thread");
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk three"]],["Snoozed",["Bulk two","Bulk four"]]]);
+    await expect(undoToast(page)).toContainText("2 threads snoozed");
+    expect(await selected(page)).toEqual(["Bulk three"]);
+    // The refused thread keeps no wake time.
+    expect(meta[id("Bulk three")].snoozedUntil??null).toBe(null);expect(Number(meta[id("Bulk two")].snoozedUntil)).toBeGreaterThan(Date.now());
+    for(const mode of ["dark","light"]){
+      if(mode==="light"){await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await switchMode(page,"light");await bulkBar(page).getByRole("button",{name:"Snooze",exact:true}).click();await dialog.getByRole("button",{name:"Snooze",exact:true}).click();await expect(dialog.getByRole("alert")).toHaveText("Could not snooze “Bulk three”: Sections are read-only.")}
+      await shoot(page,"sidebar-bulk-snooze-partial");
+    }
+    // Retried once the harness takes it, the dialog snoozes the one left and closes.
+    proxy.refuse=()=>null;
+    await dialog.getByRole("button",{name:"Snooze",exact:true}).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one"]],["Snoozed",["Bulk two","Bulk three","Bulk four"]]]);
+    await expect(bulkBar(page)).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+test("a refused Snooze says why in the dialog, leaves the thread as it was and writes nothing in the open thread",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,proxy,meta,id}=await openSidebarApp(page);
+  try{
+    proxy.refuse=message=>message.method==="thread/section/move"?"Sections are read-only":null;
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");
+      await row.getByRole("button",{name:"Snooze…",exact:true}).click();
+      const dialog=snoozeDialog(page);await expect(dialog).toBeVisible();
+      await dialog.getByRole("button",{name:"Snooze",exact:true}).click();
+      await expect(dialog.getByRole("alert")).toHaveText("Could not snooze “Bulk three”: Sections are read-only.");
+      await expect(dialog).toBeVisible();
+      await shoot(page,"sidebar-snooze-refused");
+      await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await expect(dialog).toHaveCount(0);
+    }
+    // Bulk three is as it was: in Active, with no wake time saved, and the open thread's conversation says nothing of it.
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    expect(meta[id("Bulk three")].snoozedUntil??null).toBe(null);
+    await expect(page.locator(".conversation-column").getByText("Sections are read-only")).toHaveCount(0);
+    await expect(threadRow(page,"Bulk three").locator(".thread-main > div > span")).not.toHaveText(/Wakes/);
+  }finally{await harness.close()}
+});
+
+test("closing the Snooze dialog with Cancel, Escape or its close button gives focus back to the control that opened it",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness}=await openSidebarApp(page);
+  const dialog=snoozeDialog(page);
+  try{
+    for(const [close,mode] of [["Cancel","dark"],["Escape","dark"],["Escape","light"],["Close snooze dialog","light"]]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk two"),button=row.locator(".thread-menu summary");
+      await row.getByRole("button",{name:"Snooze…",exact:true}).click();
+      await expect(dialog).toBeVisible();await expect(dialog.getByLabel("Snooze duration")).toBeFocused();
+      if(close==="Escape")await page.keyboard.press("Escape");else await dialog.getByRole("button",{name:close,exact:true}).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(button).toBeFocused();await expect(row.locator(".thread-menu")).not.toHaveAttribute("open","");
+      if(close==="Escape"){await shoot(page,"sidebar-snooze-closed-focus");await expect(button).toBeFocused()}
+    }
+    await switchMode(page,"dark");
+    // From the keyboard: Enter on the row's menu button, Tab to Snooze…, Enter, then Escape lands back on the button.
+    const row=threadRow(page,"Bulk three"),button=row.locator(".thread-menu summary");
+    await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await expect(button).toBeFocused();
+    await page.keyboard.press("Enter");await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+    await page.keyboard.press("Tab");await page.keyboard.press("Tab");await expect(row.getByRole("button",{name:"Snooze…",exact:true})).toBeFocused();
+    await page.keyboard.press("Enter");await expect(dialog).toBeVisible();
+    await page.keyboard.press("Escape");await expect(dialog).toHaveCount(0);await expect(button).toBeFocused();
+    // The bulk bar's Snooze gets it back too.
+    await selectThreads(page,["Bulk one","Bulk four"]);
+    const bulkSnooze=bulkBar(page).getByRole("button",{name:"Snooze",exact:true});
+    await bulkSnooze.click();await expect(dialog).toBeVisible();
+    await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await expect(dialog).toHaveCount(0);
+    await expect(bulkSnooze).toBeFocused();
+  }finally{await harness.close()}
+});
+
+// Six digits typed into the Until field's year, as a slip of the keyboard gives them (the year, then the next part's digits), leave a
+// four-digit year and go on to the next part: the hint names the date the field shows and Snooze snoozes the thread until then. The
+// year part used to take all six, a date shown that the dialog read as none ("Choose a date and time."). A date the field shows but
+// gives no value for (a day its month does not have) is named as one, where the hint used to ask for a date as if none were shown.
+// The dates are next year's, from mid-June, whatever the day the test runs on: no ArrowUp below crosses the end of a month, and the
+// hint always names the year.
+test("six digits typed into Snooze's Until year leave a four-digit year that the wake time names, the hint names a day the month does not have, and Snooze snoozes the thread until then",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,meta,id}=await openSidebarApp(page);
+  const dialog=snoozeDialog(page),hint=dialog.locator(".snooze-hint"),submit=dialog.getByRole("button",{name:"Snooze",exact:true}),until=dialog.getByLabel("Snooze until");
+  const next=String(await page.evaluate(()=>new Date().getFullYear()+1)),start=next+"-06-15T10:00";
+  // From the field's first part to the one at index: the parts are in the order of the system's date format.
+  const toPart=async index=>{for(let step=0;step<6;step++)await page.keyboard.press("ArrowLeft");for(let step=0;step<index;step++)await page.keyboard.press("ArrowRight")};
+  try{
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");await row.getByRole("button",{name:"Snooze…",exact:true}).click();
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button",{name:"Until date & time",exact:true}).click();await expect(until).toBeFocused();
+      // Each part is found by what its ArrowUp changes in the June 15 date: the year, the month or the day.
+      const part={};
+      for(let index=0;index<6;index++){
+        await until.fill(start);await toPart(index);await page.keyboard.press("ArrowUp");
+        const [year,month,day]=(await until.inputValue()).split("T")[0].split("-");
+        if(year===String(Number(next)+1))part.year??=index;else if(month==="07")part.month??=index;else if(day==="16")part.day??=index;
+      }
+      expect(Object.keys(part).sort()).toEqual(["day","month","year"]);
+      // next year's digits then 12, and 275761 (past the last year the field took, 275760): the first four digits are the year.
+      for(const [digits,shown] of [[next+"12",next],["275761","2757"]]){
+        await until.fill(start);await toPart(part.year);await page.keyboard.type(digits,{delay:20});
+        await expect(hint).toHaveText(new RegExp("^Wakes .*\\b"+shown+"\\b.*\\.$"));await expect(hint).not.toHaveClass(/invalid/);await expect(submit).toBeEnabled();
+        await expect(until).toHaveValue(new RegExp("^"+shown+"-\\d\\d-\\d\\dT\\d\\d:\\d\\d$"));
+        await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-year-"+(digits===next+"12"?"next-year-12":digits)+"-typed-"+mode+"-1280x800.png"});
+      }
+      await shoot(page,"sidebar-snooze-six-digit-year");
+      // June 30, then ArrowUp on the day: the field shows June 31, a date it gives no value for. The hint says so and Snooze waits;
+      // one more ArrowUp (the 1st) wakes it again.
+      const shown=await until.inputValue();
+      await until.fill(next+"-06-30T10:00");await toPart(part.day);await page.keyboard.press("ArrowUp");
+      await expect(until).toHaveValue("");
+      await expect(hint).toHaveText("That date is incomplete or does not exist. Choose another date and time.");await expect(hint).toHaveClass(/invalid/);await expect(submit).toBeDisabled();
+      await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-day-past-month-end-"+mode+"-1280x800.png"});
+      await page.keyboard.press("ArrowUp");await expect(until).toHaveValue(next+"-06-01T10:00");
+      await expect(hint).toHaveText(new RegExp("^Wakes .*\\b"+next+"\\b.*\\.$"));await expect(submit).toBeEnabled();
+      // June 31 again, then For a duration and back: the field comes back blank and asks for a date and time.
+      await until.fill(next+"-06-30T10:00");await toPart(part.day);await page.keyboard.press("ArrowUp");
+      await expect(hint).toHaveText("That date is incomplete or does not exist. Choose another date and time.");
+      await dialog.getByRole("button",{name:"For a duration",exact:true}).click();await expect(hint).toHaveText(/^Wakes /);
+      await dialog.getByRole("button",{name:"Until date & time",exact:true}).click();await expect(until).toBeFocused();await expect(until).toHaveValue("");
+      await expect(hint).toHaveText("Choose a date and time.");await expect(hint).toHaveClass(/invalid/);await expect(submit).toBeDisabled();
+      await until.fill(shown);await expect(hint).toHaveText(/^Wakes .*\b2757\b.*\.$/);
+      await page.setViewportSize({width:700,height:800});await expect(hint).toBeInViewport();
+      await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-six-digit-year-"+mode+"-700x800.png"});
+      await page.setViewportSize({width:1280,height:800});
+      if(mode==="dark"){await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await expect(dialog).toHaveCount(0);continue}
+      const value=await until.inputValue();
+      await submit.click();await expect(dialog).toHaveCount(0);
+      await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk two","Bulk four"]],["Snoozed",["Bulk three"]]]);
+      // The wake time saved is the date and time the field showed.
+      const saved=new Date(Number(meta[id("Bulk three")].snoozedUntil)),pad=number=>String(number).padStart(2,"0");
+      expect(saved.getFullYear()+"-"+pad(saved.getMonth()+1)+"-"+pad(saved.getDate())+"T"+pad(saved.getHours())+":"+pad(saved.getMinutes())).toBe(value);
+    }
+  }finally{await harness.close()}
+});
+
+// Digits typed into a part of Snooze's Until field are kept when the minute has turned since the dialog last drew, or turns while the
+// part is being typed. The field's min, the next minute, was worked out at each render, so the first key after the turn drew the field
+// with a new min and Chrome started the part again: a year typed after the turn read 0028 for 2028, one typed two digits either side of
+// it 0008, an hour 01 for 11. Nor does the field lose the parts typed when it is left with a part empty, or a day its month does not
+// have, after a turn, and come back to (the min set again as it lost focus wiped them all). A time that has passed while the dialog was
+// open is still refused by the dialog itself, with the hint asking for a time in the future. The page's clock is held 20 s into a
+// minute and moved on where the test turns the minute; the light run types in a 700 px window.
+test("digits typed into Snooze's Until field after or across a minute's turn are kept, also when the field is left with a part empty and come back to, and a time that passes while the dialog is open is refused",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,meta,id}=await openSidebarApp(page);
+  const dialog=snoozeDialog(page),hint=dialog.locator(".snooze-hint"),submit=dialog.getByRole("button",{name:"Snooze",exact:true}),until=dialog.getByLabel("Snooze until");
+  let now=Math.floor(Date.now()/60_000)*60_000+20_000;await page.clock.setFixedTime(now);
+  const minutesPass=async minutes=>{now+=minutes*60_000;await page.clock.setFixedTime(now)};
+  const next=String(await page.evaluate(()=>new Date().getFullYear()+1)),later=String(Number(next)+1),start=next+"-06-15T10:00";
+  const wakes=year=>new RegExp("^Wakes .*\\b"+year+"\\b.*\\.$");
+  // A click on the field's first part, as a person clicks into it, then the arrow keys to the part at index: the parts are in the order
+  // of the system's date format.
+  const toPart=async index=>{for(let step=0;step<6;step++)await page.keyboard.press("ArrowLeft");for(let step=0;step<index;step++)await page.keyboard.press("ArrowRight")};
+  const clickPart=async index=>{const box=await until.boundingBox();await page.mouse.click(box.x+14,box.y+box.height/2);await toPart(index)};
+  let part=null;
+  try{
+    for(const [mode,width] of [["dark",1280],["light",700]]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");await row.getByRole("button",{name:"Snooze…",exact:true}).click();
+      await expect(dialog).toBeVisible();
+      await dialog.getByRole("button",{name:"Until date & time",exact:true}).click();await expect(until).toBeFocused();
+      await page.setViewportSize({width,height:800});
+      // Each part is found by what its ArrowUp changes in June 15, 10:00.
+      if(!part){
+        part={};
+        for(let index=0;index<6;index++){
+          await until.fill(start);await toPart(index);await page.keyboard.press("ArrowUp");
+          const [date,time]=(await until.inputValue()).split("T"),[year,month,day]=date.split("-");
+          if(year===later)part.year??=index;else if(month==="07")part.month??=index;else if(day==="16")part.day??=index;
+          else if(time==="11:00")part.hour??=index;else if(time==="10:01")part.minute??=index;else if(time==="22:00")part.dayPeriod??=index;
+        }
+        expect(Object.keys(part).filter(type=>type!=="dayPeriod").sort()).toEqual(["day","hour","minute","month","year"]);
+      }
+      // The year typed once the minute has turned, with no key pressed since the field drew.
+      await until.fill(start);await minutesPass(1);
+      await clickPart(part.year);await page.keyboard.type(later,{delay:20});
+      await expect(until).toHaveValue(later+"-06-15T10:00");await expect(hint).toHaveText(wakes(later));await expect(submit).toBeEnabled();
+      // The year typed two digits before the turn and two after it.
+      await until.fill(start);await clickPart(part.year);
+      await page.keyboard.type(later.slice(0,2),{delay:20});await minutesPass(1);await page.keyboard.type(later.slice(2),{delay:20});
+      await expect(until).toHaveValue(later+"-06-15T10:00");await expect(hint).toHaveText(wakes(later));await expect(submit).toBeEnabled();
+      // The hour typed after a turn.
+      await until.fill(later+"-06-15T10:00");await minutesPass(1);
+      await clickPart(part.hour);await page.keyboard.type("11",{delay:20});
+      await expect(until).toHaveValue(later+"-06-15T11:00");await expect(hint).toHaveText(wakes(later));await expect(submit).toBeEnabled();
+      await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-typed-after-minute-turn-"+mode+"-"+width+"x800.png"});
+      // A part left empty (dark: the day cleared with Backspace) or a day its month does not have (light: 31 in June), the minute
+      // turned, and the field left (dark: a click on the dialog's words; light: Tab on to Cancel) and clicked back into: the parts
+      // still filled keep their digits. Leaving the field set its min again, and Chrome lays a field that gives no value out again
+      // with every part empty, so the month, year, hour and minute had to be typed again.
+      await until.fill(later+"-06-15T10:00");await clickPart(part.day);
+      if(mode==="dark")await page.keyboard.press("Backspace");else await page.keyboard.type("31",{delay:20});
+      await expect(until).toHaveValue("");await expect(hint).toHaveText("That date is incomplete or does not exist. Choose another date and time.");
+      await minutesPass(1);
+      if(mode==="dark")await dialog.locator(":scope>p").first().click();
+      else{
+        const cancel=dialog.getByRole("button",{name:"Cancel",exact:true});
+        for(let step=0;step<8&&!(await cancel.evaluate(node=>node===document.activeElement));step++)await page.keyboard.press("Tab");
+        await expect(cancel).toBeFocused();
+      }
+      await expect(until).not.toBeFocused();await clickPart(part.day);
+      await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-incomplete-date-left-and-back-"+mode+"-"+width+"x800.png"});
+      const day=mode==="dark"?"20":"30";await page.keyboard.type(day,{delay:20});
+      await expect(until,"the parts still filled keep their digits once the field is left after a minute's turn and come back to").toHaveValue(later+"-06-"+day+"T10:00");
+      await expect(hint).toHaveText(wakes(later));await expect(submit).toBeEnabled();
+      if(mode==="dark"){await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await expect(dialog).toHaveCount(0);continue}
+      // A time two minutes on wakes the thread; once the clock has passed it, Snooze snoozes nothing and the hint asks for a time in the
+      // future.
+      const soon=await page.evaluate(time=>{const date=new Date(time),pad=number=>String(number).padStart(2,"0");return date.getFullYear()+"-"+pad(date.getMonth()+1)+"-"+pad(date.getDate())+"T"+pad(date.getHours())+":"+pad(date.getMinutes())},now+120_000);
+      await until.fill(soon);await expect(hint).toHaveText(/^Wakes .*\.$/);await expect(submit).toBeEnabled();
+      await minutesPass(3);await submit.click();
+      await expect(hint).toHaveText("Choose a time in the future.");await expect(hint).toHaveClass(/invalid/);await expect(submit).toBeDisabled();
+      await expect(dialog).toBeVisible();await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+      // The dialog refuses it itself: the field's blur draws it again before the release, so Snooze is off by the click. One that
+      // sent the time on had the app refuse it ("Could not snooze “Bulk three”: Choose a future snooze time."), which the checks above
+      // pass with too.
+      await expect(dialog.getByRole("alert"),"the dialog refused the passed time itself, with no snooze for the app to refuse").toHaveCount(0);
+      await page.screenshot({animations:"disabled",path:auditDir+"sidebar-snooze-time-passed-"+mode+"-"+width+"x800.png"});
+      // The whole date and time typed from the keyboard after another turn, part by part in the field's order, then Snooze.
+      const typed={day:"20",month:"07",year:later,hour:"11",minute:"45",dayPeriod:"A"};
+      await minutesPass(1);await clickPart(0);
+      for(const [type] of Object.entries(part).sort((a,b)=>a[1]-b[1]))await page.keyboard.type(typed[type],{delay:20});
+      await expect(until).toHaveValue(later+"-07-20T11:45");await expect(hint).toHaveText(wakes(later));await expect(submit).toBeEnabled();
+      await submit.click();await expect(dialog).toHaveCount(0);
+      await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk two","Bulk four"]],["Snoozed",["Bulk three"]]]);
+      const saved=new Date(Number(meta[id("Bulk three")].snoozedUntil)),pad=number=>String(number).padStart(2,"0");
+      expect(saved.getFullYear()+"-"+pad(saved.getMonth()+1)+"-"+pad(saved.getDate())+"T"+pad(saved.getHours())+":"+pad(saved.getMinutes())).toBe(later+"-07-20T11:45");
+    }
+  }finally{await harness.close()}
+});
+
+test("a bulk Archive the harness refuses for every thread says its reason once and keeps the threads in view",async({page})=>{
+  test.setTimeout(120_000);
+  const list=Array.from({length:10},(_,index)=>"Payments refactor step "+String(index+1).padStart(2,"0")+" with the refund flow");
+  const {harness,proxy}=await openSidebarApp(page,list);
+  try{
+    proxy.refuse=message=>message.method==="thread/archive"?"Archive is read-only":null;
+    await selectThreads(page,list);
+    await bulkBar(page).getByRole("button",{name:"Archive",exact:true}).click();
+    const alert=sidebarAlert(page);
+    await expect(alert).toHaveText("Could not archive 10 threads: Archive is read-only.");
+    expect(await selected(page)).toEqual(list);
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      for(const width of [1280,900]){
+        await page.setViewportSize({width,height:800});
+        // The threads still selected show under the alert, which takes a line or two of the sidebar: the list stays where the
+        // person left it, at the last ones ticked.
+        await expect(threadRow(page,list[9])).toBeInViewport();await expect(threadRow(page,list[8])).toBeInViewport();
+        const [box,sidebar]=await Promise.all([alert.boundingBox(),page.locator(".sidebar").boundingBox()]);
+        expect(box.height).toBeLessThan(sidebar.height/8);
+        await page.screenshot({animations:"disabled",path:auditDir+"sidebar-bulk-archive-all-refused-"+mode+"-"+width+"x800.png"});
+      }
+      await page.setViewportSize({width:1280,height:800});
+    }
+  }finally{await harness.close()}
+});
+
+test("with the harness away, a bulk Pin and a Snooze say they could not, offer no Undo and leave the threads as they were",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,proxy,meta,id}=await openSidebarApp(page);
+  try{
+    proxy.stop();
+    await expect(page.getByTestId("composer-transport")).toContainText("Trebell Native");
+    await selectThreads(page,["Bulk two","Bulk three"]);
+    await bulkBar(page).getByRole("button",{name:"Pin",exact:true}).click();
+    await expect(sidebarAlert(page)).toHaveText("Could not pin 2 threads: Trebell Native is not connected.");
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    await expect(undoToast(page)).toHaveCount(0);
+    expect(await selected(page)).toEqual(["Bulk two","Bulk three"]);
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await shoot(page,"sidebar-bulk-pin-harness-away")}
+    await switchMode(page,"dark");
+    // Archive says the same.
+    await bulkBar(page).getByRole("button",{name:"Archive",exact:true}).click();
+    await expect(sidebarAlert(page)).toHaveText("Could not archive 2 threads: Trebell Native is not connected.");
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    await page.getByRole("button",{name:"Thread actions",exact:true}).click();await expect(bulkBar(page)).toHaveCount(0);
+    // A Snooze from the row's menu: the dialog stays and says why, and no wake time is kept.
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");
+      await row.getByRole("button",{name:"Snooze…",exact:true}).click();
+      const dialog=snoozeDialog(page);await expect(dialog).toBeVisible();
+      await dialog.getByRole("button",{name:"Snooze",exact:true}).click();
+      await expect(dialog.getByRole("alert")).toHaveText("Could not snooze “Bulk three”: Trebell Native is not connected.");
+      await expect(dialog).toBeVisible();await expect(undoToast(page)).toHaveCount(0);
+      await shoot(page,"sidebar-snooze-harness-away");
+      await dialog.getByRole("button",{name:"Cancel",exact:true}).click();await expect(dialog).toHaveCount(0);
+    }
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    expect(meta[id("Bulk three")].snoozedUntil??null).toBe(null);
+  }finally{await harness.close()}
+});
+
+test("a bulk Pin that pins one of the threads offers Undo for “Thread pinned”",async({page})=>{
+  test.setTimeout(60_000);
+  const {harness,proxy,id}=await openSidebarApp(page);
+  try{
+    proxy.refuse=message=>message.method==="thread/section/move"&&message.params?.threadId===id("Bulk two")?"Second pin refused":null;
+    await selectThreads(page,["Bulk one","Bulk two"]);
+    await bulkBar(page).getByRole("button",{name:"Pin",exact:true}).click();
+    await expect(sidebarAlert(page)).toHaveText("Could not pin “Bulk two”: Second pin refused.");
+    await expect.poll(()=>groups(page)).toEqual([["Pinned",["Bulk one"]],["Active",["Bulk two","Bulk three","Bulk four"]]]);
+    await expect(undoToast(page).locator("span").first()).toHaveText("Thread pinned");
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await shoot(page,"sidebar-bulk-pin-one-of-two")}
+  }finally{await harness.close()}
+});
+
+// The thread actions' code loads at idle after the first paint (thread-actions.js, B11). A bulk Pin made before it has come pins, once
+// it is in, the threads that were selected when Pin was clicked, though the selection changed meanwhile.
+test("a bulk Pin made before the thread actions have loaded pins the threads selected at the click once they come",async({page})=>{
+  test.setTimeout(60_000);
+  const held=[];
+  await page.route(/\/assets\/thread-actions-[^/]*\.js$/,route=>{held.push(route)});
+  const {harness}=await openSidebarApp(page);
+  try{
+    await expect.poll(()=>held.length,{message:"the thread actions asked for at idle"}).toBe(1);
+    await selectThreads(page,["Bulk one","Bulk two"]);
+    await bulkBar(page).getByRole("button",{name:"Pin",exact:true}).click();
+    // Nothing moves before the code comes, and the person selects another thread instead (ticking it first: with none selected the
+    // bulk bar would close).
+    for(const name of ["Bulk three","Bulk one","Bulk two"])await threadRow(page,name).locator(".thread-select").click();
+    await expect(bulkBar(page).locator("span")).toHaveText("1 selected");
+    expect(await groups(page)).toEqual([["Active",names]]);
+    for(const route of held.splice(0))await route.continue();
+    await expect.poll(()=>groups(page)).toEqual([["Pinned",["Bulk one","Bulk two"]],["Active",["Bulk three","Bulk four"]]]);
+    await expect(undoToast(page)).toContainText("2 threads pinned");
+    await shoot(page,"sidebar-bulk-pin-before-actions-load");
+  }finally{for(const route of held)await route.continue().catch(()=>{});await harness.close()}
+});
+
+test("a bulk action that changes every selected thread leaves keyboard focus on Thread actions as the bulk bar goes",async({page})=>{
+  test.setTimeout(60_000);
+  const {harness}=await openSidebarApp(page);
+  try{
+    const toggle=page.getByRole("button",{name:"Thread actions",exact:true});
+    // Two threads pinned in each mode, from the bar's Pin by the keyboard.
+    for(const [mode,pair,after] of [["dark",["Bulk two","Bulk three"],[["Pinned",["Bulk two","Bulk three"]],["Active",["Bulk one","Bulk four"]]]],["light",["Bulk one","Bulk four"],null]]){
+      await switchMode(page,mode);
+      await selectThreads(page,pair);
+      await bulkBar(page).getByRole("button",{name:"Pin",exact:true}).focus();await page.keyboard.press("Enter");
+      if(after)await expect.poll(()=>groups(page)).toEqual(after);else await expect.poll(async()=>(await groups(page)).map(([name])=>name)).toEqual(["Pinned"]);
+      await expect(bulkBar(page)).toHaveCount(0);
+      await expect(toggle).toBeFocused();
+      await shoot(page,"sidebar-bulk-done-focus");
+    }
+    // From there a person carries on from the keyboard: Enter opens bulk mode again.
+    await page.keyboard.press("Enter");await expect(bulkBar(page)).toBeVisible();
+  }finally{await harness.close()}
+});
+
+test("Delete asks in the app's own dialog, never the browser's: Escape and Cancel keep the thread, and Delete thread removes it from the keyboard",async({page})=>{
+  test.setTimeout(90_000);
+  const nativeDialogs=[];page.on("dialog",dialog=>{nativeDialogs.push(dialog.type()+": "+dialog.message());dialog.dismiss().catch(()=>{})});
+  const {harness,id}=await openSidebarApp(page);
+  const question=page.locator("dialog.inspector-text-prompt"),doomed=id("Bulk three");
+  try{
+    for(const [mode,close] of [["dark","Escape"],["light","Cancel"]]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");
+      await row.getByRole("button",{name:"Delete",exact:true}).click();
+      await expect(question.locator("p")).toHaveText("Delete “Bulk three” permanently? This cannot be undone.");
+      await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+      await expect(question.getByRole("button",{name:"Delete thread",exact:true})).toBeVisible();
+      await shoot(page,"sidebar-delete-question");
+      if(close==="Escape")await page.keyboard.press("Escape");else await question.getByRole("button",{name:"Cancel",exact:true}).click();
+      await expect(question).toHaveCount(0);
+      await expect(row.locator(".thread-menu summary")).toBeFocused();await expect(row).toBeVisible();
+    }
+    expect(harness.threadStore.get(doomed)).toBeTruthy();
+    // From the keyboard: Enter on the row's menu button, Tab down to Delete, Enter, Tab from Cancel to Delete thread, Enter. Focus
+    // then goes to the row after the deleted one, or the one before for the last row, so the keyboard keeps its place in the list.
+    const deleteFromKeyboard=async name=>{
+      const row=threadRow(page,name),button=row.locator(".thread-menu summary"),remove=row.getByRole("button",{name:"Delete",exact:true});
+      await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await expect(button).toBeFocused();
+      await page.keyboard.press("Enter");await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+      for(let step=0;step<14&&!await remove.evaluate(node=>node===document.activeElement);step++)await page.keyboard.press("Tab");
+      await expect(remove).toBeFocused();await page.keyboard.press("Enter");
+      await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+      await page.keyboard.press("Tab");await expect(question.getByRole("button",{name:"Delete thread",exact:true})).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(question).toHaveCount(0);
+    };
+    await switchMode(page,"dark");
+    await deleteFromKeyboard("Bulk three");
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk two","Bulk four"]]]);
+    expect(harness.threadStore.get(doomed)).toBeFalsy();
+    await expect(threadRow(page,"Bulk four").locator(".thread-main"),"focus after the delete").toBeFocused();
+    await shoot(page,"sidebar-delete-focus-next-row");
+    await switchMode(page,"light");
+    await deleteFromKeyboard("Bulk four");
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk two"]]]);
+    await expect(threadRow(page,"Bulk two").locator(".thread-main"),"focus after the last row's delete").toBeFocused();
+    await shoot(page,"sidebar-delete-focus-next-row");
+    expect(nativeDialogs).toEqual([]);
+  }finally{await harness.close()}
+});
+
+test("a double click on Delete asks once with the keyboard on Cancel, so Enter keeps the thread",async({page})=>{
+  test.setTimeout(60_000);
+  const {harness,id}=await openSidebarApp(page);
+  const question=page.locator("dialog.inspector-text-prompt"),cancel=question.getByRole("button",{name:"Cancel",exact:true});
+  try{
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk three");
+      // The question opens on the first click, so the second lands on its backdrop, where Delete was.
+      await row.getByRole("button",{name:"Delete",exact:true}).dblclick();
+      await expect(question).toHaveCount(1);await expect(cancel).toBeFocused();
+      await shoot(page,"sidebar-delete-double-click");
+      await page.keyboard.press("Enter");
+      await expect(question).toHaveCount(0);await expect(row).toBeVisible();
+    }
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    expect(harness.threadStore.get(id("Bulk three"))).toBeTruthy();
+  }finally{await harness.close()}
+});
+
+test("a double click on Pin or Archive in another thread's menu runs it once, and its second click opens nothing that lay under the menu",async({page})=>{
+  test.setTimeout(90_000);
+  const list=["Alpha task","Beta task","Gamma task","Delta task","Epsilon task"];
+  const {harness,proxy,id}=await openSidebarApp(page,list);
+  const title=page.locator(".chat-workspace .workspace-header .thread-title-button"),opened=[];
+  try{
+    const gamma=threadRow(page,"Gamma task");await gamma.locator(".thread-main").click();
+    await expect(gamma).toHaveClass(/active/);await expect(title).toContainText("Gamma task");
+    // A thread the second click opened would be resumed on the harness.
+    proxy.refuse=message=>{if(message.method==="thread/resume"&&message.params?.threadId!==id("Gamma task"))opened.push(message.params?.threadId);return null};
+    // Gamma stays open: its row, its conversation, no other page or panel and no bulk mode.
+    const gammaStaysOpen=async()=>{
+      await expect(page.locator(".thread-row.active .thread-main")).toHaveAttribute("title","Gamma task");
+      await expect(title).toContainText("Gamma task");await expect(page.getByTestId("composer")).toBeVisible();
+      await expect(page.locator(".sidebar-utility[aria-current=page],.sidebar-utility[aria-pressed=true]")).toHaveCount(0);
+      await expect(bulkBar(page)).toHaveCount(0);expect(opened).toEqual([]);
+    };
+    // The first click runs the item and closes the menu, so the second lands where the item was: on the row below for Pin, on
+    // the sidebar's destinations for Archive.
+    for(const [mode,pin,archive] of [["dark","Delta task","Alpha task"],["light","Epsilon task","Beta task"]]){
+      await switchMode(page,mode);
+      let row=await rowMenu(page,pin);
+      await row.getByRole("button",{name:"Pin",exact:true}).dblclick();
+      await expect(undoToast(page).locator("span").first()).toHaveText("Thread pinned");
+      await expect.poll(async()=>(await groups(page)).find(([name])=>name==="Pinned")?.[1]||[]).toContain(pin);
+      await gammaStaysOpen();
+      row=await rowMenu(page,archive);
+      await row.getByRole("button",{name:"Archive",exact:true}).dblclick();
+      await expect(undoToast(page).locator("span").first()).toHaveText("Thread archived");
+      await expect(threadRow(page,archive)).toHaveCount(0);
+      await gammaStaysOpen();
+      await shoot(page,"sidebar-row-menu-double-click");
+    }
+    await expect.poll(async()=>(await groups(page)).find(([name])=>name==="Active")?.[1]).toEqual(["Gamma task"]);
+    expect(harness.threadStore.list("native").filter(thread=>thread.archived).map(thread=>thread.name).sort()).toEqual(["Alpha task","Beta task"]);
+  }finally{await harness.close()}
+});
+
+test("Enter held on Pin or Settle in a row's menu runs it once, and its repeats open nothing that took the keyboard",async({page})=>{
+  test.setTimeout(60_000);
+  const {harness,proxy,id}=await openSidebarApp(page);
+  const title=page.locator(".chat-workspace .workspace-header .thread-title-button"),opened=[];
+  proxy.refuse=message=>{if(message.method==="thread/resume"&&message.params?.threadId!==id("Bulk one"))opened.push(message.params?.threadId);return null};
+  const frames=()=>page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+  try{
+    for(const [mode,name,item,group] of [["dark","Bulk two","Pin","Pinned"],["light","Bulk three","Settle","Settled"]]){
+      await switchMode(page,mode);
+      // Tab from the row to its menu button, Enter opens the menu, Tab goes down to the item, and Enter is held on it.
+      const row=threadRow(page,name),target=row.getByRole("button",{name:item,exact:true});
+      await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await page.keyboard.press("Enter");
+      await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+      for(let step=0;step<14&&!await target.evaluate(node=>node===document.activeElement);step++)await page.keyboard.press("Tab");
+      await expect(target).toBeFocused();
+      await page.keyboard.down("Enter");
+      await expect.poll(async()=>(await groups(page)).find(([section])=>section===group)?.[1]||[]).toContain(name);
+      // The thread went to its group and the keyboard to the row after it, where the repeats land.
+      for(let repeat=0;repeat<6;repeat++)await page.keyboard.down("Enter");
+      await page.keyboard.up("Enter");await frames();
+      await expect(page.locator(".thread-row.active .thread-main")).toHaveAttribute("title","Bulk one");
+      await expect(title).toContainText("Bulk one");expect(opened).toEqual([]);
+      await shoot(page,"sidebar-row-menu-held-enter");
+    }
+  }finally{await harness.close()}
+});
+
+test("Escape on an item of a row's menu closes the menu with the keyboard back on its Thread actions button",async({page})=>{
+  test.setTimeout(60_000);
+  const {harness}=await openSidebarApp(page);
+  try{
+    const row=threadRow(page,"Bulk two"),button=row.locator(".thread-menu summary"),menu=row.locator(".thread-menu");
+    for(const [mode,item] of [["dark","Pin"],["dark","Archive"],["light","Pin"]]){
+      await switchMode(page,mode);
+      // Tab from the row to its menu button, Enter opens the menu, Tab goes down to the item, and Escape closes the menu.
+      await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await expect(button).toBeFocused();
+      await page.keyboard.press("Enter");await expect(menu).toHaveAttribute("open","");
+      await expect(row.getByRole("button",{name:"Copy ID",exact:true})).toBeVisible();
+      const target=row.getByRole("button",{name:item,exact:true});
+      for(let step=0;step<14&&!await target.evaluate(node=>node===document.activeElement);step++)await page.keyboard.press("Tab");
+      await expect(target).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(menu).not.toHaveAttribute("open","");await expect(row.locator(".thread-menu-popover")).toBeHidden();
+      await expect(button).toBeFocused();await expect(button).toBeVisible();
+      if(item==="Pin")await shoot(page,"sidebar-row-menu-escape-from-item");
+      // The keyboard carries on from the button: Enter opens the menu again, and Escape closes it there.
+      await page.keyboard.press("Enter");await expect(menu).toHaveAttribute("open","");
+      await page.keyboard.press("Escape");await expect(menu).not.toHaveAttribute("open","");await expect(button).toBeFocused();
+    }
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+  }finally{await harness.close()}
+});
+
+test("with the harness away, Delete says Trebell Native is not connected before it asks, and the open thread stays open and listed",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,proxy,id}=await openSidebarApp(page);
+  const question=page.locator("dialog.inspector-text-prompt");
+  try{
+    proxy.stop();
+    await expect(page.getByTestId("composer-transport")).toContainText("Trebell Native");
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,"Bulk one");
+      await row.getByRole("button",{name:"Delete",exact:true}).click();
+      await expect(sidebarAlert(page)).toHaveText("Could not delete “Bulk one”: Trebell Native is not connected.");
+      await expect(question).toHaveCount(0);
+      await expect(threadRow(page,"Bulk one")).toHaveClass(/active/);
+      await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+      await shoot(page,"sidebar-delete-harness-away");
+    }
+    expect(harness.threadStore.get(id("Bulk one"))).toBeTruthy();
+  }finally{await harness.close()}
+});
+
+test("a Delete the harness refuses names the thread with its reason, from the mouse and from the keyboard, and keeps it listed",async({page})=>{
+  test.setTimeout(90_000);
+  const {harness,proxy,id}=await openSidebarApp(page);
+  const question=page.locator("dialog.inspector-text-prompt"),row=threadRow(page,"Bulk three"),remove=row.getByRole("button",{name:"Delete",exact:true});
+  const confirm=question.getByRole("button",{name:"Delete thread",exact:true});
+  try{
+    proxy.refuse=message=>message.method==="thread/delete"?"Thread store is read-only":null;
+    // Clicked in dark. In light the keyboard goes from the row to its menu button, Enter, down to Delete, Enter, then from Cancel
+    // to Delete thread, Enter.
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      if(mode==="dark"){await rowMenu(page,"Bulk three");await remove.click()}
+      else{
+        await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await page.keyboard.press("Enter");
+        await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+        for(let step=0;step<14&&!await remove.evaluate(node=>node===document.activeElement);step++)await page.keyboard.press("Tab");
+        await expect(remove).toBeFocused();await page.keyboard.press("Enter");
+      }
+      // The question is open, and the last refusal's message went as the Delete was chosen.
+      await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();await expect(sidebarAlert(page)).toHaveCount(0);
+      if(mode==="dark")await confirm.click();else{await page.keyboard.press("Tab");await expect(confirm).toBeFocused();await page.keyboard.press("Enter")}
+      await expect(question).toHaveCount(0);
+      await expect(sidebarAlert(page)).toHaveText("Could not delete “Bulk three”: Thread store is read-only.");
+      await expect(row).toBeVisible();await expect(threadRow(page,"Bulk one")).toHaveClass(/active/);
+      await shoot(page,"sidebar-delete-refused");
+    }
+    await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    expect(harness.threadStore.get(id("Bulk three"))).toBeTruthy();
+  }finally{await harness.close()}
+});
+
+test("an Undo the harness refuses says so where the Undo was, naming the thread it could not put back, and writes nothing in the open thread",async({page})=>{
+  test.setTimeout(120_000);
+  const list=["Bulk one","Bulk two","Bulk three","Bulk four","Bulk five","Bulk six"];
+  const {harness,proxy,id}=await openSidebarApp(page,list);
+  const toast=page.getByTestId("app-action-error"),conversation=page.locator(".conversation-column");
+  try{
+    // Bulk one stays open while another thread is archived from its row's menu and the harness refuses to bring it back: Undo is
+    // clicked on the toast in dark, and Ctrl+Z pressed in light. The message names the Undo ("put back"), whatever it undid.
+    for(const [mode,name] of [["dark","Bulk two"],["light","Bulk three"]]){
+      await switchMode(page,mode);
+      const row=await rowMenu(page,name);
+      await row.getByRole("button",{name:"Archive",exact:true}).click();
+      await expect(threadRow(page,name)).toHaveCount(0);await expect(undoToast(page).locator("span").first()).toHaveText("Thread archived");
+      proxy.refuse=message=>message.method==="thread/unarchive"?"Archive store is read-only":null;
+      if(mode==="dark")await undoToast(page).getByRole("button",{name:"Undo",exact:true}).click();else await page.keyboard.press("Control+z");
+      await expect(toast).toHaveText("Could not put back “"+name+"”: Archive store is read-only.");
+      await expect(undoToast(page)).toHaveCount(0);await expect(threadRow(page,name)).toHaveCount(0);
+      await expect(conversation).toContainText("Done with bulk one.");await expect(conversation.getByText("Archive store is read-only")).toHaveCount(0);
+      await shoot(page,"sidebar-archive-undo-refused");
+      proxy.refuse=()=>null;
+    }
+    expect(harness.threadStore.get(id("Bulk two")).archived).toBe(true);expect(harness.threadStore.get(id("Bulk three")).archived).toBe(true);
+    // The Undo of a bulk Archive tries every thread, as the Archive did: the one the harness keeps is named, and the other comes back.
+    await switchMode(page,"dark");
+    await selectThreads(page,["Bulk four","Bulk five"]);
+    await bulkBar(page).getByRole("button",{name:"Archive",exact:true}).click();
+    await expect(undoToast(page)).toContainText("2 threads archived");await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk six"]]]);
+    proxy.refuse=message=>message.method==="thread/unarchive"&&message.params?.threadId===id("Bulk four")?"Archive store is read-only":null;
+    await undoToast(page).getByRole("button",{name:"Undo",exact:true}).click();
+    await expect(toast).toHaveText("Could not put back “Bulk four”: Archive store is read-only.");
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk five","Bulk six"]]]);
+    await expect(conversation.getByText("Archive store is read-only")).toHaveCount(0);
+    expect(harness.threadStore.get(id("Bulk four")).archived).toBe(true);expect(harness.threadStore.get(id("Bulk five")).archived).toBeFalsy();
+    // An Un-settle's Undo reads "Thread restored": refused, its message names the Undo that failed (Bulk six stays out of Settled)
+    // instead of saying the thread just restored could not be restored. In light, Undo clicked on the toast.
+    proxy.refuse=()=>null;await switchMode(page,"light");
+    await (await rowMenu(page,"Bulk six")).getByRole("button",{name:"Settle",exact:true}).click();
+    await expect.poll(()=>groups(page)).toEqual([["Active",["Bulk one","Bulk five"]],["Settled",["Bulk six"]]]);
+    await (await rowMenu(page,"Bulk six")).getByRole("button",{name:"Un-settle",exact:true}).click();
+    await expect(undoToast(page).locator("span").first()).toHaveText("Thread restored");
+    await expect.poll(async()=>(await groups(page)).map(([group])=>group)).toEqual(["Active"]);
+    proxy.refuse=message=>message.method==="thread/section/move"?"Sections are read-only":null;
+    await undoToast(page).getByRole("button",{name:"Undo",exact:true}).click();
+    await expect(toast).toHaveText("Could not put back “Bulk six”: Sections are read-only.");
+    await expect(undoToast(page)).toHaveCount(0);
+    expect((await groups(page)).find(([group])=>group==="Active")?.[1]).toContain("Bulk six");
+    await expect(conversation.getByText("Sections are read-only")).toHaveCount(0);
+    await shoot(page,"sidebar-unsettle-undo-refused");
+  }finally{await harness.close()}
+});
+
+// A row's Archive or Pin refused while the harness is away says what could not be done to which thread, as a bulk action's refusal and
+// a refused Delete do, so once the harness is back it reads as that refusal. It said "Trebell Native is not connected" while the
+// composer and the harness card said Trebell Native was connected again.
+test("an Archive or Pin refused while the harness is away names the action and the thread, so once the harness is back it does not say it is away",async({page})=>{
+  test.setTimeout(120_000);
+  const {harness,proxy}=await openSidebarApp(page);
+  const transport=page.getByTestId("composer-transport"),composer=page.getByTestId("composer"),dot=page.getByTestId("sidebar-provider-dot");
+  try{
+    // Archive clicked in dark; in light the keyboard goes from the row to its menu button, Enter, down to Pin, Enter.
+    for(const [mode,name,item,verb] of [["dark","Bulk two","Archive","archive"],["light","Bulk three","Pin","pin"]]){
+      await switchMode(page,mode);
+      proxy.stop();
+      await expect(transport).toContainText("Reconnecting to Trebell Native");
+      if(mode==="dark")await (await rowMenu(page,name)).getByRole("button",{name:item,exact:true}).click();
+      else{
+        const row=threadRow(page,name),target=row.getByRole("button",{name:item,exact:true});
+        await row.locator(".thread-main").focus();await page.keyboard.press("Tab");await page.keyboard.press("Enter");
+        await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+        for(let step=0;step<14&&!await target.evaluate(node=>node===document.activeElement);step++)await page.keyboard.press("Tab");
+        await expect(target).toBeFocused();await page.keyboard.press("Enter");
+      }
+      await expect(sidebarAlert(page)).toContainText("Trebell Native is not connected");
+      await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+      // The harness is back, as the composer and the harness card say: the alert names the refusal, not the harness as away.
+      proxy.start();
+      await expect(transport).toHaveCount(0,{timeout:30_000});
+      await expect(composer).toHaveAttribute("placeholder","Ask Trebell Code anything…");await expect(dot).toHaveClass(/tone-ok/);
+      await expect(sidebarAlert(page),"the sidebar once the harness is back").toHaveText(`Could not ${verb} “${name}”: Trebell Native is not connected.`);
+      await shoot(page,"sidebar-refused-while-away-harness-back");
+      await expect.poll(()=>groups(page)).toEqual([["Active",names]]);
+    }
+  }finally{await harness.close()}
+});
+
+// Every undo toast counts its 5 seconds down from 5s: one that replaced another (a Pin seconds after an Archive) showed 6s for its
+// first quarter second, from the time the toast before it was last counted at.
+test("an undo toast that replaces another starts at 5s and counts down, as a fresh one does",async({page})=>{
+  test.setTimeout(90_000);
+  const list=["Alpha task","Beta task","Gamma task","Delta task","Epsilon task","Zeta task"];
+  const {harness}=await openSidebarApp(page,list);
+  const toast=undoToast(page),label=toast.locator("span").first(),seconds=toast.locator("em");
+  // The toast's label and seconds at every frame from now on.
+  const watch=()=>page.evaluate(()=>{const seen=window.__undoSeconds=[];const tick=()=>{const node=document.querySelector("[data-testid=thread-undo-toast]");if(node)seen.push([node.querySelector("span")?.textContent||"",node.querySelector("em")?.textContent||""]);if(seen.length<900)requestAnimationFrame(tick)};requestAnimationFrame(tick)});
+  // The seconds the toast with this label showed, frame by frame, from its first frame up to its first 4s: whenever this reads them
+  // (the 3s after it, or a 4s on screen that no frame has caught yet, does not change what it gives), so it is polled until the
+  // frames hold that 4s.
+  const shown=text=>page.evaluate(text=>{const values=[];for(const [name,value] of window.__undoSeconds)if(name===text&&values.at(-1)!==value){values.push(value);if(value==="4s")break}return values},text);
+  const countedFrom=(text,message)=>expect.poll(()=>shown(text),{message,timeout:4000}).toEqual(["5s","4s"]);
+  try{
+    // Dark: Beta archived, then Gamma pinned; Delta pinned on its own. Light: Epsilon archived, then Zeta pinned; Gamma unpinned on its own.
+    for(const [mode,archived,[replacing,replacingItem,replacingLabel],[fresh,freshItem,freshLabel]] of [
+      ["dark","Beta task",["Gamma task","Pin","Thread pinned"],["Delta task","Pin","Thread pinned"]],
+      ["light","Epsilon task",["Zeta task","Pin","Thread pinned"],["Gamma task","Unpin","Thread unpinned"]]]){
+      await switchMode(page,mode);
+      // An Archive's toast, counted down to 3s (or 2s, read late), then the toast of another action replaces it.
+      await (await rowMenu(page,archived)).getByRole("button",{name:"Archive",exact:true}).click();
+      await expect(label).toHaveText("Thread archived");await expect(seconds).toHaveText(/^[23]s$/,{timeout:5000});
+      await watch();
+      await (await rowMenu(page,replacing)).getByRole("button",{name:replacingItem,exact:true}).click();
+      await expect(label).toHaveText(replacingLabel);
+      await countedFrom(replacingLabel,"the seconds the toast that replaced another showed, up to its first 4s");
+      await shoot(page,"sidebar-undo-toast-replaced");
+      await expect(toast).toHaveCount(0,{timeout:8000});
+      // A fresh toast, with none before it, counts the same.
+      await watch();
+      await (await rowMenu(page,fresh)).getByRole("button",{name:freshItem,exact:true}).click();
+      await expect(label).toHaveText(freshLabel);
+      await countedFrom(freshLabel,"the seconds a fresh toast showed, up to its first 4s");
+      await expect(toast).toHaveCount(0,{timeout:8000});
+    }
+  }finally{await harness.close()}
+});

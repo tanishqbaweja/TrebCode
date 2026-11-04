@@ -1,0 +1,424 @@
+import asyncio
+import hashlib
+import json
+import os
+import shlex
+import tempfile
+from pathlib import Path
+from typing import Literal, override
+
+from pydantic import Field
+
+from harbor.agents.capabilities import AgentCapabilities
+from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
+from harbor.agents.installed.node_install import nvm_node_install_snippet
+from harbor.agents.model_connection import ModelConnectionSpec
+from harbor.agents.options import InstalledAgentOptions
+from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext, ModelUsage
+
+from .agent_timeout_stop import stop_agent_tree
+from .ca_bundle import ensure_ca_bundle
+
+
+class TrebellNativeOptions(InstalledAgentOptions):
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max"
+    ] = Field(default="max", description="OpenAI reasoning effort.")
+    service_tier: Literal["default", "fast"] = Field(
+        default="default",
+        description="OpenAI processing tier. Fast changes serving speed, not the model or reasoning effort.",
+    )
+    live_probe: bool = Field(
+        default=False,
+        description="Diagnostic only: stop after the first provider response and log its latency/usage.",
+    )
+    live_probe_turns: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        description="Number of provider responses to allow during a diagnostic live probe.",
+    )
+
+
+class TrebellNativeAgent(BaseInstalledAgent):
+    """Harbor adapter that runs the real Trebell Native agent inside the task container."""
+
+    capabilities = AgentCapabilities()
+    MODEL_CONNECTION = ModelConnectionSpec(default_provider="openai")
+    options_model = TrebellNativeOptions
+    options: TrebellNativeOptions
+
+    _REMOTE_RUNNER = "/installed-agent/trebell-native-agent.mjs"
+    _REMOTE_RUNTIME = "/installed-agent/runtime"
+    _REMOTE_INSTRUCTION = "/installed-agent/instruction.txt"
+    _REMOTE_API_KEY = "/installed-agent/openai-api-key"
+    _OUTPUT = "/logs/agent/trebell-native.txt"
+    _METRICS = "/logs/agent/trebell-native-metrics.json"
+    # The store behind trebell_output/inspect: beside the runner, not in /tmp, which a task's own cleanup can empty under a
+    # running agent (an inspect of an earlier output then fails with ENOENT).
+    _TOOL_OUTPUT_DIR = "/installed-agent/tool-output"
+    # Harbor runs agent commands with `bash -c` (non-login), while task images often activate the project
+    # interpreter only for login shells (e.g. SWE-bench's `conda activate testbed` in ~/.bashrc, reached via
+    # ~/.profile) and Codex runs every model command through `bash -lc`. Import a login shell's exported
+    # environment once before launching Native so every tool command it spawns inherits it; capturing it
+    # from a separate login shell keeps a profile that prints or exits from breaking the launch. Debian's
+    # /etc/profile resets PATH, so keep the original PATH (and its order) and only prepend entries the login
+    # shell added, e.g. an activated conda env, instead of dropping Dockerfile `ENV PATH` entries.
+    _LOGIN_ENVIRONMENT = (
+        "trebell_path=\"$PATH\"; eval \"$(bash -lc 'export -p' 2>/dev/null)\" 2>/dev/null || true; "
+        "trebell_login_path=\"$PATH\"; PATH=\"$trebell_path\"; trebell_prefix=\"\"; IFS=:; "
+        "for entry in $trebell_login_path; do if [ -n \"$entry\" ]; "
+        "then case \":$trebell_path:\" in *\":$entry:\"*) ;; "
+        "*) case \":$trebell_prefix:\" in *\":$entry:\"*) ;; "
+        "*) trebell_prefix=\"${trebell_prefix:+$trebell_prefix:}$entry\";; esac;; esac; fi; done; "
+        "unset IFS; if [ -n \"$trebell_prefix\" ]; then PATH=\"$trebell_prefix:$PATH\"; fi; export PATH; "
+    )
+    _PINNED_NODE_VERSION = "22.23.3"
+    _PINNED_NODE_TARBALL_SHA256 = (
+        "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
+    )
+    _REMOTE_NODE_ARCHIVE = "/tmp/trebell-node-linux-x64.tar.gz"
+    _REMOTE_NODE_ROOT = "/opt/trebell-node"
+    _PRIVATE_NODE = "/opt/trebell-node/bin/node"
+    # What agent_timeout_stop.py looks for to stop the runner, and everything under it, at Harbor's agent timeout.
+    _RUNNER_MARKER = "trebell-native-agent.mjs"
+
+    @staticmethod
+    @override
+    def name() -> str:
+        return "trebell-native"
+
+    @override
+    def get_version_command(self) -> str | None:
+        return (
+            f'runtime="$(cat {self._REMOTE_RUNTIME} 2>/dev/null || true)"; '
+            f'if [ "$runtime" = "bun" ]; then bun {self._REMOTE_RUNNER} --version; '
+            f'elif [ "$runtime" = {shlex.quote(self._PRIVATE_NODE)} ]; then "$runtime" {self._REMOTE_RUNNER} --version; '
+            f"else . ~/.nvm/nvm.sh >/dev/null 2>&1 || true; "
+            f"node {self._REMOTE_RUNNER} --version; fi"
+        )
+
+    @override
+    async def install(self, environment: BaseEnvironment) -> None:
+        bundle = Path(__file__).resolve().parent / "dist" / "trebell-native-agent.mjs"
+        if not bundle.is_file():
+            raise FileNotFoundError(
+                f"Missing Trebell Native Harbor bundle: {bundle}. "
+                "Run npm run bench:terminal:bundle first."
+            )
+        # The same container as the Codex lanes (ca_bundle.py): an image without a CA store gets the Mozilla one.
+        await ensure_ca_bundle(self, environment)
+        # Harbor already mounts /logs/agent for each trial. Recreating the
+        # mount point is unnecessary and can fail on Docker Desktop/Windows.
+        # The tool-output store is made here as root and opened like the pinned
+        # Codex lanes' CODEX_HOME: the agent can be the image's own USER, whom
+        # Harbor gives no default_user to chown it to.
+        store = shlex.quote(self._TOOL_OUTPUT_DIR)
+        await self.exec_as_root(
+            environment,
+            command=f"mkdir -p /installed-agent {store}; chmod 0777 {store}",
+        )
+        if environment.default_user is not None:
+            owner = shlex.quote(str(environment.default_user))
+            await self.exec_as_root(
+                environment, command=f"chown {owner} /installed-agent"
+            )
+        await self._upload_agent_owned_file(
+            environment, bundle, self._REMOTE_RUNNER
+        )
+        async def write_runtime_marker(runtime: str) -> None:
+            if runtime not in {"bun", "node", self._PRIVATE_NODE}:
+                raise ValueError(f"Unsupported Trebell Native runtime marker: {runtime!r}")
+            marker = shlex.quote(self._REMOTE_RUNTIME)
+            value = shlex.quote(runtime)
+            await self.exec_as_root(
+                environment,
+                command=f"printf '%s\\n' {value} > {marker}; chmod 0644 {marker}",
+            )
+
+        # Avoid heavyweight runtime installation when the task image already
+        # ships a compatible JavaScript runtime. Bun-based TB4 images are a
+        # common example; the bundled Native runner is validated directly
+        # before selection so incompatible runtimes fall through safely.
+        # An image's own Node must also have a global fetch (Node 18 and
+        # later): the runner answers --version before its module code runs, so
+        # preact-2757's /usr/bin/node v16.20.2 passed the probe alone and the
+        # runner then stopped at once on "fetch is not defined", before any
+        # model call (2026-11-01).
+        runtime = None
+        try:
+            runtime_result = await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    f"if command -v bun >/dev/null 2>&1 && "
+                    f"bun {self._REMOTE_RUNNER} --version >/dev/null 2>&1; then "
+                    "printf '%s\\n' bun; "
+                    f"elif command -v node >/dev/null 2>&1 && "
+                    "node -e \"process.exit(typeof fetch === 'function' ? 0 : 1)\" >/dev/null 2>&1 && "
+                    f"node {self._REMOTE_RUNNER} --version >/dev/null 2>&1; then "
+                    "printf '%s\\n' node; "
+                    "elif command -v node >/dev/null 2>&1; then "
+                    "printf '%s\\n' image-node; "
+                    "else exit 42; fi"
+                ),
+            )
+            runtime = str(runtime_result.stdout or "").strip()
+        except Exception:
+            pass
+        if runtime in {"bun", "node"}:
+            await write_runtime_marker(runtime)
+            return
+        # An image whose own Node cannot run the runner keeps that Node first on
+        # the PATH: the task's tests and the agent's commands run on the
+        # project's Node, as in the Codex lanes, and only the runner uses the
+        # pinned one, by its path. preact-2757's karma tests (webpack 4) all
+        # failed on a pinned Node 22 linked into /usr/local/bin (2026-11-01).
+        image_node = runtime == "image-node"
+        self.logger.info(
+            "No compatible preinstalled Bun/Node runtime; installing Node 22 fallback"
+            + (" beside the image's own Node." if image_node else ".")
+        )
+
+        pinned_node_value = os.environ.get("TREBELL_NODE_PINNED_TARBALL", "").strip()
+        if pinned_node_value:
+            pinned_node = Path(pinned_node_value).expanduser().resolve()
+            if not pinned_node.is_file():
+                raise FileNotFoundError(f"Pinned Node tarball not found: {pinned_node}")
+            digest = hashlib.sha256()
+            with pinned_node.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            actual_sha256 = digest.hexdigest()
+            if actual_sha256 != self._PINNED_NODE_TARBALL_SHA256:
+                raise ValueError(
+                    "Pinned Node tarball SHA-256 mismatch: "
+                    f"expected {self._PINNED_NODE_TARBALL_SHA256}, got {actual_sha256}"
+                )
+            await environment.upload_file(pinned_node, self._REMOTE_NODE_ARCHIVE)
+            archive = shlex.quote(self._REMOTE_NODE_ARCHIVE)
+            root = shlex.quote(self._REMOTE_NODE_ROOT)
+            expected = shlex.quote(f"v{self._PINNED_NODE_VERSION}")
+            links = "" if image_node else (
+                f"ln -sf {root}/bin/node /usr/local/bin/node; "
+                f"ln -sf {root}/bin/npm /usr/local/bin/npm; "
+                f"ln -sf {root}/bin/npx /usr/local/bin/npx; "
+                f"if [ -e {root}/bin/corepack ]; then "
+                f"ln -sf {root}/bin/corepack /usr/local/bin/corepack; fi; "
+            )
+            node_cmd = shlex.quote(self._PRIVATE_NODE) if image_node else "node"
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    f"rm -rf {root}; mkdir -p {root}; "
+                    f"tar -xzf {archive} -C {root} --strip-components=1; "
+                    f"{links}"
+                    f"rm -f {archive}; "
+                    f'actual="$({node_cmd} --version)"; '
+                    f'test "$actual" = {expected} || {{ echo "Unexpected Node version: $actual" >&2; exit 1; }}'
+                ),
+            )
+            await self.exec_as_agent(
+                environment,
+                command=f"{node_cmd} {self._REMOTE_RUNNER} --version >/dev/null 2>&1",
+            )
+            await write_runtime_marker(self._PRIVATE_NODE if image_node else "node")
+            return
+
+        # Fallback only: curl is needed for nvm. Avoid Harbor's package-manager
+        # path when the task image already ships curl; apt metadata refreshes
+        # are unrelated benchmark setup and can be much slower or flakier than
+        # the agent work itself.
+        try:
+            await self.exec_as_agent(
+                environment, command="command -v curl >/dev/null 2>&1"
+            )
+        except Exception:
+            await self.ensure_system_dependencies(environment, ("curl",))
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                f"{nvm_node_install_snippet()} && "
+                "node --version"
+            ),
+        )
+        await write_runtime_marker("node")
+
+    # Harbor's helper writes the file with Path.write_text, which on a Windows host turns every "\n" into "\r\n":
+    # Native read each task instruction with CRLF line endings, while the Codex lanes get it unchanged as a shell
+    # argument. Write the exact UTF-8 bytes instead, and set the owner and mode as Harbor's helper does.
+    @override
+    async def _upload_config_text(
+        self,
+        environment: BaseEnvironment,
+        *,
+        content: str,
+        remote_path: str,
+        filename: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="harbor-agent-config-") as temp_dir:
+            local_path = Path(temp_dir) / filename
+            local_path.write_bytes(content.encode("utf-8"))
+            await environment.upload_file(local_path, remote_path)
+
+        if environment.default_user is not None:
+            owner = shlex.quote(str(environment.default_user))
+            quoted_remote_path = shlex.quote(remote_path)
+            await self.exec_as_root(
+                environment,
+                command=(
+                    f"chown {owner} {quoted_remote_path} && "
+                    f"chmod 600 {quoted_remote_path}"
+                ),
+            )
+
+    @with_prompt_template
+    @override
+    async def run(
+        self, instruction: str, environment: BaseEnvironment, context: AgentContext
+    ) -> None:
+        if not self.model_name:
+            raise ValueError("Trebell Native requires --model openai/<model>.")
+        model = self.model_name.split("/")[-1]
+        access = self.model_connection
+        if not access.api_key:
+            raise ValueError("OPENAI_API_KEY is required for Trebell Native.")
+
+        await self._upload_config_text(
+            environment,
+            content=instruction,
+            remote_path=self._REMOTE_INSTRUCTION,
+            filename="instruction.txt",
+        )
+        # Harbor's Docker exec backend expands per-exec env values into
+        # `docker compose exec -e KEY=value`, which makes secrets visible in
+        # the host process command line. Stage the API key as a mode-600 file
+        # instead, read it inside the container, and delete it before Node starts.
+        await self._upload_config_text(
+            environment,
+            content=access.api_key,
+            remote_path=self._REMOTE_API_KEY,
+            filename="openai-api-key",
+        )
+        env = {
+            "TREBELL_MODEL": model,
+            "TREBELL_REASONING_EFFORT": self.options.reasoning_effort,
+            "TREBELL_SERVICE_TIER": self.options.service_tier,
+            "TREBELL_HOME": "/tmp/trebell-home",
+            "TREBELL_METRICS_PATH": self._METRICS,
+            "TREBELL_TOOL_OUTPUT_DIR": self._TOOL_OUTPUT_DIR,
+            **(
+                {
+                    "TREBELL_HARBOR_LIVE_PROBE": "1",
+                    "TREBELL_HARBOR_LIVE_PROBE_TURNS": str(self.options.live_probe_turns),
+                }
+                if self.options.live_probe
+                else {}
+            ),
+        }
+        # The runner takes every setting from Native's shared configuration (src/native-configuration.mjs). These benchmark
+        # switches reach it only when set, and it records each one in its metrics; a readout carries none.
+        for switch in ("TREBELL_HARBOR_CONTEXT_WINDOW", "TREBELL_HARBOR_COMPACT_THRESHOLD"):
+            value = os.environ.get(switch, "").strip()
+            if value:
+                env[switch] = value
+        reasoning_context = os.environ.get("TREBELL_OPENAI_REASONING_CONTEXT", "").strip()
+        if reasoning_context:
+            env["TREBELL_OPENAI_REASONING_CONTEXT"] = reasoning_context
+        semantic_gate = os.environ.get("TREBELL_HARBOR_SEMANTIC_GATE", "").strip()
+        if semantic_gate:
+            env["TREBELL_HARBOR_SEMANTIC_GATE"] = semantic_gate
+        gate_snapshot_paths = os.environ.get("TREBELL_HARBOR_GATE_SNAPSHOT_PATHS", "").strip()
+        if gate_snapshot_paths:
+            env["TREBELL_HARBOR_GATE_SNAPSHOT_PATHS"] = gate_snapshot_paths
+        try:
+            await self._run_runner(environment, env)
+        except asyncio.CancelledError:
+            # Harbor's agent timeout (agent_timeout_stop.py): the runner takes no action after it.
+            await asyncio.shield(stop_agent_tree(self, environment, self._RUNNER_MARKER))
+            raise
+
+    async def _run_runner(self, environment: BaseEnvironment, env: dict[str, str]) -> None:
+        await self.exec_as_agent(
+            environment,
+            command=(
+                "set -o pipefail; "
+                f'runtime="$(cat {self._REMOTE_RUNTIME} 2>/dev/null || true)"; '
+                '. ~/.nvm/nvm.sh >/dev/null 2>&1 || true; '
+                f'export OPENAI_API_KEY="$(cat {self._REMOTE_API_KEY})"; '
+                f"rm -f {self._REMOTE_API_KEY}; "
+                f'if [ "$runtime" = "bun" ]; then runtime_cmd=bun; '
+                f'elif [ "$runtime" = {shlex.quote(self._PRIVATE_NODE)} ]; then runtime_cmd="$runtime"; '
+                'else runtime_cmd=node; fi; '
+                # Pin the agent runtime before the login environment can put a project-provided node first.
+                'runtime_cmd="$(command -v "$runtime_cmd" || printf %s "$runtime_cmd")"; '
+                f"{self._LOGIN_ENVIRONMENT}"
+                f'"$runtime_cmd" {self._REMOTE_RUNNER} {self._REMOTE_INSTRUCTION} '
+                f"2>&1 | tee {self._OUTPUT}; "
+                'pipeline_status=$?; '
+                'if [ "$pipeline_status" -eq 0 ]; then exit 0; fi; '
+                f"if [ -s {self._METRICS} ] && "
+                f'"$runtime_cmd" -e \'const fs=require("fs"); const metrics=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.exit(metrics.error===null?0:1)\' {self._METRICS}; then '
+                'echo "Trebell Native runner returned non-zero after persisting clean metrics; continuing to Harbor artifact collection and verification." >&2; '
+                "exit 0; "
+                "fi; "
+                'exit "$pipeline_status"'
+            ),
+            env=env,
+        )
+
+    @override
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        """Expose Trebell's provider-reported usage through Harbor's standard result."""
+        metrics_path = self.logs_dir / "trebell-native-metrics.json"
+        if not metrics_path.is_file():
+            return
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            usage = metrics.get("usage") or {}
+            input_tokens = int(usage.get("inputTokens") or 0)
+            cached_tokens = int(usage.get("cachedInputTokens") or 0)
+            output_tokens = int(usage.get("outputTokens") or 0)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            self.logger.exception("Failed to read Trebell Native usage metrics")
+            return
+        context.n_input_tokens = input_tokens
+        context.n_cache_tokens = cached_tokens
+        context.n_output_tokens = output_tokens
+        context.model_usage = {
+            self.model_name or "openai/unknown": ModelUsage(
+                n_input_tokens=input_tokens,
+                n_cache_tokens=cached_tokens,
+                n_output_tokens=output_tokens,
+                cost_usd=None,
+            )
+        }
+        context.metadata = {
+            **(context.metadata or {}),
+            "trebell_native": {
+                "model_turns": int(metrics.get("modelTurns") or 0),
+                "tool_calls": int(metrics.get("toolCalls") or 0),
+                "provider_requests": int(metrics.get("providerRequests") or 0),
+                "reasoning_effort": metrics.get("reasoningEffort"),
+                "service_tier": metrics.get("serviceTier"),
+                "effective_service_tiers": metrics.get("effectiveServiceTiers") or [],
+                "reasoning_context": metrics.get("reasoningContext"),
+                "effective_reasoning_contexts": metrics.get("effectiveReasoningContexts") or [],
+                "reasoning_output_tokens": int(
+                    usage.get("reasoningOutputTokens") or 0
+                ),
+                "cache_write_input_tokens": int(
+                    usage.get("cacheWriteInputTokens") or 0
+                ),
+                "cache_carryover": metrics.get("cacheCarryover") or {},
+                "strategy": metrics.get("strategy") or {},
+                "budgets": metrics.get("budgets") or {},
+                "context_policy": metrics.get("contextPolicy") or {},
+                # How the turn ended (completed, cancelled or failed) and a failed turn's error, as the runner wrote them.
+                "turn_status": metrics.get("turnStatus"),
+                "error": (str(metrics.get("error"))[:2000] if metrics.get("error") else None),
+            },
+        }

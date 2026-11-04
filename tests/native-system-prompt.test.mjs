@@ -1,0 +1,221 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { nativeSystemPrompt } from "../src/native-system-prompt.mjs";
+
+test("Native system prompt teaches evidence-driven coding without inventing unavailable capabilities",()=>{
+  const prompt=nativeSystemPrompt({
+    permissionMode:"supervised",
+    projectless:false,
+    tools:[
+      {name:"trebell_repo"},
+      {name:"trebell_workspace"},
+      {name:"trebell_terminal"},
+      {name:"trebell_browser"},
+    ],
+  });
+  assert.match(prompt,/first-party autonomous software-engineering agent/i);
+  assert.match(prompt,/Inspect relevant state/i);
+  assert.match(prompt,/Claim success only from Trebell evidence/i);
+  assert.match(prompt,/exact paths, commands, URLs/i);
+  assert.match(prompt,/preserve existing externally visible contracts/i);
+  assert.match(prompt,/public function\/class\/module names/i);
+  assert.doesNotMatch(prompt,/keep compatibility shims|inventory likely public entry points/i);
+  assert.match(prompt,/Do not add or run tests unless the user asks you to test or verify implementation/i);
+  assert.match(prompt,/Testing, smoke-check, benchmark, and verification guidance below applies only when the user explicitly asks/i);
+  assert.match(prompt,/comments inside suspect implementation code as hypotheses/i);
+  assert.match(prompt,/create a local reproducer only when the user asked to test\/verify/i);
+  assert.match(prompt,/authoritative fixtures, configuration, schemas, or data files/i);
+  assert.match(prompt,/compact audit of semantically meaningful input fields/i);
+  assert.match(prompt,/unexplained unused field tied to an acceptance concept/i);
+  assert.match(prompt,/Do not mechanically force metadata or unrelated fields/i);
+  assert.match(prompt,/multiple separately named thresholds for the same resource or state/i);
+  assert.match(prompt,/preserve them as distinct concepts/i);
+  assert.match(prompt,/target\/reserve and a hard minimum\/maximum/i);
+  assert.match(prompt,/boundary where one threshold is satisfied and the other is not/i);
+  assert.match(prompt,/planner, solver, scheduler, allocator, generator/i);
+  assert.match(prompt,/finite planning, scheduling, allocation, dispatch, routing, packing, or optimization tasks/i);
+  assert.match(prompt,/one bounded local solver\/search\/check/i);
+  assert.match(prompt,/global feasibility plus any priority\/optimality objective/i);
+  assert.match(prompt,/persistent state untouched until the strongest available pre-commit check passes/i);
+  assert.match(prompt,/scientific, quantitative, or data-analysis tasks/i);
+  assert.match(prompt,/units\/dimensions/i);
+  assert.match(prompt,/sign or physical interpretation/i);
+  assert.match(prompt,/selected formula\/convention/i);
+  assert.match(prompt,/basic domain bounds and order of magnitude/i);
+  assert.match(prompt,/physically impossible, unphysical, nonsensical/i);
+  assert.match(prompt,/independently recompute the final values/i);
+  assert.match(prompt,/self-authored assertion of the chosen numbers/i);
+  assert.doesNotMatch(prompt,/persistent structured artifacts/i);
+  assert.match(prompt,/unexpected universal failure, infeasible, empty, or no-solution outcome/i);
+  assert.match(prompt,/constraints shape construction\/selection itself rather than only reject the result afterward/i);
+  assert.match(prompt,/make that conclusion evidence-based/i);
+  assert.match(prompt,/arbitrary runtime inputs, policies, configuration, schemas, or equivalent variants/i);
+  assert.match(prompt,/cheap counterfactual case/i);
+  assert.match(prompt,/required fields from optional fields, defaulted fields, and conditionally valid fields/i);
+  assert.match(prompt,/validate a field when supplied does not by itself make that field required/i);
+  assert.match(prompt,/optional field is omitted but an alternate documented acceptance condition is satisfied/i);
+  assert.match(prompt,/do not infer stricter requiredness than the contract states/i);
+  assert.match(prompt,/canonical happy path through the public entry point/i);
+  assert.match(prompt,/documented defaults or fallbacks/i);
+  assert.match(prompt,/branches by runtime, persistence mode, transport, adapter, test runner, bundler/i);
+  assert.match(prompt,/passing browser, mock, or in-memory path is not evidence/i);
+  assert.match(prompt,/one Node launcher is not evidence that a transformed\/test-runner Node surface behaves identically/i);
+  assert.match(prompt,/baseline parity check/i);
+  assert.doesNotMatch(prompt,/multiple routes, workflows, components, or acceptance surfaces/i);
+  assert.doesNotMatch(prompt,/cover them breadth-first/i);
+  assert.doesNotMatch(prompt,/account for every explicitly named surface/i);
+  assert.match(prompt,/prove live state is preserved while ineligible/i);
+  assert.match(prompt,/one-item reproducer is not sufficient evidence/i);
+  assert.match(prompt,/two-item partial-progress\/interleaving check/i);
+  assert.match(prompt,/check each class separately/i);
+  assert.match(prompt,/after a merge or state transition/i);
+  assert.match(prompt,/live migrations, failovers, rolling restarts, routing changes, deployments, or cutovers/i);
+  assert.match(prompt,/transition window itself as a first-class acceptance surface/i);
+  assert.match(prompt,/bounded rehearsal, shadow or dual-run, or readiness-gate check/i);
+  assert.match(prompt,/hard-error and stale-read counters plus deadline headroom/i);
+  assert.match(prompt,/healthy post-cutover smoke test does not prove zero downtime/i);
+  assert.match(prompt,/end-to-end critical path/i);
+  assert.match(prompt,/Parallelizing independent waits still blocks first useful output/i);
+  assert.match(prompt,/nonessential secondary side effects off a latency-critical mutation response path/i);
+  assert.match(prompt,/focused timing\/runtime check/i);
+  assert.match(prompt,/Optimize the measured performance boundary/i);
+  assert.match(prompt,/one-time setup\/preprocessing/i);
+  assert.match(prompt,/invariant parsing, indexing, serialization, allocation, object conversion, compilation, graph preparation/i);
+  assert.match(prompt,/explicit invalidation when the source mutates/i);
+  assert.match(prompt,/Measure cold and warm behavior separately/i);
+  assert.match(prompt,/quantitative target/i);
+  assert.match(prompt,/acceptance gate/i);
+  assert.match(prompt,/representative baseline and candidate path/i);
+  assert.match(prompt,/one-shot benchmark, deployment, cutover, migration completion, release/i);
+  assert.match(prompt,/pre-activation benchmark or bounded proxy/i);
+  assert.match(prompt,/official metric is hidden/i);
+  assert.match(prompt,/hidden, randomized, workload-dependent/i);
+  assert.match(prompt,/broader deterministic matrix/i);
+  assert.match(prompt,/distribution and weakest cases/i);
+  assert.match(prompt,/meaningful headroom/i);
+  assert.match(prompt,/Batch independent read-only/i);
+  assert.match(prompt,/explicit user ordering constraints/i);
+  assert.match(prompt,/exposed repository tools/i);
+  assert.ok(prompt.includes("If the seed names likely relevant source paths, inspect those directly instead of listing or searching only to rediscover them."),"the seed guidance names source paths only");
+  assert.doesNotMatch(prompt,/repository seed already names likely relevant paths/i);
+  assert.match(prompt,/Put every hunk you already know for a file into one replace_text call's edits list\. The result shows the applied diff; re-read only if you need context beyond it\./);
+  assert.doesNotMatch(prompt,/edit calls together in one model response|executes non-parallel edits in order/i);
+  assert.match(prompt,/image file is relevant/i);
+  assert.match(prompt,/read_file with as_image=true/i);
+  assert.match(prompt,/pixel dumps/i);
+  assert.match(prompt,/stop speculative polishing/i);
+  assert.match(prompt,/acceptance-critical behavior/i);
+  assert.match(prompt,/If the user asks for verification and project tests are absent/i);
+  assert.match(prompt,/Before declaring an integration, service, daemon, endpoint, or runtime environment unavailable/i);
+  assert.match(prompt,/existing run scripts\/configuration/i);
+  assert.match(prompt,/bounded end-to-end smoke check over mocks alone/i);
+  assert.match(prompt,/semantic refactors/i);
+  assert.match(prompt,/trebell_repo\/discover/i);
+  assert.match(prompt,/trebell_repo\/invoke/i);
+  assert.match(prompt,/include those labels in verification_assess/i);
+  assert.match(prompt,/call trebell_repo\/invoke directly with a capability and arguments listed in its description; use trebell_repo\/discover only when you need a capability's full input schema\./);
+  assert.doesNotMatch(prompt,/discover then trebell_repo\/invoke|returned name\/schema/i,"advanced repository capabilities should not require a discover hop before every invoke");
+  assert.ok(prompt.includes("When verification_plan names required evidence labels, cover each label with a concrete check and include those labels in verification_assess rather than marking the step passed from a partial check. This keeps the manifest stable."),"the evidence-label guidance must stay unchanged");
+  assert.match(prompt,/isolated browser/i);
+  assert.match(prompt,/Permission profile: supervised/);
+  assert.doesNotMatch(prompt,/Delegate only/i);
+  assert.doesNotMatch(prompt,/source-control tools/i);
+  assert.match(prompt,/untrusted data/i);
+});
+
+test("Native repository guidance scopes searches to a known package and searches the whole repository otherwise",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"supervised",projectless:false,tools:[{name:"trebell_repo"}]});
+  const guidance=prompt.split("\n").find(line=>line.startsWith("- Use the exposed repository tools"));
+  assert.ok(guidance.includes("Use the exposed repository tools for symbol/file/code search and bounded source reads. When you already know which package holds the code, scope searches to that package; search the whole repository when the location is unknown."),guidance);
+  const without=nativeSystemPrompt({permissionMode:"supervised",projectless:false,tools:[{name:"trebell_workspace"}]});
+  assert.doesNotMatch(without,/scope searches to that package/,"the search guidance belongs to the repository tools");
+});
+
+test("Native post-edit verification guidance is conditional and batches requested checks",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"supervised",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]});
+  const postEdit=prompt.split("\n").filter(line=>line.startsWith("- When the user explicitly asks for testing or verification after an edit"));
+  assert.deepEqual(postEdit,[
+    "- When the user explicitly asks for testing or verification after an edit, prefer the requested deterministic check over rereading the same file only to confirm your own edit. When several independent requested checks are already known, issue them together rather than spending one model turn on each. Repair failures and re-run only the relevant requested check.",
+  ]);
+  assert.doesNotMatch(postEdit[0],/git diff|nearest|smoke|script|broader|chain/i,"the rule must not name specific checks, suggest chaining checks into one script, or drop a narrower check");
+});
+
+test("Native system prompt describes only dynamically exposed specialized capabilities",()=>{
+  const prompt=nativeSystemPrompt({
+    permissionMode:"read-only",
+    projectless:true,
+    tools:[
+      {name:"trebell_workspace"},
+      {name:"trebell_terminal"},
+      {name:"trebell_source_control"},
+      {name:"trebell_delegate"},
+      {name:"trebell_mcp"},
+    ],
+  });
+  assert.match(prompt,/General chat/);
+  assert.match(prompt,/source-control tools/i);
+  assert.match(prompt,/Delegate only/i);
+  assert.match(prompt,/MCP capabilities/i);
+  assert.doesNotMatch(prompt,/isolated browser/i);
+  assert.match(prompt,/Permission profile: read-only/);
+});
+
+test("Native does not add or run repository tests unless asked",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]});
+  const rule=prompt.split("\n").filter(line=>line.startsWith("- Do not add or run tests"));
+  assert.equal(rule.length,1);
+  assert.match(rule[0],/unless the user asks you to test or verify implementation/);
+  assert.match(rule[0],/Do not create or modify repository tests, test fixtures, or test data unless the user or the repository's instructions explicitly ask for them/);
+  assert.ok(prompt.indexOf("- Fix the cause, not only the instance")<prompt.indexOf(rule[0]),"the rule sits with the scope rules, before verification guidance");
+  assert.ok(prompt.indexOf(rule[0])<prompt.indexOf("- When the user explicitly asks for testing or verification after an edit"));
+});
+
+test("Native fixes the cause where the same faulty logic repeats for the same purpose, keeping the change focused",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]});
+  const rule=prompt.split("\n").filter(line=>line.startsWith("- Fix the cause"));
+  assert.deepEqual(rule,["- Fix the cause, not only the instance the user reported: where code you have read repeats the same faulty logic for the same purpose, fix those copies too. Keep the change focused and preserve unrelated user work."]);
+  assert.ok(!prompt.includes("smallest coherent fix"),"no smallest-fix line narrows the fix to the reported instance");
+  // With the scope rules, before the line that holds testing guidance back until the user asks.
+  assert.ok(prompt.indexOf(rule[0])<prompt.indexOf("- Testing, smoke-check, benchmark, and verification guidance below applies only"));
+});
+
+test("Native keeps every named symptom or surface in scope and accounts for each before finishing",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]}),lines=prompt.split("\n");
+  const rule=lines.filter(line=>line.startsWith("- Every symptom"));
+  assert.deepEqual(rule,["- Every symptom or surface named in the user's report or reproduction is in scope unless the user excludes it; before finishing, make sure each is addressed or say why it needs no change."]);
+  assert.doesNotMatch(prompt,/sibling entry point|another operand, argument position/i,"same-cause sibling hunting is not a standing rule");
+  assert.equal(lines.some(line=>/^- When the request explicitly names multiple routes/.test(line)),false,"the named-surfaces rule is folded into the scope rule");
+  assert.ok(prompt.indexOf("- Testing, smoke-check, benchmark, and verification guidance below applies only")<prompt.indexOf(rule[0]),"the scope rule keeps its place after the testing scope line");
+});
+
+test("Native inspects state before edits and points at the Git status the working context lists",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_repo"},{name:"trebell_workspace"}]});
+  assert.deepEqual(prompt.split("\n").filter(line=>line.startsWith("- Inspect relevant state")),[
+    "- Inspect relevant state before non-trivial edits (the working context lists Git status at turn start). Use tools for facts; do not invent file contents, command/browser/Git state, or verification results.",
+  ]);
+});
+
+test("Native preserves public contracts, imports included, without a standing inventory step",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]});
+  assert.deepEqual(prompt.split("\n").filter(line=>line.startsWith("- For bug fixes, repairs, and refactors of existing code")),[
+    "- For bug fixes, repairs, and refactors of existing code, preserve existing externally visible contracts by default: public function/class/module names, call signatures, imports, CLI entry points/options/exit semantics, configuration/schema/data formats, and documented behavior. Do not rename, remove, or reshape these merely to make internals cleaner unless the user/task explicitly asks for the contract change or all known consumers are deliberately migrated.",
+  ]);
+});
+
+test("Native uses existing covering tests only when testing was explicitly requested",()=>{
+  const prompt=nativeSystemPrompt({permissionMode:"full",projectless:false,tools:[{name:"trebell_workspace"},{name:"trebell_terminal"}]});
+  const rule=prompt.split("\n").filter(line=>line.startsWith("- When the user explicitly asks for tests and an existing test file or module covers source you edited"));
+  assert.equal(rule.length,1);
+  assert.match(rule[0],/prefer that existing coverage over inventing broader new suites/);
+  assert.match(rule[0],/Add further checks only for a named requirement or reported input form that the requested verification did not exercise/);
+  assert.ok(prompt.indexOf("- When the user explicitly asks for testing or verification after an edit")<prompt.indexOf(rule[0]),"it follows the requested-verification batching rule");
+});
+
+test("Native's permission line says the network is open and a missing tool may be installed, within the profile's approvals",()=>{
+  const line=mode=>nativeSystemPrompt({permissionMode:mode,projectless:false,tools:[{name:"trebell_terminal"}]}).split("\n").filter(item=>item.startsWith("- Permission profile:"));
+  assert.deepEqual(line("full"),["- Permission profile: full. Commands run without asking the user. Trebell does not restrict network access, so a missing tool or library the task needs can be installed."]);
+  assert.deepEqual(line("supervised"),["- Permission profile: supervised. Trebell does not restrict network access, so a missing tool or library the task needs can be installed, with the user's approval where this profile asks for it."]);
+  assert.deepEqual(line("edits"),["- Permission profile: edits. Trebell does not restrict network access, so a missing tool or library the task needs can be installed, with the user's approval where this profile asks for it."]);
+  assert.deepEqual(line(undefined),line("supervised"),"no profile reads as supervised, as before");
+  assert.deepEqual(line("read-only"),["- Permission profile: read-only."],"Read Only refuses commands that change something, so it offers no install");
+});

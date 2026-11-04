@@ -1,0 +1,169 @@
+{
+  "name": "trebell-code",
+  "description": "A coding harness optimized for verified software-engineering quality per dollar: same or better results at lower model cost.",
+  "author": "Trebell",
+  "homepage": "https://trebell.dev/code",
+  "keywords": [
+    "ai-coding",
+    "coding-agent",
+    "agent-harness",
+    "developer-tools",
+    "codex",
+    "claude-code",
+    "mcp",
+    "electron"
+  ],
+  "type": "module",
+  "bin": {
+    "trebell": "./bin/trebell.mjs",
+    "trebell-code": "./bin/trebell.mjs"
+  },
+  "scripts": {
+    "test": "node --import tsx --test --test-concurrency=2 tests/*.test.mjs",
+    "test:fast": "node --import tsx --test --test-concurrency=1 --test-isolation=none tests/*.test.mjs",
+    "test:budgets": "node --test tests/bundle-budgets.test.mjs",
+    "bench:core": "node scripts/benchmark-core.mjs",
+    "doctor": "node ./bin/trebell.mjs doctor",
+    "ui:dev": "vite --config ui/vite.config.mjs",
+    "ui:build": "vite build --config ui/vite.config.mjs",
+    "gui:server": "node src/gui-server.mjs",
+    "gui": "npm run ui:build && node src/gui-server.mjs --open",
+    "ui:test": "playwright test -c ui/playwright.config.mjs",
+    "ui:test:workspace": "playwright test -c ui/playwright.config.mjs ui/e2e/harness.spec.js ui/e2e/history-pagination.spec.js ui/e2e/live-turn-settings.spec.js ui/e2e/queue.spec.js",
+    "ui:test:capabilities": "playwright test -c ui/playwright.config.mjs ui/e2e/collaboration-mode.spec.js ui/e2e/external-import.spec.js ui/e2e/guardian.spec.js ui/e2e/memory.spec.js ui/e2e/plugins.spec.js ui/e2e/project-identity.spec.js ui/e2e/skills.spec.js ui/e2e/usage-live.spec.js ui/e2e/windows-sandbox.spec.js",
+    "ui:test:visual": "playwright test -c ui/playwright.config.mjs ui/e2e/visual.spec.js",
+    "desktop:dir": "npm run prepare:icon && npm run ui:build && electron-builder --dir",
+    "desktop": "npm run prepare:icon && npm run ui:build && electron .",
+    "desktop:dist": "npm run desktop:dist:windows",
+    "desktop:dist:windows": "npm run prepare:icon && npm run ui:build && electron-builder --win nsis --x64",
+    "desktop:dist:mac": "npm run prepare:icon && npm run ui:build && electron-builder --mac dmg zip",
+    "desktop:dist:linux": "npm run prepare:icon && npm run ui:build && electron-builder --linux AppImage deb",
+    "test:providers:live": "node --env-file-if-exists=.env scripts/live-provider-smoke.mjs --live",
+    "test:runtime-profiles:live": "node --env-file-if-exists=.env scripts/live-runtime-profile-smoke.mjs --live",
+    "test:external-harnesses:live": "node --env-file-if-exists=.env scripts/live-external-harness-smoke.mjs --live",
+    "test:codex:live": "node --env-file-if-exists=.env scripts/live-codex-harness-smoke.mjs --live",
+    "bench:terminal:bundle": "node scripts/build-harbor-native-agent.mjs",
+    "bench:terminal:health": "node scripts/terminal-bench-watchdog.mjs",
+    "bench:terminal:tb4:live": "node --env-file-if-exists=.env scripts/live-terminal-bench-harness-comparison.mjs --live",
+    "bench:terminal:run": "node --env-file-if-exists=.env scripts/run-terminal-bench.mjs --live",
+    "bench:terminal:summarize": "node scripts/summarize-harbor-native-run.mjs",
+    "trace:export": "node scripts/export-event-replay.mjs",
+    "trace:replay": "node scripts/replay-event-bundle.mjs",
+    "prepare:icon": "node scripts/materialize-icon.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.276",
+    "@babel/parser": "^7.29.9",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@muse-code/sdk": "1.4.13",
+    "@openai/codex": "0.155.1",
+    "@opencode-ai/sdk": "^1.3.15",
+    "@opencode/client": "^2.0.24",
+    "character-entities": "2.0.2",
+    "cross-spawn": "^7.0.6",
+    "extract-zip": "^2.0.1",
+    "lucide-react": "^0.468.0",
+    "node-pty": "1.1.0",
+    "prismjs": "^1.30.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "saxes": "6.0.0",
+    "tsx": "^4.20.0",
+    "ws": "^8.18.3",
+    "yauzl": "2.10.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.9",
+    "vite": "^7.1.5"
+  },
+  "main": "desktop/main.mjs",
+  "build": {
+    "appId": "com.trebell.code",
+    "productName": "Trebell Code",
+    "artifactName": "Trebell-Code-Setup.${ext}",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "desktop-dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/**/*",
+      "src/**/*",
+      "ui/dist/**/*",
+      "branding/**/*",
+      "package.json",
+      "README.md"
+    ],
+    "asarUnpack": [
+      "node_modules/@openai/codex-win32-x64/**/*",
+      "node_modules/@openai/codex-win32-arm64/**/*",
+      "node_modules/@openai/codex-darwin-x64/**/*",
+      "node_modules/@openai/codex-darwin-arm64/**/*",
+      "node_modules/@openai/codex-linux-x64/**/*",
+      "node_modules/@openai/codex-linux-arm64/**/*",
+      "node_modules/node-pty/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "artifactName": "Trebell-Code-mac-${arch}.${ext}",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "artifactName": "Trebell-Code-linux-${arch}.${ext}",
+      "maintainer": "Trebell <74068132+tanishqbaweja@users.noreply.github.com>",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.png",
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Trebell Code",
+      "uninstallDisplayName": "Trebell Code",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
+    "extraMetadata": {
+      "version": "0.0.0"
+    }
+  },
+  "optionalDependencies": {
+    "@openai/codex-win32-x64": "npm:@openai/codex@0.155.1-win32-x64"
+  },
+  "private": true
+}

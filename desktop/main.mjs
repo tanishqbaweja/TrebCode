@@ -1,0 +1,997 @@
+import { app, BrowserWindow, ipcMain, shell, dialog, Notification, Tray, Menu, nativeImage, desktopCapturer, screen, clipboard, globalShortcut } from "electron";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { createGuiServer } from "../src/gui-server.mjs";
+import { extendConnectAttemptTimeout } from "../src/connect-attempt-timeout.mjs";
+import { hydrateLoginShellEnvironment } from "../src/login-shell-environment.mjs";
+import { parseFirefoxProfiles, readFirefoxCookieDatabase } from "./firefox-import.mjs";
+import { chromiumCookieDatabase, discoverHeliumProfiles, readHeliumProfileCookies } from "./chromium-import.mjs";
+import { DEFAULT_SNAPSHOT_CONFIG, normalizeSnapshotConfig } from "./snapshot-config.mjs";
+import { captureCueLifetime, captureCuePage } from "./capture-cue.mjs";
+import { listEditors, startEditor } from "./editor-discovery.mjs";
+import { decodePowerShellJsonBase64, decodePowerShellStderr } from "./powershell-output.mjs";
+import { externalUrl, isAppUrl } from "./navigation-policy.mjs";
+
+const require=createRequire(import.meta.url);
+
+const explicitTrebellHome=String(process.env.TREBELL_HOME||"").trim();
+if(explicitTrebellHome)app.setPath("userData",join(explicitTrebellHome,"desktop"));
+// Packaged checks use an explicit workspace: Windows' OS home path ignores HOME and USERPROFILE overrides.
+if(process.env.TREBELL_TEST_HIDDEN==="1"&&process.env.TREBELL_TEST_WORKSPACE)app.setPath("home",process.env.TREBELL_TEST_WORKSPACE);
+
+let windowRef=null;
+let gui=null;
+// The login shell's PATH and JAVA_HOME being read into process.env as the app starts (login-shell-environment.mjs), and the GUI
+// server's start while it is on its way: the window's start and a Dock click can both ask for it before it is up.
+let loginShellRead=null;
+let guiStart=null;
+// quitting: windows now close for real instead of hiding to the tray. shutdownCleaned: the shutdown cleanup (agent browser,
+// tray, shortcut, GUI server with its terminals and app-servers) has run, so before-quit lets the quit through. They are
+// separate because the tray's Quit sets quitting first, and the cleanup must still run for it.
+let quitting=false;
+let shutdownCleaned=false;
+let agentBrowser=null;
+let agentBrowserRuntime={startedAt:Date.now(),consoleErrors:[],networkFailures:[],viewports:[]};
+let tray=null;
+let backgroundEnabled=false;
+let snapshotConfig={...DEFAULT_SNAPSHOT_CONFIG};
+let browserRecordingGrantUntil=0;
+
+const MIN_ZOOM_FACTOR=0.7;
+const MAX_ZOOM_FACTOR=2.5;
+const ZOOM_STEP=0.1;
+// The preview's zoom keys are the window's (Ctrl+=, Ctrl+- and Ctrl+0): while the page says its preview is open they go to the page,
+// which zooms the preview, or the window where the preview's binding does not apply. A page load starts without the preview.
+let previewZoomKeys=false;
+
+function liveWindowWebContents(win){
+  try{
+    if(!win||win.isDestroyed())return null;
+    const contents=win.webContents;
+    if(!contents||contents.isDestroyed())return null;
+    return contents;
+  }catch{return null}
+}
+
+function disposeAgentBrowser({destroy=false}={}){
+  const browser=agentBrowser;
+  if(agentBrowser===browser)agentBrowser=null;
+  if(!browser)return;
+  try{if(!browser.isDestroyed())destroy?browser.destroy():browser.close()}catch{}
+}
+
+
+function clampZoomFactor(value){
+  const numeric=Number(value);
+  if(!Number.isFinite(numeric)) return 1;
+  return Math.min(MAX_ZOOM_FACTOR,Math.max(MIN_ZOOM_FACTOR,Math.round(numeric*100)/100));
+}
+
+function setMainZoomFactor(value,{persist=true}={}){
+  const factor=clampZoomFactor(value);
+  if(windowRef&&!windowRef.isDestroyed()) windowRef.webContents.setZoomFactor(factor);
+  if(persist) saveDesktopPrefs({...loadDesktopPrefs(),zoomFactor:factor});
+  return factor;
+}
+
+function installMainZoomControls(win){
+  const wc=win.webContents;
+  wc.on("did-navigate",()=>{previewZoomKeys=false});
+  wc.on("before-input-event",(event,input)=>{
+    if(input.type!=="keyDown"||(!input.control&&!input.meta)) return;
+    const key=String(input.key||"").toLowerCase();
+    if(previewZoomKeys&&(key==="0"||key==="+"||key==="="||key==="-")) return;
+    if(key==="0"){
+      event.preventDefault();
+      setMainZoomFactor(1);
+    }else if(key==="+"||key==="="){
+      event.preventDefault();
+      setMainZoomFactor(wc.getZoomFactor()+ZOOM_STEP);
+    }else if(key==="-"){
+      event.preventDefault();
+      setMainZoomFactor(wc.getZoomFactor()-ZOOM_STEP);
+    }
+  });
+  wc.on("zoom-changed",(event,direction)=>{
+    event.preventDefault();
+    const delta=direction==="in"?ZOOM_STEP:-ZOOM_STEP;
+    setMainZoomFactor(wc.getZoomFactor()+delta);
+  });
+}
+
+// Codex runs from the user's installed CLI (src/paths.mjs codexBin), so the packaged app no longer
+// pins TREBELL_CODEX_BIN to the Codex build bundled at packaging time.
+function configureBundledRuntime(){
+  if(!app.isPackaged) return;
+  process.env.TREBELL_ELECTRON_AS_NODE="1";
+}
+
+
+
+function desktopPrefsPath(){return join(app.getPath("userData"),"desktop-prefs.json")}
+function loadDesktopPrefs(){
+  try{return JSON.parse(readFileSync(desktopPrefsPath(),"utf8"))}catch{return{}}
+}
+function saveDesktopPrefs(prefs){
+  try{writeFileSync(desktopPrefsPath(),JSON.stringify(prefs,null,2),"utf8")}catch{}
+}
+function snapshotsDir(){const dir=join(app.getPath("userData"),"snapshots");mkdirSync(dir,{recursive:true});return dir}
+function snapshotPaths(id){const safe=String(id||"").replace(/[^a-zA-Z0-9_-]/g,"");return {json:join(snapshotsDir(),safe+".json"),png:join(snapshotsDir(),safe+".png")}}
+function pendingSnapshots(){
+  const dir=snapshotsDir();const items=[];
+  for(const name of readdirSync(dir)){if(!name.endsWith(".json"))continue;try{const meta=JSON.parse(readFileSync(join(dir,name),"utf8"));const paths=snapshotPaths(meta.id);if(existsSync(paths.png))items.push(meta)}catch{}}
+  return items.sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
+}
+// A SnapShot whose files went before the app read them (removed, or pruned past the newest 20) is said in words, not as ENOENT.
+function readSnapshot(id){
+  const paths=snapshotPaths(id);let meta,data;
+  try{meta=JSON.parse(readFileSync(paths.json,"utf8"));data=readFileSync(paths.png)}catch(error){throw new Error(error?.code==="ENOENT"?"The capture is no longer on disk.":"The capture could not be read.")}
+  return {...meta,dataBase64:data.toString("base64")};
+}
+function ackSnapshot(id){const paths=snapshotPaths(id);for(const path of [paths.json,paths.png])try{unlinkSync(path)}catch{}return {ok:true,id}}
+let brandIconCache=null;
+function brandIconDataUrl(){
+  const root=join(import.meta.dirname,"..","branding");
+  const encoded=[1,2,3,4].map(index=>readFileSync(join(root,`icon.part${index}.b64`),"utf8").trim()).join("");
+  return "data:image/png;base64,"+encoded;
+}
+function appIcon(){
+  if(brandIconCache&&!brandIconCache.isEmpty())return brandIconCache;
+  const image=nativeImage.createFromDataURL(brandIconDataUrl());
+  if(image.isEmpty())throw new Error("Bundled Trebell Code icon is invalid.");
+  brandIconCache=image;
+  return image;
+}
+function trayIcon(){
+  return appIcon().resize({width:16,height:16});
+}
+function trayMenuTemplate(){
+  return [
+    {label:"Show Trebell Code",click:()=>{windowRef?.show();windowRef?.focus()}},
+    {label:"Open Agent Browser",click:()=>ensureAgentBrowser({show:true})},
+    {type:"separator"},
+    {label:"Quit Trebell Code",click:()=>{quitting=true;app.quit()}},
+  ];
+}
+// Hidden test runs reach the tray's items through this, since no API reads a tray's menu back, without an icon in the taskbar.
+if(process.env.TREBELL_TEST_HIDDEN==="1")globalThis.__trebellTrayMenuTemplate=trayMenuTemplate;
+function ensureTray(){
+  if(tray)return tray;
+  tray=new Tray(trayIcon());
+  tray.setToolTip("Trebell Code");
+  tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate()));
+  tray.on("double-click",()=>{windowRef?.show();windowRef?.focus()});
+  return tray;
+}
+const BACKGROUND_LOGIN_ARGS=["--background"];
+
+function backgroundLoginSettings(){
+  if(!app.isPackaged)return {openAtLogin:false,executableWillLaunchAtLogin:false,launchItems:[]};
+  return app.getLoginItemSettings({args:BACKGROUND_LOGIN_ARGS});
+}
+
+function setBackgroundEnabled(value){
+  backgroundEnabled=Boolean(value);
+  saveDesktopPrefs({...loadDesktopPrefs(),backgroundEnabled});
+  if(app.isPackaged)app.setLoginItemSettings({
+    openAtLogin:backgroundEnabled,
+    args:BACKGROUND_LOGIN_ARGS,
+    enabled:backgroundEnabled,
+  });
+  if(backgroundEnabled)ensureTray();
+  else if(tray){tray.destroy();tray=null}
+  return backgroundEnabled;
+}
+
+async function availableEditors(){
+  const items=await listEditors();
+  items.push({id:"file-manager",label:process.platform==="win32"?"File Explorer":process.platform==="darwin"?"Finder":"File Manager",executable:null});
+  return items;
+}
+
+async function openWorkspaceIn(targetPath,editorId){
+  const absolute=String(targetPath||"").trim();
+  if(!absolute)throw new Error("Path is required");
+  if(editorId==="file-manager"){
+    let info=null;try{info=statSync(absolute)}catch{}
+    // shell.openPath resolves to an error message rather than rejecting, so a folder that did not open is reported.
+    if(info?.isDirectory()){const failure=await shell.openPath(absolute);if(failure)throw new Error(`Could not open the folder: ${failure}`)}
+    else shell.showItemInFolder(absolute);
+    return {ok:true,editorId,path:absolute};
+  }
+  const editors=await availableEditors();
+  const editor=editors.find(item=>item.id===editorId);
+  if(!editor?.executable)throw new Error("That editor is not available on this machine.");
+  // A launch that fails is reported, and the next list looks for the editors again, in case this one moved or was removed.
+  try{await startEditor(editor,absolute)}catch(error){listEditors({refresh:true}).catch(()=>{});throw error}
+  return {ok:true,editorId,path:absolute};
+}
+
+function normalizeBrowserUrl(value){
+  const raw=String(value||"").trim();
+  if(!raw)throw new Error("URL is required");
+  return /^https?:\/\//i.test(raw)?raw:"http://"+raw;
+}
+
+function normalizeSameSite(value){
+  const clean=String(value||"").trim().toLowerCase().replace(/[ -]+/g,"_");
+  if(clean==="strict")return "strict";
+  if(clean==="lax")return "lax";
+  if(clean==="none"||clean==="no_restriction")return "no_restriction";
+  return "unspecified";
+}
+
+function normalizeImportedCookie(raw={}){
+  const name=String(raw.name||"").trim();
+  if(!name)throw new Error("Cookie name is required");
+  const domain=String(raw.domain||"").trim().replace(/^\./,"");
+  const pathValue=String(raw.path||"/");
+  const source=String(raw.url||"").trim()||(domain?((raw.secure?"https":"http")+"://"+domain+(pathValue.startsWith("/")?pathValue:"/"+pathValue)):"");
+  if(!source)throw new Error("Cookie needs a url or domain");
+  const url=normalizeBrowserUrl(source);
+  if(!/^https?:\/\//i.test(url))throw new Error("Only HTTP(S) cookies can be imported");
+  const cookie={url,name,value:String(raw.value??"")};
+  if(raw.domain)cookie.domain=String(raw.domain);
+  if(raw.path)cookie.path=pathValue;
+  if(raw.secure!=null)cookie.secure=Boolean(raw.secure);
+  if(raw.httpOnly!=null)cookie.httpOnly=Boolean(raw.httpOnly);
+  if(raw.sameSite!=null)cookie.sameSite=normalizeSameSite(raw.sameSite);
+  const expiration=Number(raw.expirationDate??raw.expires??raw.expiration);
+  if(Number.isFinite(expiration)&&expiration>0)cookie.expirationDate=expiration>1e12?expiration/1000:expiration;
+  return cookie;
+}
+
+async function importBrowserCookies(payload={}){
+  let cookies=Array.isArray(payload?.cookies)?payload.cookies:null;
+  let source="provided";
+  if(!cookies){
+    const picked=await dialog.showOpenDialog(windowRef,{title:"Import cookies into Trebell Agent Browser",properties:["openFile"],filters:[{name:"Cookie JSON",extensions:["json"]},{name:"All files",extensions:["*"]}]});
+    if(picked.canceled||!picked.filePaths[0])return {ok:false,canceled:true,imported:0,failed:0,errors:[]};
+    const file=picked.filePaths[0];let parsed;
+    try{parsed=JSON.parse(readFileSync(file,"utf8"))}catch(error){throw new Error(error instanceof SyntaxError?`${basename(file)} is not valid JSON.`:`${basename(file)} could not be read.`)}
+    cookies=Array.isArray(parsed)?parsed:(Array.isArray(parsed?.cookies)?parsed.cookies:null);
+    source="file";
+  }
+  if(!Array.isArray(cookies))throw new Error("Cookie JSON must be an array or an object with a cookies array.");
+  const browser=await ensureAgentBrowser();
+  let imported=0;
+  const errors=[];
+  for(const raw of cookies.slice(0,5000)){
+    try{await browser.webContents.session.cookies.set(normalizeImportedCookie(raw));imported++}
+    catch(error){errors.push(String(error?.message||error))}
+  }
+  return {ok:true,canceled:false,source,imported,failed:errors.length,errors:errors.slice(0,10)};
+}
+
+function firefoxRoot(){
+  if(process.platform==="win32")return process.env.APPDATA?join(process.env.APPDATA,"Mozilla","Firefox"):null;
+  if(process.platform==="darwin")return join(app.getPath("home"),"Library","Application Support","Firefox");
+  return join(app.getPath("home"),".mozilla","firefox");
+}
+
+function heliumRoot(){
+  return process.platform==="win32"&&process.env.LOCALAPPDATA?join(process.env.LOCALAPPDATA,"imput","Helium","User Data"):null;
+}
+
+function psLiteral(value){return "'"+String(value).replace(/'/g,"''")+"'"}
+
+async function heliumRunning(profiles=[]){
+  if(process.platform!=="win32")return false;
+  const processProbe=await powershell("if(Get-Process helium -ErrorAction SilentlyContinue){'yes'}else{'no'}",{timeout:2500}).catch(()=>"no");
+  if(processProbe.trim()==="yes")return true;
+  for(const profile of profiles){
+    const database=chromiumCookieDatabase(profile.id);if(!database)continue;
+    const script=`$p=${psLiteral(database)}; try { $s=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $s.Dispose(); 'free' } catch [IO.IOException] { 'held' } catch { 'free' }`;
+    const verdict=await powershell(script,{timeout:2500}).catch(()=>"free");if(verdict.trim()==="held")return true;
+  }
+  return false;
+}
+
+async function firefoxRunning(){
+  if(process.platform==="win32"){
+    const result=await powershell("if(Get-Process firefox -ErrorAction SilentlyContinue){'yes'}else{'no'}",{timeout:2500}).catch(()=>"no");return result.trim()==="yes";
+  }
+  return await new Promise(resolve=>execFile("pgrep",["-x","firefox"],{windowsHide:true},error=>resolve(!error)));
+}
+
+async function browserImportSources(){
+  const root=firefoxRoot();const sources=[];
+  if(root&&existsSync(root)){
+    let profiles=[];const ini=join(root,"profiles.ini");
+    if(existsSync(ini)){try{profiles=parseFirefoxProfiles(readFileSync(ini,"utf8"),root)}catch{}}
+    if(!profiles.length){
+      const scanRoot=process.platform==="linux"?root:join(root,"Profiles");
+      if(existsSync(scanRoot))for(const entry of readdirSync(scanRoot)){const directory=join(scanRoot,entry);if(existsSync(join(directory,"cookies.sqlite")))profiles.push({id:directory,name:entry,directory})}
+    }
+    sources.push({id:"firefox",name:"Firefox",installed:profiles.length>0,running:profiles.length?await firefoxRunning():false,profiles:profiles.map(profile=>({id:profile.id,name:profile.name}))});
+  }
+  const helium=heliumRoot();
+  if(helium&&existsSync(helium)){
+    const profiles=discoverHeliumProfiles(helium);
+    sources.push({id:"helium",name:"Helium",installed:profiles.length>0,running:profiles.length?await heliumRunning(profiles):false,profiles:profiles.map(profile=>({id:profile.id,name:profile.name}))});
+  }
+  return {sources,platform:process.platform};
+}
+
+async function readFirefoxProfileCookies(profileDirectory){
+  const database=join(profileDirectory,"cookies.sqlite");if(!existsSync(database))throw new Error("Firefox cookies.sqlite was not found for that profile.");
+  if(await firefoxRunning())throw new Error("Close Firefox before importing its session, then try again.");
+  return readFirefoxCookieDatabase(database);
+}
+
+async function importBrowserProfile(payload={}){
+  if(!["firefox","helium"].includes(payload.sourceId))throw new Error("That browser source is not supported on this platform.");
+  const available=await browserImportSources();const source=available.sources.find(item=>item.id===payload.sourceId);const profile=source?.profiles?.find(item=>item.id===payload.profileId);
+  if(!profile)throw new Error(`${payload.sourceId==="helium"?"Helium":"Firefox"} profile was not found.`);
+  if(source.running)throw new Error(`Close ${source.name} before importing its session, then try again.`);
+  let cookies,skipped=0,skippedHosts=[];
+  if(payload.sourceId==="helium"){
+    const result=await readHeliumProfileCookies(profile.id,heliumRoot());cookies=result.cookies;skipped=result.skipped||0;skippedHosts=result.skippedHosts||[];
+  }else cookies=await readFirefoxProfileCookies(profile.id);
+  const browser=await ensureAgentBrowser();let imported=0;const errors=[];
+  for(const raw of cookies){try{await browser.webContents.session.cookies.set(normalizeImportedCookie(raw));imported++}catch(error){errors.push(String(error?.message||error))}}
+  await browser.webContents.session.cookies.flushStore().catch(()=>{});
+  return {ok:true,sourceId:payload.sourceId,profileId:profile.id,profileName:profile.name,imported,failed:errors.length,skipped,skippedHosts,errors:errors.slice(0,10)};
+}
+
+async function ensureAgentBrowser({show=false}={}){
+  const hiddenValidation=process.env.TREBELL_TEST_HIDDEN==="1";
+  const existing=agentBrowser;
+  if(liveWindowWebContents(existing)){
+    if(show&&!hiddenValidation){existing.show();existing.focus();}
+    return existing;
+  }
+  const browser=new BrowserWindow({
+    width:1280,height:860,show:show&&!hiddenValidation,title:"Trebell Agent Browser",
+    icon:appIcon(),
+    // White, as a browser draws a page that sets no background (the Browser panel's preview too): its default black text then reads,
+    // in the window and in the screenshot the model gets.
+    backgroundColor:"#ffffff",autoHideMenuBar:true,
+    webPreferences:{contextIsolation:true,nodeIntegration:false,sandbox:true,partition:"persist:trebell-agent-browser"},
+  });
+  agentBrowser=browser;
+  resetBrowserRuntime();
+  const contents=browser.webContents;
+  browser.removeMenu();
+  const pushBounded=(key,value)=>{if(agentBrowser!==browser)return;const list=agentBrowserRuntime[key];if(!Array.isArray(list))return;list.push(value);if(list.length>60)list.splice(0,list.length-60)};
+  contents.on("console-message",(_event,...args)=>{
+    const details=args.length===1&&args[0]&&typeof args[0]==="object"?args[0]:{level:args[0],message:args[1],lineNumber:args[2],sourceId:args[3]};
+    const level=String(details?.level||"").toLowerCase();if(!["error","3"].includes(level))return;
+    pushBounded("consoleErrors",{level:"error",message:String(details?.message||"").slice(0,1000),source:String(details?.sourceId||"").slice(0,500),line:Number(details?.lineNumber)||null,at:Date.now()});
+  });
+  const webRequest=contents.session.webRequest;
+  webRequest.onErrorOccurred(details=>pushBounded("networkFailures",{url:String(details?.url||"").slice(0,1000),method:String(details?.method||""),error:String(details?.error||"").slice(0,500),resourceType:String(details?.resourceType||""),at:Date.now()}));
+  webRequest.onCompleted(details=>{const status=Number(details?.statusCode)||0;if(status>=400)pushBounded("networkFailures",{url:String(details?.url||"").slice(0,1000),method:String(details?.method||""),statusCode:status,resourceType:String(details?.resourceType||""),at:Date.now()})});
+  // A popup opens in place, as the agent works on one page at a time, when it is a web page, or a document a web page made itself (a
+  // blob: address of its own origin, as an export, a report or an image preview opens). Another (javascript:, about:blank, data:, or a
+  // blob: of no web origin) would put a blank or made-up page in place of the agent's, so it is refused, as Chromium refuses a file:
+  // popup itself.
+  contents.setWindowOpenHandler(({url})=>{
+    if(/^(blob:)?https?:\/\//i.test(url)&&agentBrowser===browser&&!browser.isDestroyed())browser.loadURL(url).catch(()=>{});
+    return {action:"deny"};
+  });
+  const publishState=()=>{
+    if(agentBrowser!==browser)return;
+    const targetContents=liveWindowWebContents(windowRef);if(!targetContents)return;
+    try{targetContents.send("browser:state",browserState(browser))}catch{}
+  };
+  for(const event of ["did-navigate","did-navigate-in-page","did-start-loading","did-stop-loading","page-title-updated"])contents.on(event,publishState);
+  // Its window closed, by the panel's Close or outside the panel (a person closes it), is told to the app as the agent browser closed,
+  // unless another has taken its place, so the panel drops the gone page's elements. It used to be forgotten without a word.
+  browser.on("closed",()=>{if(agentBrowser===browser)agentBrowser=null;if(!agentBrowser)try{liveWindowWebContents(windowRef)?.send("browser:state",browserState())}catch{}});
+  return browser;
+}
+
+// An open agent browser names its window (windowId), as its snapshot does, so the panel can tell a page of another window, one
+// closed and opened again on the same address, from the page its elements were read on.
+function browserState(browser=agentBrowser){
+  const contents=liveWindowWebContents(browser);
+  if(!contents)return {open:false,url:"",title:"",canGoBack:false,canGoForward:false,loading:false,width:null,height:null};
+  try{
+    const history=contents.navigationHistory;const [width,height]=browser.getContentSize();
+    return {open:true,windowId:browser.id,url:contents.getURL(),title:contents.getTitle(),canGoBack:history.canGoBack(),canGoForward:history.canGoForward(),loading:contents.isLoading(),width,height};
+  }catch{return {open:false,url:"",title:"",canGoBack:false,canGoForward:false,loading:false,width:null,height:null}}
+}
+
+function resetBrowserRuntime(){agentBrowserRuntime={startedAt:Date.now(),consoleErrors:[],networkFailures:[],viewports:[]}}
+function recordBrowserViewport(width,height){
+  const normalized={width:Math.max(1,Math.trunc(Number(width)||0)),height:Math.max(1,Math.trunc(Number(height)||0)),at:Date.now()};
+  if(!agentBrowserRuntime.viewports.some(item=>item.width===normalized.width&&item.height===normalized.height))agentBrowserRuntime.viewports.push(normalized);
+  if(agentBrowserRuntime.viewports.length>40)agentBrowserRuntime.viewports.splice(0,agentBrowserRuntime.viewports.length-40);
+}
+function browserRuntime(){
+  const state=browserState(),viewports=[...new Map((agentBrowserRuntime.viewports||[]).map(item=>[`${item.width}x${item.height}`,item])).values()].slice(-12);
+  return {url:state.url,title:state.title,width:state.width,height:state.height,startedAt:agentBrowserRuntime.startedAt,consoleErrors:[...(agentBrowserRuntime.consoleErrors||[])],networkFailures:[...(agentBrowserRuntime.networkFailures||[])],viewports};
+}
+
+async function browserNavigateHistory(direction){
+  const browser=await ensureAgentBrowser();const history=browser.webContents.navigationHistory;
+  const event=direction==="reload"?"did-stop-loading":"did-navigate";
+  const wait=()=>new Promise(resolve=>{let settled=false;const finish=()=>{if(settled)return;settled=true;clearTimeout(timer);browser.webContents.off(event,finish);resolve()};const timer=setTimeout(finish,5000);browser.webContents.once(event,finish)});
+  let pending=null;
+  if(direction==="back"&&history.canGoBack()){pending=wait();history.goBack()}
+  else if(direction==="forward"&&history.canGoForward()){pending=wait();history.goForward()}
+  else if(direction==="reload"){pending=wait();browser.webContents.reload()}
+  if(pending)await pending;
+  return browserState();
+}
+
+async function browserViewport(payload={}){
+  const browser=await ensureAgentBrowser();const width=Math.max(320,Math.min(3840,Math.round(Number(payload.width)||1280)));const height=Math.max(240,Math.min(2160,Math.round(Number(payload.height)||800)));
+  browser.setContentSize(width,height,true);recordBrowserViewport(width,height);return browserState();
+}
+
+async function browserSnapshot(){
+  const browser=await ensureAgentBrowser();
+  const script='(() => {'+
+    'const visible=(el)=>{const r=el.getBoundingClientRect();const s=getComputedStyle(el);return r.width>0&&r.height>0&&s.visibility!=="hidden"&&s.display!=="none";};'+
+    'const nodes=[...document.querySelectorAll("a,button,input,textarea,select,[role=button],[role=link],[contenteditable=true]")].filter(visible).slice(0,220);'+
+    'const elements=nodes.map((el,index)=>{const ref="e"+(index+1);el.setAttribute("data-trebell-ref",ref);return {ref,tag:el.tagName.toLowerCase(),type:el.getAttribute("type"),role:el.getAttribute("role"),text:(el.innerText||el.getAttribute("aria-label")||el.getAttribute("placeholder")||el.value||"").trim().slice(0,300),href:el.href||null,name:el.getAttribute("name"),disabled:Boolean(el.disabled)};});'+
+    'return {url:location.href,title:document.title,text:(document.body?.innerText||"").slice(0,24000),elements};'+
+  '})()';
+  return {...await browser.webContents.executeJavaScript(script,true),windowId:browser.id};
+}
+
+async function browserClick(ref){
+  const browser=await ensureAgentBrowser();
+  const script='(() => {const ref='+JSON.stringify(String(ref||""))+';const el=[...document.querySelectorAll("[data-trebell-ref]")].find(x=>x.getAttribute("data-trebell-ref")===ref);if(!el)return {ok:false,error:"element_not_found"};el.scrollIntoView({block:"center",inline:"center"});el.focus?.();el.click();return {ok:true,url:location.href};})()';
+  return await browser.webContents.executeJavaScript(script,true);
+}
+
+async function browserType(ref,text){
+  const browser=await ensureAgentBrowser();
+  const script='(() => {const ref='+JSON.stringify(String(ref||""))+';const value='+JSON.stringify(String(text||""))+';const el=[...document.querySelectorAll("[data-trebell-ref]")].find(x=>x.getAttribute("data-trebell-ref")===ref);if(!el)return {ok:false,error:"element_not_found"};el.scrollIntoView({block:"center"});el.focus?.();if("value" in el)el.value=value;else el.textContent=value;el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));return {ok:true,value};})()';
+  return await browser.webContents.executeJavaScript(script,true);
+}
+
+async function browserScreenshot(){
+  const browser=await ensureAgentBrowser();
+  const image=await browser.webContents.capturePage();
+  const [width,height]=browser.getContentSize();
+  recordBrowserViewport(width,height);
+  return {dataUrl:"data:image/png;base64,"+image.toPNG().toString("base64"),url:browser.webContents.getURL(),title:browser.webContents.getTitle(),width,height};
+}
+
+async function mainWindowScreenshot(){
+  if(!windowRef||windowRef.isDestroyed())throw new Error("Trebell desktop window is unavailable.");
+  const image=await windowRef.capturePage();
+  if(!image||image.isEmpty())throw new Error("Trebell desktop window screenshot is unavailable.");
+  const size=image.getSize();
+  return {dataUrl:"data:image/png;base64,"+image.toPNG().toString("base64"),width:size.width,height:size.height};
+}
+
+async function desktopScreenshot(){
+  const display=screen.getPrimaryDisplay();
+  const scale=Math.max(1,Number(display.scaleFactor)||1);
+  const width=Math.max(1,Math.round(display.size.width*scale));
+  const height=Math.max(1,Math.round(display.size.height*scale));
+  const sources=await desktopCapturer.getSources({types:["screen"],thumbnailSize:{width,height}});
+  const source=sources.find(item=>String(item.display_id)===String(display.id))||sources[0];
+  if(!source||source.thumbnail.isEmpty())throw new Error("Desktop screenshot is unavailable.");
+  return {
+    dataUrl:"data:image/png;base64,"+source.thumbnail.toPNG().toString("base64"),
+    width:source.thumbnail.getSize().width,
+    height:source.thumbnail.getSize().height,
+    displayId:String(display.id),
+    originX:display.bounds.x,
+    originY:display.bounds.y,
+    scaleFactor:scale,
+  };
+}
+
+function powershell(script,{timeout=10000}={}){
+  if(process.platform!=="win32")return Promise.reject(new Error("Computer use is currently available on Windows only."));
+  const encoded=Buffer.from(String(script),"utf16le").toString("base64");
+  return new Promise((resolve,reject)=>{
+    execFile("powershell.exe",["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-EncodedCommand",encoded],{windowsHide:true,timeout},(error,stdout,stderr)=>{
+      if(error){reject(new Error(decodePowerShellStderr(stderr)||String(error.message||error).trim()));return}
+      resolve(String(stdout||"").trim());
+    });
+  });
+}
+
+async function activeWindowInfo({includeText=false}={}){
+  if(process.platform!=="win32")return null;
+  const script=String.raw`
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class TrebellActiveWindow {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+}
+'@
+$handle=[TrebellActiveWindow]::GetForegroundWindow()
+if($handle -eq [IntPtr]::Zero){ throw 'No foreground window is available.' }
+$titleBuilder=New-Object System.Text.StringBuilder 2048
+[void][TrebellActiveWindow]::GetWindowText($handle,$titleBuilder,$titleBuilder.Capacity)
+[uint32]$processId=0
+[void][TrebellActiveWindow]::GetWindowThreadProcessId($handle,[ref]$processId)
+$rect=New-Object TrebellActiveWindow+RECT
+[void][TrebellActiveWindow]::GetWindowRect($handle,[ref]$rect)
+$proc=Get-Process -Id $processId -ErrorAction SilentlyContinue
+$result=[ordered]@{
+  handle=$handle.ToInt64(); title=$titleBuilder.ToString(); processId=[int]$processId; process=if($proc){$proc.ProcessName}else{$null};
+  bounds=[ordered]@{x=$rect.Left;y=$rect.Top;width=[Math]::Max(1,$rect.Right-$rect.Left);height=[Math]::Max(1,$rect.Bottom-$rect.Top)};
+  accessibility=$null
+}
+${includeText?String.raw`
+try {
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+  $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+  if($root){
+    $nodes=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+    $items=New-Object System.Collections.ArrayList
+    $limit=[Math]::Min($nodes.Count,250)
+    for($i=0;$i -lt $limit;$i++){
+      try {
+        $node=$nodes.Item($i);$name=$node.Current.Name;$automationId=$node.Current.AutomationId;$type=$node.Current.ControlType.ProgrammaticName
+        if([string]::IsNullOrWhiteSpace($name) -and [string]::IsNullOrWhiteSpace($automationId)){ continue }
+        $box=$node.Current.BoundingRectangle
+        [void]$items.Add([ordered]@{name=$name;automationId=$automationId;controlType=$type;x=[int]$box.X;y=[int]$box.Y;width=[int]$box.Width;height=[int]$box.Height})
+      } catch {}
+    }
+    $result.accessibility=@($items)
+  }
+} catch {}
+`:""}
+$json=$result | ConvertTo-Json -Depth 6 -Compress
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+`;
+  const raw=await powershell(script,{timeout:includeText?3500:1800});
+  return decodePowerShellJsonBase64(raw);
+}
+
+function snapshotSourceScore(source,info){
+  const sourceName=String(source?.name||"").trim().toLowerCase();
+  const title=String(info?.title||"").trim().toLowerCase();
+  if(title&&sourceName===title)return 100;
+  if(title&&sourceName&&title.includes(sourceName))return 80;
+  if(title&&sourceName&&sourceName.includes(title))return 70;
+  const process=String(info?.process||"").toLowerCase();
+  if(process&&sourceName.includes(process))return 20;
+  return 0;
+}
+
+function pruneSnapshots(max=20){
+  const pending=pendingSnapshots();
+  for(const item of pending.slice(0,Math.max(0,pending.length-max)))ackSnapshot(item.id);
+}
+
+function snapshotSoundWav(kind="soft-pop"){
+  const sampleRate=22050,duration=kind==="camera-shutter"?.18:.13,count=Math.max(1,Math.floor(sampleRate*duration)),bytes=Buffer.alloc(44+count*2);
+  bytes.write("RIFF",0);bytes.writeUInt32LE(36+count*2,4);bytes.write("WAVE",8);bytes.write("fmt ",12);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(1,22);bytes.writeUInt32LE(sampleRate,24);bytes.writeUInt32LE(sampleRate*2,28);bytes.writeUInt16LE(2,32);bytes.writeUInt16LE(16,34);bytes.write("data",36);bytes.writeUInt32LE(count*2,40);
+  for(let i=0;i<count;i++){
+    const t=i/sampleRate,p=i/count;let value;
+    if(kind==="camera-shutter"){
+      const first=Math.max(0,1-t/.055),second=t>.065?Math.max(0,1-(t-.065)/.09):0;
+      value=(Math.sin(2*Math.PI*1450*t)*first*.72+Math.sin(2*Math.PI*620*t)*second*.55)*(1-p*.25);
+    }else{
+      const freq=920-430*p,envelope=Math.pow(1-p,2.4);value=Math.sin(2*Math.PI*freq*t)*envelope*.62;
+    }
+    bytes.writeInt16LE(Math.max(-32767,Math.min(32767,Math.round(value*32767))),44+i*2);
+  }
+  return bytes;
+}
+
+function playSnapshotSound(kind){
+  if(process.env.TREBELL_TEST_HIDDEN==="1")return;
+  let audioWindow;
+  try{
+    const wav=snapshotSoundWav(kind),src=`data:audio/wav;base64,${wav.toString("base64")}`;
+    audioWindow=new BrowserWindow({width:1,height:1,show:false,frame:false,focusable:false,skipTaskbar:true,webPreferences:{contextIsolation:true,sandbox:true}});
+    audioWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<audio autoplay src="${src}"></audio>`)}`).catch(()=>{});
+    setTimeout(()=>{try{if(audioWindow&&!audioWindow.isDestroyed())audioWindow.destroy()}catch{}},750).unref?.();
+  }catch{try{shell.beep()}catch{}}
+}
+
+function showSnapshotFeedback(meta){
+  if(process.env.TREBELL_TEST_HIDDEN==="1")return;
+  if(snapshotConfig.playSound)playSnapshotSound(snapshotConfig.sound);
+  if(!snapshotConfig.flash&&!snapshotConfig.animations)return;
+  const b=meta?.bounds;if(!b||!Number.isFinite(Number(b.x))||!Number.isFinite(Number(b.y))||Number(b.width)<20||Number(b.height)<20)return;
+  let overlay;
+  try{
+    const cue={flash:Boolean(snapshotConfig.flash),animations:Boolean(snapshotConfig.animations)},html=captureCuePage(cue);
+    overlay=new BrowserWindow({x:Math.round(Number(b.x)),y:Math.round(Number(b.y)),width:Math.max(20,Math.round(Number(b.width))),height:Math.max(20,Math.round(Number(b.height))),show:false,frame:false,transparent:true,resizable:false,movable:false,focusable:false,alwaysOnTop:true,skipTaskbar:true,hasShadow:false,webPreferences:{contextIsolation:true,sandbox:true}});
+    overlay.setIgnoreMouseEvents(true);overlay.setAlwaysOnTop(true,"screen-saver");overlay.once("ready-to-show",()=>overlay?.showInactive());overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(()=>{});
+    setTimeout(()=>{try{if(overlay&&!overlay.isDestroyed())overlay.destroy()}catch{}},captureCueLifetime(cue)).unref?.();
+  }catch{try{if(overlay&&!overlay.isDestroyed())overlay.destroy()}catch{}}
+}
+
+// One SnapShot at a time: a capture asked for while one is being taken (Capture now pressed again, or the shortcut) is refused instead
+// of reading and taking the window again.
+let snapshotCapture=null;
+function captureActiveSnapshot(){
+  if(snapshotCapture)return Promise.reject(new Error("A SnapShot is already being taken."));
+  return snapshotCapture=takeActiveSnapshot().finally(()=>{snapshotCapture=null});
+}
+async function takeActiveSnapshot(){
+  const info=await activeWindowInfo({includeText:Boolean(snapshotConfig.includeText)});
+  if(!info)throw new Error("Active-window capture is unavailable on this platform.");
+  const display=screen.getDisplayMatching(info.bounds||{x:0,y:0,width:1,height:1});
+  const scale=Math.max(1,Number(display?.scaleFactor)||1);
+  const requestedWidth=Math.min(4096,Math.max(640,Math.round(Number(info.bounds?.width||1600)*scale)));
+  const requestedHeight=Math.min(4096,Math.max(480,Math.round(Number(info.bounds?.height||1000)*scale)));
+  const sources=await desktopCapturer.getSources({types:["window"],thumbnailSize:{width:requestedWidth,height:requestedHeight},fetchWindowIcons:true});
+  const source=[...sources].sort((a,b)=>snapshotSourceScore(b,info)-snapshotSourceScore(a,info))[0];
+  if(!source||source.thumbnail.isEmpty()||snapshotSourceScore(source,info)===0)throw new Error(`Could not match the active window${info.title?` (${info.title})`:""} to a capturable source.`);
+  const id=`snapshot-${Date.now()}-${Math.random().toString(36).slice(2,9)}`;
+  const paths=snapshotPaths(id);const image=source.thumbnail.toPNG();const size=source.thumbnail.getSize();
+  const meta={
+    id,createdAt:Date.now(),title:info.title||source.name||"Active window",process:info.process||null,processId:info.processId||null,bounds:info.bounds||null,
+    width:size.width,height:size.height,accessibility:Array.isArray(info.accessibility)?info.accessibility:null,
+    hasAccessibility:Array.isArray(info.accessibility)&&info.accessibility.length>0,
+  };
+  writeFileSync(paths.png,image);writeFileSync(paths.json,JSON.stringify(meta,null,2),{encoding:"utf8",mode:0o600});pruneSnapshots(20);
+  showSnapshotFeedback(meta);
+  if(windowRef&&!windowRef.isDestroyed()){
+    if(process.env.TREBELL_TEST_HIDDEN!=="1"){if(windowRef.isMinimized())windowRef.restore();windowRef.show();windowRef.focus()}
+    windowRef.webContents.send("snapshot:captured",{id});
+  }
+  return meta;
+}
+
+let registeredSnapshotShortcut=null;
+// A press of the SnapShot shortcut, the one saved and the one kept when a change to another is refused alike: a SnapShot it could
+// not take says why in a notification, and a press while its SnapShot is being taken (again, or held as its key repeats) takes
+// nothing more and says nothing.
+function captureFromShortcut(){if(!snapshotCapture)captureActiveSnapshot().catch(error=>{
+  if(Notification.isSupported())new Notification({title:"Trebell SnapShot",body:error.message||String(error),silent:true,icon:appIcon()}).show();
+})}
+function applySnapshotConfig(input={}, {persist=true}={}){
+  const next=normalizeSnapshotConfig(input,snapshotConfig);
+  const previous={...snapshotConfig};
+  if(registeredSnapshotShortcut){globalShortcut.unregister(registeredSnapshotShortcut);registeredSnapshotShortcut=null}
+  if(next.enabled){
+    // Electron answers false for a shortcut another app holds, and throws a TypeError for one it cannot read: no key after its
+    // modifiers (the field left as CommandOrControl+Shift+ while its key is retyped) or a key it does not know (PrintScr). Either way
+    // the shortcut before it is registered again, so the one Settings shows as kept still takes SnapShots.
+    let ok=false,unreadable=null;
+    try{ok=globalShortcut.register(next.shortcut,captureFromShortcut)}catch(error){unreadable=error}
+    if(!ok){
+      if(previous.enabled&&previous.shortcut)try{if(globalShortcut.register(previous.shortcut,captureFromShortcut))registeredSnapshotShortcut=previous.shortcut}catch{}
+      if(unreadable instanceof TypeError)throw new Error(`Shortcut ${next.shortcut} is not a valid shortcut. A shortcut is modifiers and one key, such as CommandOrControl+Shift+S.`);
+      if(unreadable)throw new Error(`Shortcut ${next.shortcut} could not be registered: ${unreadable.message||unreadable}`);
+      throw new Error(`Shortcut ${next.shortcut} is already reserved by another application.`);
+    }
+    registeredSnapshotShortcut=next.shortcut;
+  }
+  snapshotConfig=next;
+  if(persist)saveDesktopPrefs({...loadDesktopPrefs(),snapshotConfig});
+  return {...snapshotConfig,registered:Boolean(registeredSnapshotShortcut)};
+}
+
+function primaryComputerPoint(x,y){
+  const display=screen.getPrimaryDisplay();
+  const scale=Math.max(1,Number(display.scaleFactor)||1);
+  const pixelWidth=Math.max(1,Math.round(display.size.width*scale));
+  const pixelHeight=Math.max(1,Math.round(display.size.height*scale));
+  const px=Math.min(pixelWidth-1,Math.max(0,Math.round(Number(x)||0)));
+  const py=Math.min(pixelHeight-1,Math.max(0,Math.round(Number(y)||0)));
+  return {
+    x:Math.round(display.bounds.x+px/scale),
+    y:Math.round(display.bounds.y+py/scale),
+    pixelX:px,
+    pixelY:py,
+    scaleFactor:scale,
+    displayId:String(display.id),
+  };
+}
+
+const COMPUTER_INPUT_TYPE=String.raw`
+using System;
+using System.Runtime.InteropServices;
+public static class TrebellInput {
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, int data, UIntPtr extra);
+}
+`;
+
+async function computerMove(x,y){
+  const point=primaryComputerPoint(x,y);
+  await powershell(`Add-Type -TypeDefinition @'
+${COMPUTER_INPUT_TYPE}
+'@
+[TrebellInput]::SetCursorPos(${point.x},${point.y}) | Out-Null`);
+  return {ok:true,...point};
+}
+
+async function computerClick(payload={}){
+  const point=primaryComputerPoint(payload.x,payload.y);
+  const button=String(payload.button||"left").toLowerCase();
+  const count=Math.min(3,Math.max(1,Math.round(Number(payload.count)||1)));
+  const flags=button==="right"?[0x0008,0x0010]:button==="middle"?[0x0020,0x0040]:[0x0002,0x0004];
+  await powershell(`Add-Type -TypeDefinition @'
+${COMPUTER_INPUT_TYPE}
+'@
+[TrebellInput]::SetCursorPos(${point.x},${point.y}) | Out-Null
+1..${count} | ForEach-Object {
+  [TrebellInput]::mouse_event(${flags[0]},0,0,0,[UIntPtr]::Zero)
+  [TrebellInput]::mouse_event(${flags[1]},0,0,0,[UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 70
+}`);
+  return {ok:true,button,count,...point};
+}
+
+async function computerScroll(delta){
+  const amount=Math.max(-12000,Math.min(12000,Math.round(Number(delta)||0)));
+  await powershell(`Add-Type -TypeDefinition @'
+${COMPUTER_INPUT_TYPE}
+'@
+[TrebellInput]::mouse_event(0x0800,0,0,${amount},[UIntPtr]::Zero)`);
+  return {ok:true,delta:amount};
+}
+
+const SEND_KEY_MAP=Object.freeze({
+  ENTER:"{ENTER}",TAB:"{TAB}",ESC:"{ESC}",ESCAPE:"{ESC}",SPACE:" ",
+  UP:"{UP}",DOWN:"{DOWN}",LEFT:"{LEFT}",RIGHT:"{RIGHT}",
+  HOME:"{HOME}",END:"{END}",PAGEUP:"{PGUP}",PAGEDOWN:"{PGDN}",
+  BACKSPACE:"{BACKSPACE}",DELETE:"{DELETE}",
+  "CTRL+A":"^a","CTRL+C":"^c","CTRL+V":"^v","CTRL+X":"^x","CTRL+Z":"^z","CTRL+Y":"^y",
+  "CTRL+S":"^s","CTRL+F":"^f","CTRL+L":"^l","ALT+TAB":"%{TAB}","ALT+F4":"%{F4}",
+});
+
+async function computerKey(value){
+  const key=String(value||"").trim().toUpperCase();
+  const sequence=SEND_KEY_MAP[key];
+  if(!sequence)throw new Error("Unsupported computer key: "+key);
+  const escaped=sequence.replace(/'/g,"''");
+  await powershell(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped}')`);
+  return {ok:true,key};
+}
+
+async function computerType(text){
+  const value=String(text??"");
+  const previous=clipboard.readText();
+  clipboard.writeText(value);
+  try{
+    await computerKey("CTRL+V");
+  }finally{
+    setTimeout(()=>{try{if(clipboard.readText()===value)clipboard.writeText(previous)}catch{}},120);
+  }
+  return {ok:true,length:value.length};
+}
+
+function guiServerOptions(){
+  return {
+    port:Number(process.env.TREBELL_GUI_PORT || 3210),
+    appPort:Number(process.env.TREBELL_APP_SERVER_PORT) || null,
+    mock:process.env.TREBELL_GUI_MOCK==="1",
+    env:process.env,
+  };
+}
+
+async function startGuiServer(){
+  if(gui)return gui;
+  guiStart??=(async()=>{
+    try{await loginShellRead;gui=await createGuiServer(guiServerOptions());return gui}
+    finally{guiStart=null}
+  })();
+  return guiStart;
+}
+
+// One start of the main window at a time: a Dock click (activate) while the first window is still on its way (the login shell's
+// PATH being read, the GUI server starting) gets that start, where a second window would load the app hidden behind the first
+// (ready-to-show shows windowRef, the window made last) and leave getAllWindows() never empty again, so later Dock clicks opened none.
+let windowStart=null;
+function createWindow(){
+  windowStart??=openWindow().finally(()=>{windowStart=null});
+  return windowStart;
+}
+
+async function openWindow(){
+  configureBundledRuntime();
+  try{ process.chdir(app.getPath("home")); }catch{}
+  await startGuiServer();
+
+  windowRef=new BrowserWindow({
+    width:1600,
+    height:980,
+    minWidth:1180,
+    minHeight:720,
+    frame:false,
+    show:false,
+    icon:appIcon(),
+    backgroundColor:"#080a11",
+    autoHideMenuBar:true,
+    webPreferences:{
+      preload:join(import.meta.dirname,"preload.cjs"),
+      contextIsolation:true,
+      nodeIntegration:false,
+      sandbox:true,
+    },
+  });
+
+  windowRef.removeMenu();
+  windowRef.webContents.session.setDisplayMediaRequestHandler(async(request,callback)=>{
+    if(!request.videoRequested||Date.now()>browserRecordingGrantUntil){callback({});return}
+    try{
+      const browser=await ensureAgentBrowser({show:true});browserRecordingGrantUntil=0;
+      callback({video:{id:browser.getMediaSourceId(),name:browser.getTitle()||"Trebell Agent Browser"}});
+    }catch{browserRecordingGrantUntil=0;callback({})}
+  });
+  installMainZoomControls(windowRef);
+  windowRef.webContents.setWindowOpenHandler(({url})=>{
+    const external=externalUrl(url);if(external)shell.openExternal(external).catch(()=>{});
+    return {action:"deny"};
+  });
+  // The app window only ever shows the app: a file or link dropped outside the composer, or a link without a new-window
+  // target, would otherwise replace the app and hand that page the desktop bridge. Reloads and the app's own routes pass.
+  windowRef.webContents.on("will-navigate",(event,url)=>{if(!isAppUrl(url,gui?.url))event.preventDefault()});
+  // The window shows on its first paint (ready-to-show), which often comes before its load ends: the GUI server runs in this busy
+  // process, so the awaited loadURL answers late, and a handler set up after it missed the paint and never showed the window. All the
+  // shown window needs is set up before the load, and the saved zoom is set as the page commits, before it paints.
+  windowRef.webContents.once("did-navigate",()=>setMainZoomFactor(loadDesktopPrefs().zoomFactor||1,{persist:false}));
+  windowRef.once("ready-to-show",()=>{
+    if(process.env.TREBELL_TEST_HIDDEN==="1")return;
+    if(process.argv.includes("--background")&&backgroundEnabled){ensureTray();return}
+    windowRef?.show();
+  });
+  // The page's Maximize turns into Restore while the window is maximised, however it got there: the button, a double click on the
+  // title bar, Win+Up or a snap.
+  for(const name of ["maximize","unmaximize"])windowRef.on(name,()=>{try{if(windowRef&&!windowRef.isDestroyed())windowRef.webContents.send("window:maximized",windowRef.isMaximized())}catch{}});
+  windowRef.on("close",(event)=>{
+    if(backgroundEnabled&&!quitting){event.preventDefault();windowRef?.hide();ensureTray()}
+  });
+  // Agent Browser belongs to the workspace window. Leaving it open prevented window-all-closed and stranded an invisible instance.
+  windowRef.on("closed",()=>{windowRef=null;disposeAgentBrowser({destroy:true});});
+  // The window can be closed while it loads, now that it shows on its first paint: Electron then rejects its load, which is no failed
+  // start. The quit that close starts is the shutdown's own (window-all-closed), and a second one from the start's failure path would
+  // go through at once, while the cleanup was still closing the GUI server.
+  const contents=windowRef.webContents;
+  await windowRef.loadURL(gui.url).catch(error=>{if(!contents.isDestroyed())throw error});
+}
+
+// The bridge answers only the app's own pages (defence in depth next to the window's navigation guard): a call from any other
+// page is refused, and a message from one is dropped.
+function fromApp(event){return isAppUrl(event?.senderFrame?.url,gui?.url)}
+function handle(channel,listener){ipcMain.handle(channel,(event,...args)=>{if(!fromApp(event))throw new Error(`${channel} is only available to Trebell Code itself`);return listener(event,...args)})}
+function listen(channel,listener){ipcMain.on(channel,(event,...args)=>{if(fromApp(event))listener(event,...args)})}
+
+const lock=app.requestSingleInstanceLock();
+if(!lock){
+  app.quit();
+}else{
+  // A slow IPv4 connect where IPv6 does not route gets a second, not 250 ms, here as in the GUI server (connect-attempt-timeout.mjs).
+  extendConnectAttemptTimeout();
+  // Opened from the Dock, Finder or a launcher, the app has launchd's or the session's bare PATH: the login shell's is read while
+  // Electron starts (at most two seconds, macOS and Linux only), and the harness CLIs are looked for on it.
+  loginShellRead=hydrateLoginShellEnvironment(process.env,{log:message=>console.warn(message)}).catch(error=>console.warn("Trebell could not read PATH from the login shell:",error));
+  // A second launch brings the window back, also from the tray (close to tray, or a --background start), as the tray's Show does.
+  app.on("second-instance",()=>{
+    if(windowRef){
+      if(windowRef.isMinimized()) windowRef.restore();
+      windowRef.show();
+      windowRef.focus();
+    }
+  });
+
+  listen("window:minimize",()=>windowRef?.minimize());
+  listen("window:maximize",()=>{
+    if(!windowRef) return;
+    windowRef.isMaximized() ? windowRef.unmaximize() : windowRef.maximize();
+  });
+  listen("window:close",()=>windowRef?.close());
+  handle("window:maximized",()=>Boolean(windowRef?.isMaximized()));
+  handle("desktop:background:get",()=>({enabled:backgroundEnabled,...backgroundLoginSettings()}));
+  handle("desktop:background:set",(_event,value)=>({enabled:setBackgroundEnabled(value)}));
+  handle("snapshot:get",()=>({...snapshotConfig,registered:Boolean(registeredSnapshotShortcut),platform:process.platform,pending:pendingSnapshots().length}));
+  handle("snapshot:configure",(_event,config={})=>applySnapshotConfig(config));
+  handle("snapshot:pending",()=>pendingSnapshots());
+  handle("snapshot:read",(_event,id)=>readSnapshot(id));
+  handle("snapshot:ack",(_event,id)=>ackSnapshot(id));
+  handle("snapshot:capture",()=>captureActiveSnapshot());
+  listen("desktop:notify",(_event,payload={})=>{
+    if(!Notification.isSupported()) return;
+    // The window in front already shows what the notification would say (a question, an approval, a finished task).
+    if(windowRef&&!windowRef.isDestroyed()&&windowRef.isVisible()&&windowRef.isFocused()) return;
+    const title=String(payload.title||"Trebell Code").slice(0,120);
+    const body=String(payload.body||"").slice(0,600);
+    const notification=new Notification({title,body,silent:Boolean(payload.silent),icon:appIcon()});
+    notification.on("click",()=>{
+      if(!windowRef) return;
+      if(windowRef.isMinimized()) windowRef.restore();
+      windowRef.show();
+      windowRef.focus();
+    });
+    notification.show();
+  });
+  handle("workspace:pickDirectory",async()=>{
+    const result=await dialog.showOpenDialog(windowRef,{properties:["openDirectory","createDirectory"]});
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+  handle("workspace:pickFiles",async()=>{
+    const result=await dialog.showOpenDialog(windowRef,{properties:["openFile","multiSelections"]});
+    return result.canceled ? [] : result.filePaths;
+  });
+  handle("workspace:editors",async()=>({editors:await availableEditors()}));
+  handle("workspace:openIn",async(_event,payload={})=>openWorkspaceIn(payload.path,payload.editorId));
+  handle("browser:navigate",async(_event,url)=>{
+    const browser=await ensureAgentBrowser();
+    resetBrowserRuntime();
+    await browser.loadURL(normalizeBrowserUrl(url));
+    return {ok:true,url:browser.webContents.getURL(),title:browser.webContents.getTitle()};
+  });
+  handle("browser:show",async()=>{
+    const browser=await ensureAgentBrowser({show:true});
+    return {ok:true,url:browser.webContents.getURL(),title:browser.webContents.getTitle()};
+  });
+  handle("browser:snapshot",async()=>browserSnapshot());
+  handle("browser:click",async(_event,ref)=>browserClick(ref));
+  handle("browser:type",async(_event,payload)=>browserType(payload?.ref,payload?.text));
+  handle("browser:screenshot",async()=>browserScreenshot());
+  handle("browser:runtime",async()=>browserRuntime());
+  handle("browser:state",async()=>browserState());
+  handle("browser:history",async(_event,direction)=>browserNavigateHistory(direction));
+  handle("browser:viewport",async(_event,payload)=>browserViewport(payload));
+  handle("browser:recording:arm",async()=>{
+    const browser=await ensureAgentBrowser({show:true});
+    if(process.env.TREBELL_TEST_HIDDEN==="1"&&!browser.isVisible()){
+      browser.showInactive();
+      const hideTimer=setTimeout(()=>{if(agentBrowser===browser&&!browser.isDestroyed())browser.hide()},10_000);
+      hideTimer.unref?.();
+    }
+    browserRecordingGrantUntil=Date.now()+5000;
+    return {ok:true,expiresAt:browserRecordingGrantUntil,sourceId:browser.getMediaSourceId()};
+  });
+  handle("desktop:screenshot",async()=>desktopScreenshot());
+  handle("desktop:window:screenshot",async()=>mainWindowScreenshot());
+  handle("computer:screenshot",async()=>desktopScreenshot());
+  handle("computer:move",async(_event,payload={})=>computerMove(payload.x,payload.y));
+  handle("computer:click",async(_event,payload={})=>computerClick(payload));
+  handle("computer:scroll",async(_event,payload={})=>computerScroll(payload.delta));
+  handle("computer:type",async(_event,payload={})=>computerType(payload.text));
+  handle("computer:key",async(_event,payload={})=>computerKey(payload.key));
+  handle("desktop:zoom:get",()=>({factor:windowRef?.webContents?.getZoomFactor?.()||1}));
+  handle("desktop:zoom:set",(_event,value)=>({factor:setMainZoomFactor(value)}));
+  handle("desktop:zoom:reset",()=>({factor:setMainZoomFactor(1)}));
+  listen("desktop:zoom:preview-keys",(_event,open)=>{previewZoomKeys=Boolean(open)});
+  handle("browser:importCookies",async(_event,payload)=>importBrowserCookies(payload));
+  handle("browser:importSources",async()=>browserImportSources());
+  handle("browser:importProfile",async(_event,payload)=>importBrowserProfile(payload||{}));
+  handle("browser:close",async()=>{disposeAgentBrowser();return {ok:true};});
+
+  app.whenReady().then(async()=>{
+    if(process.platform==="win32")app.setAppUserModelId("com.trebell.code");
+    const prefs=loadDesktopPrefs();
+    backgroundEnabled=Boolean(prefs.backgroundEnabled);
+    snapshotConfig={...snapshotConfig,...(prefs.snapshotConfig||{})};
+    if(snapshotConfig.enabled){try{applySnapshotConfig(snapshotConfig,{persist:false})}catch(error){snapshotConfig={...snapshotConfig,enabled:false};saveDesktopPrefs({...prefs,snapshotConfig});console.error("SnapShot shortcut disabled:",error.message)}}
+    if(backgroundEnabled)ensureTray();
+    await createWindow();
+  }).catch((error)=>{
+    console.error(error);
+    app.quit();
+  });
+
+  app.on("window-all-closed",()=>{
+    if(process.platform!=="darwin"&&!quitting) app.quit();
+  });
+
+  app.on("activate",()=>{
+    if(BrowserWindow.getAllWindows().length===0) createWindow();
+  });
+
+  // Every quit runs the shutdown cleanup once: the tray's Quit (which sets quitting first, so its window closes instead of hiding)
+  // and the window's own close alike.
+  app.on("before-quit",(event)=>{
+    quitting=true;
+    if(shutdownCleaned) return;
+    event.preventDefault();
+    shutdownCleaned=true;
+    disposeAgentBrowser({destroy:true});
+    try{tray?.destroy();tray=null}catch{}
+    try{if(registeredSnapshotShortcut)globalShortcut.unregister(registeredSnapshotShortcut);registeredSnapshotShortcut=null}catch{}
+    Promise.resolve(gui?.close?.())
+      .catch(()=>{})
+      .finally(()=>app.quit());
+  });
+}

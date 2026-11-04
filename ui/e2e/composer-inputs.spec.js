@@ -1,0 +1,4637 @@
+import { test,expect } from "@playwright/test";
+import { mkdirSync } from "node:fs";
+import { mkdir,writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { WebSocket,WebSocketServer } from "ws";
+import { replyItem,routeRelayApp,startRelayHarness } from "./relay-history-harness.js";
+import { routeCodexApp,startCodexHarness } from "./codex-history-harness.js";
+import { keepThreadMeta } from "./test-home.js";
+
+// What a person puts into the composer besides typed text (files, slash commands, dictation, the welcome suggestions), over a
+// Trebell Native thread on the real agent relay. Attachments go to the GUI server as they do in the app.
+const auditDir=fileURLToPath(new URL("../../visual-audit/composer-inputs/",import.meta.url));mkdirSync(auditDir,{recursive:true});
+const json=(route,value)=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(value)});
+
+// One thread, "Composer thread", open, unless newTask leaves the window on New task. replies answers the provider's calls in order.
+// refuse(message), when given, names an error to answer a request with instead of the relay (a harness refusing it), and hold(message)
+// a promise the request waits on before it goes to the relay (a harness slow to answer it); answer(message) one its answer waits on
+// before it reaches the page, while what the relay says meanwhile (the notification of what it did) goes on. turns are the thread's
+// turns from before the window opened, in place of its one short reply. others names more threads, each with a short reply.
+async function openComposerApp(page,{newTask=false,replies=[],refuse=null,hold=null,answer=null,turns=[{user:"Look at the login page",items:[replyItem("seed-reply-1","The login page renders.")]}],others=[]}={}){
+  const harness=await startRelayHarness({replies});
+  harness.seedThread("Composer thread",turns);
+  others.forEach((name,index)=>harness.seedThread(name,[{user:"Look at "+name,items:[replyItem("other-reply-"+index,name+" is ready.")]}]));
+  await routeRelayApp(page,harness);
+  if(refuse||hold||answer)await page.routeWebSocket(harness.wsUrl,ws=>{
+    const server=ws.connectToServer(),asked=new Map();
+    ws.onMessage(async message=>{
+      let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+      const request=parsed?.id!=null&&parsed.method?parsed:null,refusal=request&&refuse?refuse(request):null;
+      if(refusal){ws.send(JSON.stringify({id:parsed.id,error:{code:-32000,message:refusal}}));return}
+      if(request)asked.set(request.id,request);
+      const wait=request&&hold?hold(request):null;if(wait)await wait;
+      server.send(message);
+    });
+    if(answer)server.onMessage(async message=>{
+      let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+      const request=parsed?.id!=null&&!parsed.method?asked.get(parsed.id):null,wait=request?answer(request):null;
+      if(wait)await wait;
+      ws.send(message);
+    });
+  });
+  // The theme button's setting stays in the page, so later specs on the shared server keep theirs.
+  await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+  await page.route(/\/api\/recovery$/,route=>json(route,{enabled:false,items:[]}));
+  await page.setViewportSize({width:1280,height:800});
+  await page.goto("/");
+  const row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Composer thread"]')});
+  await expect(row).toBeVisible();
+  if(!newTask){
+    await row.locator(".thread-main").click();
+    await expect(row).toHaveClass(/active/);await expect(page.getByTestId("composer")).not.toHaveAttribute("placeholder","Opening thread…");
+  }
+  return harness;
+}
+// The header's theme button, as a person switches between dark and light, and the window at 1280x800 and 900x800 in that mode.
+async function switchMode(page,mode){
+  const html=page.locator("html");if(await html.getAttribute("data-mode")===mode)return;
+  await page.getByTestId("appearance-toggle").first().click();await expect(html).toHaveAttribute("data-mode",mode);
+}
+async function shootBoth(page,name,check=async()=>{}){
+  for(const mode of ["dark","light"]){
+    await switchMode(page,mode);
+    for(const width of [1280,900]){await page.setViewportSize({width,height:800});await check();await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+width+"x800.png"})}
+    await page.setViewportSize({width:1280,height:800});
+  }
+  await switchMode(page,"dark");
+}
+async function chooseFiles(page,files){
+  const [chooser]=await Promise.all([page.waitForEvent("filechooser"),page.getByRole("button",{name:"Attach files"}).click()]);
+  await chooser.setFiles(files);
+}
+const chips=page=>page.locator(".attachment-shelf > span");
+const frames=page=>page.evaluate(()=>new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done))));
+// The text of each message "Composer thread" has, as the relay stores its turns.
+const sentTexts=harness=>harness.turns(harness.threads[0]).map(turn=>(turn.items.find(item=>item.type==="userMessage")?.content||[]).map(part=>part.text||"").join(""));
+// A key held down as a keyboard repeats it: the press, then five repeats about 33 ms apart. pressed() waits for what the press did
+// before the first repeat comes, as the keyboard waits about half a second.
+async function holdKey(page,key,pressed=async()=>{}){
+  await page.keyboard.down(key);await pressed();
+  for(let repeat=0;repeat<5;repeat++){await page.waitForTimeout(33);await page.keyboard.down(key)}
+  await page.keyboard.up(key);await frames(page);
+}
+// A paste as the browser makes it: the paste event, then, when the app leaves the text to the browser, the text put in at the caret.
+const pasteText=(page,text)=>page.getByTestId("composer").evaluate((node,text)=>{
+  const data=new DataTransfer();data.setData("text/plain",text);
+  if(node.dispatchEvent(new ClipboardEvent("paste",{clipboardData:data,bubbles:true,cancelable:true})))document.execCommand("insertText",false,text);
+},text);
+
+test("a file over the attachment limit is refused at once by its name, and an accepted file shows as uploading until it is in",async({page},testInfo)=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const uploads=[];page.on("request",request=>{if(/\/api\/attachments\/blob$/.test(request.url()))uploads.push(request.url())});
+    // 51 MB is over the 50 MB the GUI server keeps: the browser knows the size before reading the file, so it is refused at once,
+    // without being read or sent.
+    const big=testInfo.outputPath("recording.bin");await writeFile(big,Buffer.alloc(51*1024*1024,7));
+    const alert=page.getByTestId("app-action-error"),refusal="Could not attach files: recording.bin: Attachment is larger than 50 MB";
+    // The theme button clears the message, so each mode picks the file again.
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      await chooseFiles(page,big);
+      await expect(alert).toHaveText(refusal,{timeout:2000});
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(alert).toBeInViewport();await page.screenshot({animations:"disabled",path:auditDir+"attachment-over-limit-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+    }
+    await switchMode(page,"dark");
+    await expect(chips(page)).toHaveCount(0);
+    expect(uploads).toEqual([]);
+    // A file within the limit shows as uploading while the server has not answered, and as attached once it has. Picked with it,
+    // recording.bin is refused at once, not once notes.txt is in.
+    let release=()=>{};const held=new Promise(resolve=>{release=resolve});
+    await page.route(/\/api\/attachments\/blob$/,async route=>{await held;await route.fallback()});
+    const notes=testInfo.outputPath("notes.txt");await writeFile(notes,"Release notes draft\n".repeat(4000));
+    await chooseFiles(page,[big,notes]);
+    const chip=chips(page).filter({hasText:"notes.txt"});
+    await expect(chip).toHaveText(/notes\.txt\s*Uploading…/);
+    await expect(chip).toHaveAttribute("aria-busy","true");
+    await expect(alert).toHaveText(refusal,{timeout:2000});
+    // The refusal shows above the shelf, clear of the chip uploading (in light mode picked again, as the theme button clears it).
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      if(mode==="light"){await chooseFiles(page,big);await expect(alert).toHaveText(refusal,{timeout:2000})}
+      for(const width of [1280,900]){
+        await page.setViewportSize({width,height:800});await expect(chip).toBeInViewport();
+        const [toast,shelf]=await Promise.all([alert.boundingBox(),chip.boundingBox()]);expect(toast.y+toast.height).toBeLessThanOrEqual(shelf.y);
+        await page.screenshot({animations:"disabled",path:auditDir+"attachment-uploading-"+mode+"-"+width+"x800.png"});
+      }
+      await page.setViewportSize({width:1280,height:800});
+    }
+    await switchMode(page,"dark");
+    // Nothing is sent meanwhile, or the message would go without the file: Send waits, and Enter keeps the draft.
+    const composer=page.getByTestId("composer"),send=page.getByTestId("send");
+    await composer.click();await page.keyboard.type("Here are the notes",{delay:15});
+    await expect(send).toBeDisabled();await expect(send).toHaveAttribute("title","Waiting for attachments to upload");
+    await page.keyboard.press("Enter");
+    await expect(composer).toHaveValue("Here are the notes");
+    await shootBoth(page,"attachment-uploading-send-waits",()=>expect(send).toBeDisabled());
+    release();
+    await expect(send).toBeEnabled();
+    await expect(chip).not.toHaveAttribute("aria-busy","true");
+    await expect(chip).toHaveText("notes.txt");
+    await expect(chips(page)).toHaveCount(1);
+    expect(uploads).toHaveLength(1);
+  }finally{await harness.close()}
+});
+
+// A drop on the composer as the browser hands it over. A person's drop of a folder from the file manager cannot be made from a test:
+// the page's drop items call "assets" a directory, and reading it fails as Chromium's read of a dropped directory fails. Reading
+// "locked.txt" fails as a file the system no longer lets the browser read, and "capture.mov" is a 51 MB video.
+const UNREADABLE="The requested file could not be read, typically due to permission problems that have occurred after a reference to a file was acquired.";
+async function unreadableDrops(page){
+  await page.addInitScript(unreadable=>{
+    const entry=DataTransferItem.prototype.webkitGetAsEntry;
+    DataTransferItem.prototype.webkitGetAsEntry=function(){return this.getAsFile()?.name==="assets"?{isDirectory:true,isFile:false,name:"assets"}:entry.call(this)};
+    const read=FileReader.prototype.readAsDataURL;
+    FileReader.prototype.readAsDataURL=function(file){
+      const failure=file?.name==="assets"?new DOMException("A requested file or directory could not be found at the time an operation was processed.","NotFoundError"):file?.name==="locked.txt"?new DOMException(unreadable,"NotReadableError"):null;
+      if(!failure)return read.call(this,file);
+      Object.defineProperty(this,"error",{configurable:true,value:failure});setTimeout(()=>this.dispatchEvent(new ProgressEvent("error")),20);
+    };
+  },UNREADABLE);
+}
+async function dropOnComposer(page,names){
+  await page.getByTestId("composer").evaluate((node,names)=>{
+    const video=name=>name==="capture.mov";
+    const data=new DataTransfer();for(const name of names)data.items.add(new File(name==="assets"?[]:video(name)?[new Uint8Array(51*1024*1024)]:["Dropped "+name+"\n"],name,{type:name==="assets"?"":video(name)?"video/quicktime":"text/plain"}));
+    node.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:data}));
+  },names);
+}
+
+test("a dropped folder is named as a folder, also beside a file over the limit, and a dropped file the browser cannot read is named with the reason",async({page})=>{
+  test.setTimeout(90_000);
+  await unreadableDrops(page);
+  const harness=await openComposerApp(page);
+  try{
+    const alert=page.getByTestId("app-action-error");
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      // The folder is left out and said to be one; the file dropped with it is attached.
+      await dropOnComposer(page,["assets","notes-"+mode+".txt"]);
+      await expect(alert).toHaveText("Could not attach dropped files: Folders cannot be attached");
+      await expect(chips(page).filter({hasText:"notes-"+mode+".txt"})).toHaveCount(1);
+      await expect(chips(page).filter({hasText:"assets"})).toHaveCount(0);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(alert).toBeInViewport();await page.screenshot({animations:"disabled",path:auditDir+"dropped-folder-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      await dropOnComposer(page,["locked.txt"]);
+      await expect(alert).toHaveText("Could not attach dropped files: locked.txt: "+UNREADABLE);
+      await expect(chips(page).filter({hasText:"locked.txt"})).toHaveCount(0);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(alert).toBeInViewport();await page.screenshot({animations:"disabled",path:auditDir+"dropped-unreadable-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      // Dropped with a file over the limit, the folder is still named, together with the file's refusal.
+      await dropOnComposer(page,["assets","capture.mov"]);
+      await expect(alert).toHaveText("Could not attach dropped files: Folders cannot be attached; capture.mov: Attachment is larger than 50 MB");
+      await expect(chips(page).filter({hasText:"capture.mov"})).toHaveCount(0);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(alert).toBeInViewport();await page.screenshot({animations:"disabled",path:auditDir+"dropped-folder-and-oversize-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+    }
+  }finally{await harness.close()}
+});
+
+const GOAL_NEEDS_THREAD="A goal belongs to a thread. Send a first message to start one, then set its goal. Your draft is kept.";
+test("/goal with an objective sets the thread's goal, and /goal on New task keeps the draft and says a thread comes first",async({page})=>{
+  test.setTimeout(90_000);
+  // The harness refuses the first goal it is asked to set.
+  let refusals=1;
+  const harness=await openComposerApp(page,{refuse:message=>message.method==="thread/goal/set"&&refusals-->0?"Goal store is read-only":null});
+  try{
+    const composer=page.getByTestId("composer"),panel=page.getByTestId("goal-panel");
+    await composer.click();
+    await page.keyboard.type("/goal Make the login tests pass",{delay:15});
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("composer-alert")).toHaveText("Could not set the goal: Goal store is read-only. Your draft is kept.");
+    await expect(composer).toHaveValue("/goal Make the login tests pass");
+    await expect(panel).toHaveCount(0);
+    await shootBoth(page,"goal-command-refused",()=>expect(page.getByTestId("composer-alert")).toBeInViewport());
+    // Sent again, the goal is set and the Goal panel opens on it.
+    await composer.click();await page.keyboard.press("Enter");
+    await expect(panel.getByLabel("Objective",{exact:true})).toHaveValue("Make the login tests pass");
+    await expect(panel.locator(".goal-status")).toHaveText(/active/i);
+    await expect(composer).toHaveValue("");
+    await shootBoth(page,"goal-command-set",()=>expect(panel.getByLabel("Objective",{exact:true})).toBeInViewport());
+    // On New task there is no thread to set a goal on yet.
+    await page.getByRole("button",{name:"Close right panel"}).click();await expect(panel).toHaveCount(0);
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"New task",exact:true}).click();
+    await expect(page.locator(".thread-row.active")).toHaveCount(0);
+    await composer.click();
+    await page.keyboard.type("/goal Ship the release",{delay:15});
+    await page.keyboard.press("Enter");
+    const alert=page.getByTestId("composer-alert");
+    await expect(alert).toHaveText(GOAL_NEEDS_THREAD);
+    await expect(composer).toHaveValue("/goal Ship the release");
+    await expect(page.locator(".thread-row")).toHaveCount(1);
+    await shootBoth(page,"goal-command-new-task",()=>expect(alert).toBeInViewport());
+    // Editing the draft clears the note.
+    await composer.click();await page.keyboard.press("End");await page.keyboard.type("!",{delay:15});
+    await expect(alert).toHaveCount(0);
+    // So does a welcome suggestion that takes the draft's place.
+    await page.keyboard.press("Enter");await expect(alert).toHaveText(GOAL_NEEDS_THREAD);
+    await page.getByRole("button",{name:"Fix a bug",exact:true}).click();
+    await expect(composer).toHaveValue("Find a useful bug, fix it, and run the relevant tests.");
+    await expect(alert).toHaveCount(0);
+    await shootBoth(page,"goal-note-gone-after-suggestion",()=>expect(composer).toBeInViewport());
+  }finally{await harness.close()}
+});
+
+test("/goal pause, resume and clear on a Native thread change its goal, as the Goal panel's buttons do",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer"),panel=page.getByTestId("goal-panel"),objective=panel.getByLabel("Objective",{exact:true}),status=panel.locator(".goal-status");
+    const goal=async text=>{await composer.click();await page.keyboard.type(text,{delay:15});await page.keyboard.press("Enter");await expect(composer).toHaveValue("")};
+    await goal("/goal Make the login tests pass");
+    await expect(objective).toHaveValue("Make the login tests pass");await expect(status).toHaveText("active");
+    // The words are commands, never the objective.
+    await goal("/goal pause");
+    await expect(status).toHaveText("paused");await expect(objective).toHaveValue("Make the login tests pass");
+    await shootBoth(page,"goal-command-paused",()=>expect(status).toBeInViewport());
+    await goal("/goal resume");
+    await expect(status).toHaveText("active");await expect(objective).toHaveValue("Make the login tests pass");
+    await goal("/goal clear");
+    await expect(status).toHaveText("not set");await expect(objective).toHaveValue("");
+    await shootBoth(page,"goal-command-cleared",()=>expect(status).toBeInViewport());
+  }finally{await harness.close()}
+});
+
+test("the Goal panel's Clear asks in the app's own dialog, never the browser's: Escape keeps the goal, and Clear goal clears it from the keyboard",async({page})=>{
+  test.setTimeout(90_000);
+  const nativeDialogs=[];page.on("dialog",dialog=>{nativeDialogs.push(dialog.type()+": "+dialog.message());dialog.dismiss().catch(()=>{})});
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer"),panel=page.getByTestId("goal-panel"),objective=panel.getByLabel("Objective",{exact:true}),status=panel.locator(".goal-status");
+    await composer.click();await page.keyboard.type("/goal Make the login tests pass",{delay:15});await page.keyboard.press("Enter");
+    await expect(objective).toHaveValue("Make the login tests pass");await expect(status).toHaveText("active");
+    const clear=panel.getByRole("button",{name:"Clear",exact:true}),question=page.locator("dialog.inspector-text-prompt"),cancel=question.getByRole("button",{name:"Cancel",exact:true});
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      await clear.click();
+      await expect(question.locator("p")).toHaveText("Clear this thread goal?");await expect(cancel).toBeFocused();
+      await expect(question.getByRole("button")).toHaveText(["Cancel","Clear goal"]);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await page.screenshot({animations:"disabled",path:auditDir+"goal-clear-question-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      await page.keyboard.press("Escape");await expect(question).toHaveCount(0);await expect(clear).toBeFocused();
+      await expect(status).toHaveText("active");await expect(objective).toHaveValue("Make the login tests pass");
+    }
+    // From the keyboard: Enter on Clear, Tab from Cancel to Clear goal, Enter.
+    await page.keyboard.press("Enter");await expect(cancel).toBeFocused();
+    await page.keyboard.press("Tab");await expect(question.getByRole("button",{name:"Clear goal",exact:true})).toBeFocused();await page.keyboard.press("Enter");
+    await expect(status).toHaveText("not set");await expect(objective).toHaveValue("");
+    expect(nativeDialogs).toEqual([]);
+  }finally{await harness.close()}
+});
+
+// A Codex app-server without goals (one from before them) answers every thread/goal/* request with Method not found.
+test("on a Codex without goals, /goal keeps the objective in the composer and says this Codex does not support goals, never Codex's Method not found",async({page})=>{
+  test.setTimeout(90_000);
+  const thread={id:"codex-without-goals",name:"Codex without goals",preview:"Codex without goals",cwd:process.cwd(),status:{type:"idle"},model:"test/coding-fast",createdAt:Date.now()/1000-60,updatedAt:Date.now()/1000,turns:[]};
+  const harness=await startCodexHarness(thread,[]),goalRequests=[];
+  try{
+    await routeCodexApp(page,harness,thread);
+    await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+    await page.routeWebSocket(harness.wsUrl,ws=>{
+      const server=ws.connectToServer();
+      ws.onMessage(message=>{
+        let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+        if(parsed?.id!=null&&/^thread\/goal\//.test(parsed.method||"")){goalRequests.push(parsed.method);ws.send(JSON.stringify({id:parsed.id,error:{code:-32601,message:"Method not found: "+parsed.method}}));return}
+        server.send(message);
+      });
+    });
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    const row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Codex without goals"]')});
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("composer-alert"),said="Could not set the goal: this Codex does not support goals. Your draft is kept.";
+    await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");
+    await expect.poll(()=>goalRequests).toContain("thread/goal/get");
+    // The thread has no goal to load, which is no error.
+    await expect.soft(page.getByText(/Method not found/),"the opened thread shows no Method not found").toHaveCount(0);
+    // The person sets a goal with Enter: Codex refuses it, and the objective stays in the composer with the reason beside it.
+    await composer.click();await page.keyboard.type("/goal Ship the release",{delay:15});await page.keyboard.press("Enter");
+    await expect(alert).toHaveText(said);
+    await expect(composer).toHaveValue("/goal Ship the release");
+    // Then with the Send button: the same.
+    await page.getByTestId("send").click();
+    await expect.poll(()=>goalRequests.filter(method=>method==="thread/goal/set").length).toBe(2);
+    await expect(alert).toHaveText(said);await expect(composer).toHaveValue("/goal Ship the release");
+    await shootBoth(page,"goal-command-codex-without-goals",()=>expect(alert).toBeInViewport());
+    // A goal word is refused the same way, by what it was to do.
+    await composer.click();await page.keyboard.press("Control+A");await page.keyboard.type("/goal pause",{delay:15});await page.keyboard.press("Enter");
+    await expect(alert).toHaveText("Could not pause the goal: this Codex does not support goals. Your draft is kept.");await expect(composer).toHaveValue("/goal pause");
+    // The Goal panel's Set goal says it too.
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel");
+    await panel.getByLabel("Objective",{exact:true}).fill("Ship the release");await panel.getByRole("button",{name:"Set goal",exact:true}).click();
+    await expect(panel.locator(".inline-error")).toHaveText("Could not set the goal: this Codex does not support goals.");
+    await shootBoth(page,"goal-panel-codex-without-goals",()=>expect(panel.locator(".inline-error")).toBeInViewport());
+    // No turn went to Codex, and no Method not found reached the window: not on opening the thread, not for /goal.
+    expect(harness.calls.filter(call=>call.method==="turn/start")).toEqual([]);
+    await expect(page.getByText(/Method not found/)).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+// /goal on a Codex with goals sets the goal, paused until its first turn has started, then starts that turn. When the turn does not
+// start, the note says what became of the goal: a Stop before it started keeps the draft with no note, as a send does; a turn Codex
+// refuses leaves the goal set, and says why the turn did not start; a turn Codex has not answered may still start, so the note says to
+// look at the conversation first. Each said "Could not set the goal", though the goal was set. A resume whose turn Codex refuses
+// leaves the goal paused, so it still says the resume did not go through.
+test("/goal whose first turn does not start says what became of the goal: nothing on a Stop, set on a refusal, may still start unanswered",async({page})=>{
+  test.setTimeout(120_000);
+  const thread={id:"codex-goal-turns",name:"Codex goal turns",preview:"Codex goal turns",cwd:process.cwd(),status:{type:"idle"},model:"test/coding-fast",createdAt:Date.now()/1000-60,updatedAt:Date.now()/1000,turns:[]};
+  const harness=await startCodexHarness(thread,[]),goalSets=[],turnStarts=[];
+  // hold-goal: thread/goal/set waits for releaseGoal(); refuse-turn: Codex refuses turn/start; silent-turn: turn/start is never answered.
+  // The goal last set is the one thread/goal/get gives.
+  let mode="hold-goal",releaseGoal=()=>{},lastGoal=null;
+  try{
+    await routeCodexApp(page,harness,thread);
+    await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+    await page.routeWebSocket(harness.wsUrl,ws=>{
+      const server=ws.connectToServer();
+      ws.onMessage(message=>{
+        let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+        if(parsed?.id!=null&&parsed.method==="thread/goal/set"){
+          goalSets.push(parsed.params);
+          const at=Math.floor(Date.now()/1000),goal={threadId:thread.id,objective:parsed.params.objective||lastGoal?.objective||"Ship the release",status:parsed.params.status||"active",tokenBudget:null,tokensUsed:0,timeUsedSeconds:0,createdAt:at,updatedAt:at};
+          const answer=()=>{lastGoal=goal;ws.send(JSON.stringify({id:parsed.id,result:{goal}}))};
+          if(mode==="hold-goal"){releaseGoal=answer;return}
+          answer();return;
+        }
+        if(parsed?.id!=null&&parsed.method==="thread/goal/get"&&lastGoal){ws.send(JSON.stringify({id:parsed.id,result:{goal:lastGoal}}));return}
+        if(parsed?.id!=null&&parsed.method==="turn/start"){
+          turnStarts.push(parsed.params);
+          if(mode==="refuse-turn"){ws.send(JSON.stringify({id:parsed.id,error:{code:-32000,message:"The model is overloaded"}}));return}
+          if(mode==="silent-turn")return;
+        }
+        server.send(message);
+      });
+    });
+    await page.clock.install();
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    const row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Codex goal turns"]')});
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("composer-alert"),stop=page.getByRole("button",{name:"Stop",exact:true}),draft="/goal Ship the release";
+    await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");
+    // Stop while Codex sets the goal: the goal is set (paused), no turn starts, and the draft stays with no note.
+    await composer.click();await page.keyboard.type(draft,{delay:15});await page.keyboard.press("Enter");
+    await expect.poll(()=>goalSets.length).toBe(1);await expect(stop).toBeVisible();await stop.click();
+    releaseGoal();
+    await expect(stop).toHaveCount(0,{timeout:10_000});await expect(composer).toHaveValue(draft);
+    await page.waitForTimeout(500);
+    // Soft, so that the old build also shows what the other two say.
+    await expect.soft(alert,"a Stop says nothing went wrong").toHaveCount(0);
+    expect(turnStarts,"no turn started after the Stop").toEqual([]);
+    // Codex refuses the goal's first turn: the goal is set, and the note says why its turn did not start.
+    mode="refuse-turn";await composer.click();await page.keyboard.press("End");await page.keyboard.press("Enter");
+    await expect.poll(()=>turnStarts.length).toBe(1);
+    await expect.soft(alert,"a refused first turn").toHaveText("The goal is set, but its first turn did not start: The model is overloaded. Your draft is kept.");
+    await expect(composer).toHaveValue(draft);
+    await shootBoth(page,"goal-command-turn-refused",()=>expect(alert).toBeInViewport());
+    // Codex does not answer the goal's first turn: it may still start, so the note says to look at the conversation before sending again.
+    mode="silent-turn";await composer.click();await page.keyboard.press("End");await page.keyboard.press("Enter");
+    await expect.poll(()=>turnStarts.length).toBe(2);
+    await page.clock.fastForward("10:01");
+    await expect.soft(alert,"an unanswered first turn").toHaveText("Codex has not answered the send, so it may still start. Your draft is kept; check the conversation before sending it again.");
+    await expect(composer).toHaveValue(draft);
+    // /goal resume whose turn Codex refuses: the goal stays paused, so the resume did not go through.
+    mode="refuse-turn";await composer.click();await page.keyboard.press("Control+A");await page.keyboard.type("/goal resume",{delay:15});await page.keyboard.press("Enter");
+    await expect.poll(()=>turnStarts.length).toBe(3);
+    await expect(alert,"a resume whose turn Codex refused").toHaveText("Could not resume the goal: The model is overloaded. Your draft is kept.");await expect(composer).toHaveValue("/goal resume");
+    expect(goalSets.map(params=>params.status),"each /goal set the goal paused until its turn starts").toEqual(["paused","paused","paused","paused"]);
+  }finally{await harness.close()}
+});
+
+// A person's double click on a button: two clicks at one spot, the second counted as a double click's. The relay answers the first
+// at once, so the button that comes up in its place (next) is under the pointer and ready when the second click comes.
+async function doubleClickAs(page,button,next){
+  const box=await button.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);
+  await page.mouse.down();await page.mouse.up();
+  await expect(next).toBeEnabled();
+  await page.mouse.down({clickCount:2});await page.mouse.up({clickCount:2});
+}
+
+test("a double click on the Goal panel's Pause pauses the goal once and one on Resume resumes it once: the second click does nothing on the button that took its place",async({page})=>{
+  test.setTimeout(90_000);
+  const statuses=[];page.on("websocket",socket=>socket.on("framesent",frame=>{try{const message=JSON.parse(String(frame.payload));if(message?.method==="thread/goal/set")statuses.push(message.params?.status)}catch{}}));
+  const harness=await openComposerApp(page);
+  try{
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel"),status=panel.locator(".goal-status"),button=name=>panel.getByRole("button",{name,exact:true});
+    await panel.getByLabel("Objective",{exact:true}).click();await page.keyboard.type("Make the login tests pass",{delay:15});
+    await button("Set goal").click();await expect(status).toHaveText("active");
+    // Resume comes up where Pause was as the first click's save answers; the second click leaves it there, ready, and the goal paused.
+    await doubleClickAs(page,button("Pause"),button("Resume"));
+    await expect(button("Resume")).toBeEnabled();await expect(status).toHaveText("paused");
+    expect(statuses).toEqual(["active","paused"]);
+    await shootBoth(page,"goal-pause-double-click",()=>expect(button("Resume")).toBeInViewport());
+    // The same for Resume, which Pause replaces.
+    await doubleClickAs(page,button("Resume"),button("Pause"));
+    await expect(button("Pause")).toBeEnabled();await expect(status).toHaveText("active");
+    expect(statuses).toEqual(["active","paused","active"]);
+    // A click of its own pauses the goal as before.
+    await button("Pause").click();await expect(status).toHaveText("paused");
+    expect(statuses).toEqual(["active","paused","active","paused"]);
+  }finally{await harness.close()}
+});
+
+// The page's socket to the relay, passed through here; set it up before the app opens. hold(method) keeps that method's requests
+// until release() sends them on (a slow harness), or release(reason) refuses them with reason (a slow harness that refuses them);
+// drop() closes the socket and keeps the window from connecting again until back() (a harness that goes away and comes back);
+// answer(method,change) changes what the relay answers to that method from then on. slow(method,match), apart from hold, keeps the
+// requests of method whose params match until the function it gives back sends them on, or refuses them and every one after with
+// the reason it is given (a harness slow to open one thread, or one that cannot open it); a later slow() for them goes first.
+async function relaySocket(page){
+  const sent=[],sockets=[],held=[],slows=[],answers=new Map();let holding=null,away=false;
+  await page.routeWebSocket(/\/api\/agent\/ws$/,ws=>{
+    if(away){ws.close({code:1011,reason:"harness down"}).catch(()=>{});return}
+    const server=ws.connectToServer(),asked=new Map();sockets.push({ws,server});
+    ws.onMessage(message=>{
+      let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+      if(parsed?.method){sent.push(parsed);if(parsed.id!=null)asked.set(parsed.id,parsed.method)}
+      const send=reason=>reason?ws.send(JSON.stringify({id:parsed.id,error:{code:-32000,message:reason}})):server.send(message);
+      const slow=parsed?.method&&slows.findLast(gate=>gate.method===parsed.method&&gate.match(parsed.params||{}));
+      if(slow){if(slow.reason)send(slow.reason);else slow.held.push(send)}
+      else if(parsed?.method&&parsed.method===holding)held.push(send);else server.send(message);
+    });
+    server.onMessage(message=>{
+      let parsed=null;try{parsed=JSON.parse(String(message))}catch{}
+      const change=parsed?.result&&answers.get(asked.get(parsed.id));
+      ws.send(change?JSON.stringify({...parsed,result:change(parsed.result)}):message);
+    });
+  });
+  return {
+    sent:method=>sent.filter(message=>message.method===method).map(message=>message.params||{}),
+    hold(method){holding=method},release(reason){holding=null;for(const send of held.splice(0))send(reason)},
+    slow(method,match){
+      const gate={method,match,held:[],reason:null};slows.push(gate);
+      return reason=>{if(reason)gate.reason=reason;else if(slows.includes(gate))slows.splice(slows.indexOf(gate),1);for(const send of gate.held.splice(0))send(reason)};
+    },
+    answer(method,change){answers.set(method,change)},
+    drop(){away=true;for(const {ws,server} of sockets.splice(0)){ws.close({code:1011,reason:"harness down"}).catch(()=>{});server.close().catch(()=>{})}},
+    back(){away=false},
+  };
+}
+// Two frames on: the page has drawn what it was last given, and has done what React does once it is drawn (its effects).
+const painted=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve)))));
+async function typeOver(page,field,text){await field.click();await page.keyboard.press("Control+A");await page.keyboard.type(text,{delay:15})}
+// The Goal panel opened from the header, with a goal set there that keeps a completion condition: every read of the goal, and
+// every save's answer, brings its lists anew.
+async function setGoalInPanel(page){
+  await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+  const panel=page.getByTestId("goal-panel"),objective=panel.getByLabel("Objective",{exact:true});
+  await objective.click();await page.keyboard.type("Make the login tests pass",{delay:15});
+  await panel.getByText("Completion & guardrails",{exact:true}).click();
+  await panel.getByLabel("Completion conditions",{exact:true}).click();await page.keyboard.type("Login tests pass",{delay:15});
+  await panel.getByRole("button",{name:"Set goal",exact:true}).click();await expect(panel.locator(".goal-status")).toHaveText("active");
+  return {panel,objective};
+}
+
+test("an unsaved Goal edit and note are still there after a look at Files and after the right panel is closed and opened again, until Update goal saves the edit",async({page})=>{
+  test.setTimeout(90_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const conditions=panel.getByLabel("Completion conditions",{exact:true}),done=panel.getByLabel("Completed work",{exact:true}),tabs=page.getByTestId("right-panel").locator(".context-panel-tab-scroll");
+    await typeOver(page,objective,"Make the login and signup tests pass");
+    await panel.getByText("Continuity state",{exact:true}).click();await done.click();await page.keyboard.type("Fixed the session refresh",{delay:15});
+    // A look at Files takes the panel away, and Goal brings it back as it was left.
+    await tabs.getByRole("button",{name:"Files",exact:true}).click();await expect(panel).toHaveCount(0);
+    await tabs.getByRole("button",{name:"Goal",exact:true}).click();
+    await expect(objective).toHaveValue("Make the login and signup tests pass");await expect(conditions).toHaveValue("Login tests pass");
+    await panel.getByText("Continuity state",{exact:true}).click();await expect(done).toHaveValue("Fixed the session refresh");
+    // So does the right panel closed and opened again from the header.
+    await page.getByRole("button",{name:"Close right panel"}).click();await expect(panel).toHaveCount(0);
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    await expect(objective).toHaveValue("Make the login and signup tests pass");
+    await shootBoth(page,"goal-draft-after-files",()=>objective.scrollIntoViewIfNeeded());
+    // Update goal saves the edit, which the panel then shows as the goal.
+    await panel.getByRole("button",{name:"Update goal",exact:true}).click();
+    await expect.poll(()=>socket.sent("thread/goal/set").map(params=>params.objective)).toEqual(["Make the login tests pass","Make the login and signup tests pass"]);
+    await expect(panel.getByRole("button",{name:"Update goal",exact:true})).toBeEnabled();await expect(objective).toHaveValue("Make the login and signup tests pass");
+  }finally{await harness.close()}
+});
+
+test("an unsaved Goal edit and note are still there when the harness drops and comes back and the thread's goal is read again",async({page})=>{
+  test.setTimeout(90_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const done=panel.getByLabel("Completed work",{exact:true});
+    await typeOver(page,objective,"Make the login and signup tests pass");
+    await panel.getByText("Continuity state",{exact:true}).click();await done.click();await page.keyboard.type("Fixed the session refresh",{delay:15});
+    socket.drop();
+    await expect(page.getByTestId("right-panel")).toContainText("Agent harness is reconnecting");
+    // The window connects again and opens the thread again, which reads its goal: here with the tokens its turns used meanwhile,
+    // which the metrics show once that read is in.
+    socket.answer("thread/goal/get",result=>({...result,goal:{...result.goal,tokensUsed:1234}}));
+    socket.back();
+    await expect(panel.locator(".goal-metrics")).toContainText("1,234",{timeout:20_000});
+    await painted(page);
+    await expect(objective).toHaveValue("Make the login and signup tests pass");
+    await expect(panel.getByLabel("Completion conditions",{exact:true})).toHaveValue("Login tests pass");
+    await expect(done).toHaveValue("Fixed the session refresh");
+    await shootBoth(page,"goal-draft-after-reconnect",()=>objective.scrollIntoViewIfNeeded());
+  }finally{await harness.close()}
+});
+
+test("words typed on into the Objective while a slow save is on its way are still there when it lands, and Update goal then saves them",async({page})=>{
+  test.setTimeout(90_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const update=panel.getByRole("button",{name:"Update goal",exact:true}),objectives=()=>socket.sent("thread/goal/set").map(params=>params.objective);
+    await typeOver(page,objective,"Make the signup tests pass");
+    // The harness takes its time over the save, which Update goal says, and the person goes on typing meanwhile.
+    socket.hold("thread/goal/set");
+    await update.click();await expect(panel.getByRole("button",{name:"Saving…",exact:true})).toHaveAttribute("aria-busy","true");
+    await objective.click();await page.keyboard.press("End");await page.keyboard.type(" on Firefox",{delay:15});
+    socket.release();
+    await expect(update).toBeEnabled();await painted(page);
+    await expect(objective).toHaveValue("Make the signup tests pass on Firefox");
+    await expect(panel.locator(".goal-field-changed"),"the goal this panel saved is not a change made elsewhere").toHaveCount(0);
+    expect(objectives()).toEqual(["Make the login tests pass","Make the signup tests pass"]);
+    await shootBoth(page,"goal-typed-on-during-save",()=>objective.scrollIntoViewIfNeeded());
+    await update.click();
+    await expect.poll(objectives).toEqual(["Make the login tests pass","Make the signup tests pass","Make the signup tests pass on Firefox"]);
+    await expect(update).toBeEnabled();await expect(objective).toHaveValue("Make the signup tests pass on Firefox");
+  }finally{await harness.close()}
+});
+
+// A change made elsewhere to a goal field edited here (the /goal command, here while the panel was closed and while it is open) is
+// said above Update goal, with Use saved and Keep mine, and Discard changes takes every edit back. The edit stayed with nothing to
+// say the saved goal had changed and no way to drop it, so an Update goal pressed only for a budget wrote it over the new objective.
+test("a goal changed elsewhere while its Objective is edited here says so above Update goal, Use saved and Keep mine choose, and Discard changes takes the edits back",async({page})=>{
+  test.setTimeout(120_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const composer=page.getByTestId("composer"),changed=panel.locator(":scope>.goal-actions").getByRole("status"),button=name=>panel.getByRole("button",{name,exact:true});
+    const tokens=panel.getByLabel("Token budget",{exact:true}),lastSave=()=>socket.sent("thread/goal/set").at(-1),question=page.locator("dialog.inspector-text-prompt");
+    const goalCommand=async text=>{await composer.click();await page.keyboard.type(text,{delay:15});await page.keyboard.press("Enter");await expect(composer).toHaveValue("")};
+    await typeOver(page,objective,"Make the login and signup tests pass");
+    await expect.soft(button("Discard changes"),"an edit offers Discard changes by Update goal").toBeVisible();
+    // The panel is closed, and the goal set again from the composer, which opens the panel on it.
+    await page.getByRole("button",{name:"Close right panel"}).click();await expect(panel).toHaveCount(0);
+    await goalCommand("/goal Make the checkout tests pass");
+    await expect(objective).toHaveValue("Make the login and signup tests pass");
+    await expect(changed,"the objective set elsewhere is said above Update goal").toContainText("Objective changed elsewhere to “Make the checkout tests pass” while you were editing.");
+    await shootBoth(page,"goal-changed-elsewhere",()=>expect(changed).toBeInViewport());
+    // Use saved takes the objective set elsewhere, and a budget typed then is saved with it.
+    await changed.getByRole("button",{name:"Use saved",exact:true}).click();
+    await expect(objective).toHaveValue("Make the checkout tests pass");await expect(changed).toHaveCount(0);
+    await typeOver(page,tokens,"5000");await button("Update goal").click();
+    await expect.poll(lastSave).toMatchObject({objective:"Make the checkout tests pass",tokenBudget:5000});
+    await expect(button("Update goal")).toBeEnabled();await expect(button("Discard changes")).toHaveCount(0);
+    // Set elsewhere again while the objective is edited with the panel open: Keep mine keeps the edit, and Update goal saves it.
+    await typeOver(page,objective,"Make the checkout and refund tests pass");
+    await goalCommand("/goal Make the payment tests pass");
+    await expect(changed).toContainText("Objective changed elsewhere to “Make the payment tests pass” while you were editing.");
+    await expect(objective).toHaveValue("Make the checkout and refund tests pass");
+    await changed.getByRole("button",{name:"Keep mine",exact:true}).click();await expect(changed).toHaveCount(0);
+    await button("Update goal").click();
+    await expect.poll(lastSave).toMatchObject({objective:"Make the checkout and refund tests pass",tokenBudget:5000});
+    await expect(button("Update goal")).toBeEnabled();await expect(button("Discard changes")).toHaveCount(0);
+    // Discard changes, once asked, takes back every edit made since.
+    await typeOver(page,objective,"Make every test pass");await typeOver(page,tokens,"7000");
+    await button("Discard changes").click();
+    await expect(question.locator("p")).toHaveText("Discard your changes to this goal?");
+    await question.getByRole("button",{name:"Discard changes",exact:true}).click();await expect(question).toHaveCount(0);
+    await expect(objective).toHaveValue("Make the checkout and refund tests pass");await expect(tokens).toHaveValue("5000");
+    await expect(button("Discard changes")).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+// Another window's request to the relay, whose notifications reach the page as any change made elsewhere does.
+async function relayRequest(harness,method,params){
+  const socket=new WebSocket(harness.wsUrl);await new Promise((resolve,reject)=>{socket.once("open",resolve);socket.once("error",reject)});
+  try{return await new Promise((resolve,reject)=>{socket.on("message",raw=>{const message=JSON.parse(String(raw));if(message.id===1)message.error?reject(new Error(message.error.message)):resolve(message.result)});socket.send(JSON.stringify({id:1,method,params}))})}
+  finally{socket.close()}
+}
+
+// The same for a continuity note edited here that another window saves meanwhile: said above Save continuity, where Use saved takes
+// it, and Discard changes there takes the notes' edits back.
+test("a continuity note saved in another window while it is edited here says so above Save continuity, and Discard changes takes the edits back",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel"),done=panel.getByLabel("Completed work",{exact:true}),row=panel.locator(".continuity-actions"),changed=row.getByRole("status");
+    const discard=row.getByRole("button",{name:"Discard changes",exact:true}),question=page.locator("dialog.inspector-text-prompt");
+    await panel.getByText("Continuity state",{exact:true}).click();
+    await done.click();await page.keyboard.type("Fixed the session refresh",{delay:15});
+    await expect.soft(discard,"an edit offers Discard changes by Save continuity").toBeVisible();
+    await relayRequest(harness,"thread/continuity/set",{threadId:harness.threads[0].id,completedWork:["Wrote the migration"]});
+    await expect(changed,"the note saved in another window is said above Save continuity").toContainText("Completed work changed elsewhere to “Wrote the migration” while you were editing.");
+    await expect(done).toHaveValue("Fixed the session refresh");
+    await shootBoth(page,"goal-note-changed-elsewhere",()=>changed.scrollIntoViewIfNeeded());
+    await changed.getByRole("button",{name:"Use saved",exact:true}).click();
+    await expect(done).toHaveValue("Wrote the migration");await expect(changed).toHaveCount(0);await expect(discard).toHaveCount(0);
+    await done.click();await page.keyboard.press("End");await page.keyboard.type(" and its rollback",{delay:15});
+    await discard.click();
+    await expect(question.locator("p")).toHaveText("Discard your changes to the continuity notes?");
+    await question.getByRole("button",{name:"Discard changes",exact:true}).click();await expect(question).toHaveCount(0);
+    await expect(done).toHaveValue("Wrote the migration");await expect(discard).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+test("the Goal panel left open on New task says no thread is open, and the thread opened again shows its goal",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const {objective}=await setGoalInPanel(page);
+    const rightPanel=page.getByTestId("right-panel"),row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Composer thread"]')});
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"New task",exact:true}).click();
+    await expect(rightPanel).toContainText("No active thread");await expect(rightPanel.getByRole("alert")).toHaveCount(0);
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);
+    await expect(objective).toHaveValue("Make the login tests pass");
+  }finally{await harness.close()}
+});
+
+// A Goal edit left unsaved went without a word when the person opened another thread and came back: the panel kept one put-away
+// draft, and the other thread's panel dropped it. Each thread keeps its own until it is saved or discarded, and another thread's
+// panel starts from its own goal or its own draft, opened from the sidebar or from the palette.
+test("a Goal edit and note left unsaved on a thread are still there when the person opens another thread and comes back, and each thread keeps its own",async({page})=>{
+  test.setTimeout(120_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page,{others:["Second thread"]});
+  try{
+    // The first thread's goal was set elsewhere (another window), as one set before this window opened was.
+    await relayRequest(harness,"thread/goal/set",{threadId:harness.threads[0].id,objective:"Make the login tests pass",completionConditions:["Login tests pass"]});
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel"),objective=panel.getByLabel("Objective",{exact:true});
+    await expect(objective).toHaveValue("Make the login tests pass");
+    const done=panel.getByLabel("Completed work",{exact:true}),discard=panel.locator(":scope>.goal-actions").getByRole("button",{name:"Discard changes",exact:true});
+    const row=name=>page.locator(".thread-row").filter({has:page.locator(`.thread-main[title="${name}"]`)}),composer=page.getByTestId("composer");
+    const opened=async name=>{await expect(row(name)).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");await painted(page)};
+    const notes=async()=>{if(!await done.isVisible())await panel.getByText("Continuity state",{exact:true}).click();return done};
+    await typeOver(page,objective,"Make the login and signup tests pass");
+    await (await notes()).click();await page.keyboard.type("Fixed the session refresh",{delay:15});
+    // The second thread, opened from the sidebar, shows its own goal, none, with nothing of the first thread's edits.
+    await row("Second thread").locator(".thread-main").click();await opened("Second thread");
+    await expect(objective,"the second thread's own objective").toHaveValue("");await expect(await notes()).toHaveValue("");
+    await expect(panel.getByRole("button",{name:"Set goal",exact:true})).toBeVisible();await expect(discard).toHaveCount(0);
+    await objective.click();await page.keyboard.type("Ship the billing page",{delay:15});
+    // Back on the first thread its edits are as they were left, nothing is said to have changed elsewhere, and Discard is offered.
+    await row("Composer thread").locator(".thread-main").click();await opened("Composer thread");
+    await expect(objective,"the first thread's unsaved objective, back on it").toHaveValue("Make the login and signup tests pass");
+    await expect(await notes(),"the first thread's unsaved note, back on it").toHaveValue("Fixed the session refresh");
+    await expect(panel.locator(".goal-field-changed"),"nothing changed elsewhere").toHaveCount(0);await expect(discard).toBeVisible();
+    await shootBoth(page,"goal-draft-after-another-thread",()=>objective.scrollIntoViewIfNeeded());
+    // The second thread opened from the palette keeps its own edit too.
+    await composer.click();await page.keyboard.press("Control+K");
+    const palette=page.getByTestId("command-palette");
+    await page.keyboard.type("Second thread",{delay:20});await expect(palette.locator(".command-palette-item.selected.kind-thread")).toContainText("Second thread");
+    await page.keyboard.press("Enter");await expect(palette).toBeHidden();await opened("Second thread");
+    await expect(objective,"the second thread's unsaved objective, opened from the palette").toHaveValue("Ship the billing page");
+    // Back on the first thread, Update goal saves its edit.
+    await row("Composer thread").locator(".thread-main").click();await opened("Composer thread");
+    await expect(objective).toHaveValue("Make the login and signup tests pass");
+    await panel.getByRole("button",{name:"Update goal",exact:true}).click();
+    await expect.poll(()=>socket.sent("thread/goal/set").map(params=>params.objective)).toEqual(["Make the login and signup tests pass"]);
+    await expect(panel.getByRole("button",{name:"Update goal",exact:true})).toBeEnabled();await expect(discard).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+test("a budget the Goal panel refuses says why in its bar, right above the Update goal pressed, as an alert, and a budget it takes clears it",async({page})=>{
+  test.setTimeout(90_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel}=await setGoalInPanel(page);
+    const update=panel.getByRole("button",{name:"Update goal",exact:true}),cost=panel.getByLabel("Cost budget",{exact:true});
+    const refusal=panel.getByRole("alert").filter({hasText:"Cost budget must be a positive number."});
+    await panel.getByText("Advanced budgets",{exact:true}).click();
+    // Each mode is set at full width, where the right panel leaves the header's theme button clear, and then both widths are tried.
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,900]){
+        await page.setViewportSize({width,height:800});
+        // The person scrolls down to the budgets, types a cost of 0 and presses Update goal in the bar pinned at the bottom.
+        await panel.hover();await page.mouse.wheel(0,600);await expect(panel.locator(".goal-panel-head")).not.toBeInViewport();
+        await typeOver(page,cost,"0");await update.click();
+        await expect(refusal).toBeInViewport();
+        const said=await refusal.boundingBox(),pressed=await update.boundingBox();
+        expect(said.y+said.height).toBeLessThanOrEqual(pressed.y);expect(pressed.y-said.y-said.height).toBeLessThan(16);
+        await page.screenshot({animations:"disabled",path:auditDir+"goal-budget-refused-"+mode+"-"+width+"x800.png"});
+      }
+    }
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");
+    expect(socket.sent("thread/goal/set")).toHaveLength(1);
+    await typeOver(page,cost,"2.5");await update.click();
+    await expect(refusal).toHaveCount(0);
+    await expect.poll(()=>socket.sent("thread/goal/set").map(params=>params.costBudgetUsd)).toEqual([null,2.5]);
+  }finally{await harness.close()}
+});
+
+test("a continuity save the harness refuses says why right above Save continuity, clear of the goal's bar, as an alert, and keeps the notes",async({page})=>{
+  test.setTimeout(90_000);
+  let refusing=true;
+  const harness=await openComposerApp(page,{refuse:message=>refusing&&message.method==="thread/continuity/set"?"Continuity store is read-only":null});
+  try{
+    const {panel}=await setGoalInPanel(page);
+    const done=panel.getByLabel("Completed work",{exact:true}),pending=panel.getByLabel("Pending next actions",{exact:true}),save=panel.getByRole("button",{name:"Save continuity",exact:true});
+    const refusal=panel.getByRole("alert").filter({hasText:"Continuity store is read-only"}),bar=panel.locator(":scope>.goal-actions");
+    await panel.getByText("Continuity state",{exact:true}).click();
+    await done.click();await page.keyboard.type("Fixed the session refresh",{delay:15});
+    await pending.click();await page.keyboard.type("Run the browser smoke test",{delay:15});
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,900]){
+        await page.setViewportSize({width,height:800});
+        await save.click();
+        await expect(refusal).toBeInViewport();
+        const said=await refusal.boundingBox(),pressed=await save.boundingBox(),pinned=await bar.boundingBox();
+        expect(said.y+said.height).toBeLessThanOrEqual(pressed.y);expect(pressed.y-said.y-said.height).toBeLessThan(16);
+        expect(said.y+said.height).toBeLessThanOrEqual(pinned.y);
+        await page.screenshot({animations:"disabled",path:auditDir+"goal-continuity-refused-"+mode+"-"+width+"x800.png"});
+      }
+    }
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");
+    await expect(done).toHaveValue("Fixed the session refresh");await expect(pending).toHaveValue("Run the browser smoke test");
+    // Saved once the harness takes it, and the reason goes.
+    refusing=false;await save.click();
+    await expect(refusal).toHaveCount(0);
+    await expect(panel.locator(".goal-continuity-details>summary")).toContainText("2 explicit notes");
+  }finally{await harness.close()}
+});
+
+// The keyboard taken on to target with Tab, as a person reaches a button from the field they were in.
+async function tabTo(page,target,most=25){
+  for(let presses=0;presses<most&&!await target.evaluate(node=>node===document.activeElement);presses++)await page.keyboard.press("Tab");
+  await expect(target).toBeFocused();
+}
+// The Goal panel's writes (the goal's, or the notes' with notes), each held from when hold() is called until the function it gives
+// back is, as a harness slow to answer them; refuse(true) has the harness refuse them, at once. sent lists those sent.
+async function openGoalWrites(page,{notes=false}={}){
+  const writes=notes?/^thread\/continuity\/(set|clear)$/:/^thread\/goal\/(set|clear)$/,sent=[];let gate=null,refusing=false;
+  const harness=await openComposerApp(page,{
+    refuse:request=>{if(writes.test(request.method))sent.push(request);return refusing&&writes.test(request.method)?(notes?"Continuity store is read-only":"Goal store is read-only"):null},
+    hold:request=>writes.test(request.method)?gate?.wait:null,
+  });
+  return {harness,sent,refuse(value){refusing=value},hold(){let open=()=>{};const wait=new Promise(resolve=>{open=resolve});gate={wait};return()=>{if(gate?.wait===wait)gate=null;open()}}};
+}
+// What a button pressed says while its write is on its way: what it does, marked busy, and the keyboard still on it. The words are
+// soft, so a build that loses the keyboard says that too.
+async function pressedWhileHeld(button,doing){
+  await expect.soft(button,"the button pressed says what it does while its write is on its way").toHaveText(doing);
+  await expect.soft(button,"and is marked busy").toHaveAttribute("aria-busy","true");
+  await frames(button.page());await expect(button,"the keyboard stays on the button pressed while its write is on its way").toBeFocused();
+}
+// The window at 1280 and at 700 wide, the keyboard still on focused, each shot in the mode shown.
+async function shootWidths(page,name,focused){
+  const mode=await page.locator("html").getAttribute("data-mode");
+  for(const width of [1280,700]){await page.setViewportSize({width,height:800});await expect(focused).toBeFocused();await focused.scrollIntoViewIfNeeded();await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+width+"x800.png"})}
+  await page.setViewportSize({width:1280,height:800});
+}
+
+// Enter on the Goal panel's Pause, Resume or Complete, reached with Tab, leaves the keyboard in the bar once the goal has changed: on
+// Resume, which takes Pause's place, on Pause, which takes Resume's, on Clear, the bar's next control, once Complete goes, and on Set
+// goal once Clear goes, with its ring, so the next Tab goes on from there. Each button pressed was disabled while its write was on
+// its way, or taken away, and the keyboard fell to the page: no control had it, and none showed a ring.
+test("Enter on the Goal panel's Pause, Resume or Complete leaves the keyboard on the button that took its place or on the bar's next control, and the next Tab goes on from there",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),button=name=>bar.getByRole("button",{name,exact:true}),status=panel.locator(".goal-status");
+    const question=page.locator("dialog.inspector-text-prompt"),ring=locator=>locator.evaluate(node=>node===document.activeElement&&node.matches(":focus-visible"));
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      // The goal is set again from the keyboard once it has been cleared.
+      await objective.click();
+      if(mode!=="dark"){await page.keyboard.type("Make the login tests pass in "+mode,{delay:15});await tabTo(page,button("Set goal"));await page.keyboard.press("Enter");await expect(status).toHaveText("active")}
+      // Tab from Update goal to Pause, and Enter: Resume takes its place, and the keyboard with it; the next Tab goes on to Complete.
+      await tabTo(page,button("Update goal"));await page.keyboard.press("Tab");await expect(button("Pause")).toBeFocused();
+      await page.keyboard.press("Enter");await expect(status).toHaveText("paused");await frames(page);
+      await expect(button("Resume"),"Resume took Pause's place, and the keyboard is on it").toBeFocused();expect(await ring(button("Resume")),"with its ring").toBe(true);
+      await page.keyboard.press("Tab");await expect(button("Complete")).toBeFocused();await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Enter");await expect(status).toHaveText("active");await frames(page);
+      await expect(button("Pause"),"Pause took Resume's place, and the keyboard is on it").toBeFocused();
+      // Complete takes Pause and itself away: the keyboard goes on to Clear.
+      await page.keyboard.press("Tab");await expect(button("Complete")).toBeFocused();
+      await page.keyboard.press("Enter");await expect(status).toHaveText("complete");await frames(page);
+      await expect(button("Clear"),"once Complete goes the keyboard is on Clear, the bar's next control").toBeFocused();expect(await ring(button("Clear")),"with its ring").toBe(true);
+      await shootWidths(page,"goal-complete-by-enter-keyboard-on-clear",button("Clear"));
+      // Clear, confirmed from the keyboard, takes itself away: the keyboard goes back to Set goal.
+      await page.keyboard.press("Enter");await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+      await page.keyboard.press("Tab");await page.keyboard.press("Enter");await expect(question).toHaveCount(0);
+      await expect(status).toHaveText("not set");await frames(page);
+      await expect(button("Set goal"),"once Clear goes the keyboard is on Set goal, the control before it").toBeFocused();expect(await ring(button("Set goal")),"with its ring").toBe(true);
+    }
+  }finally{await harness.close()}
+});
+
+// A goal write the harness takes its time over says what it does on the button pressed (Update goal reads Saving…, Pause Pausing…),
+// marked busy, and the keyboard stays in the Goal bar meanwhile and once it lands: on the button pressed, on the one that took its
+// place (Resume where Pause was, Pause where Resume was), or on the bar's next control (Clear once Complete goes, Set goal once Clear
+// goes), also when the harness refuses it. Every button there was disabled for the wait, only greyed, with nothing saying what ran,
+// which took the keyboard to the page: after Pause, Resume, Complete or Update goal no control had it.
+test("a goal write the harness is slow to answer says so on the button pressed, and the keyboard stays in the Goal bar: on Update goal, on Resume where Pause was and Pause where Resume was, on Clear once Complete goes, on Set goal once the goal is cleared, and on Set goal when the save is refused",async({page})=>{
+  test.setTimeout(150_000);
+  const writes=await openGoalWrites(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),button=name=>bar.getByRole("button",{name,exact:true}),status=panel.locator(".goal-status"),save=bar.locator("button.primary");
+    const question=page.locator("dialog.inspector-text-prompt"),statuses=()=>writes.sent.filter(request=>request.method==="thread/goal/set").map(request=>request.params.status),sets=()=>statuses().length;
+    // An edit saved from the keyboard, in each mode: Tab from the Objective to Update goal and Enter, the harness slow to answer.
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      await typeOver(page,objective,"Make the login and signup tests pass in "+mode);
+      await tabTo(page,save);
+      const release=writes.hold(),before=sets();await page.keyboard.press("Enter");
+      await pressedWhileHeld(save,"Saving…");
+      await expect(button("Discard changes"),"the bar's other buttons wait meanwhile").toBeDisabled();await expect(button("Clear")).toBeDisabled();
+      // A second Enter while the save is on its way sends nothing more.
+      await page.keyboard.press("Enter");
+      await shootWidths(page,"goal-save-held-keyboard",save);
+      release();
+      await expect(save).toHaveText("Update goal");await expect(save).not.toHaveAttribute("aria-busy");
+      await expect(save,"the keyboard is on Update goal once the save lands").toBeFocused();
+      await expect(objective).toHaveValue("Make the login and signup tests pass in "+mode);
+      expect(sets(),"one save for the two presses").toBe(before+1);
+    }
+    // With the mouse: Pause reads Pausing… while it is on its way, a click on Complete meanwhile does nothing, and Resume comes.
+    let release=writes.hold();await button("Pause").click();
+    await expect(button("Pausing…")).toHaveAttribute("aria-busy","true");await expect(button("Complete")).toBeDisabled();
+    const complete=await button("Complete").boundingBox();await page.mouse.click(complete.x+complete.width/2,complete.y+complete.height/2);
+    release();await expect(status).toHaveText("paused");
+    await button("Resume").click();await expect(status).toHaveText("active");
+    expect(statuses().slice(-2),"the click on Complete while Pause was on its way sent nothing").toEqual(["paused","active"]);
+    // Pause from the keyboard: Resume takes its place and the keyboard with it, and Pause takes Resume's.
+    await page.keyboard.press("Shift+Tab");await expect(save).toBeFocused();await page.keyboard.press("Tab");await expect(button("Pause")).toBeFocused();
+    release=writes.hold();await page.keyboard.press("Enter");
+    await pressedWhileHeld(button("Pausing…"),"Pausing…");
+    release();await expect(status).toHaveText("paused");
+    await expect(button("Resume"),"Resume took Pause's place, and the keyboard is on it").toBeFocused();
+    release=writes.hold();await page.keyboard.press("Enter");
+    await pressedWhileHeld(button("Resuming…"),"Resuming…");
+    release();await expect(status).toHaveText("active");
+    await expect(button("Pause"),"Pause took Resume's place, and the keyboard is on it").toBeFocused();
+    // Complete takes Pause and itself away: the keyboard goes on to Clear, the bar's next control, with its ring.
+    await page.keyboard.press("Tab");await expect(button("Complete")).toBeFocused();
+    release=writes.hold();await page.keyboard.press("Enter");
+    await pressedWhileHeld(button("Completing…"),"Completing…");
+    release();await expect(status).toHaveText("complete");await expect(bar.getByRole("button")).toHaveText(["Update goal","Clear"]);
+    await expect(button("Clear"),"once Complete goes the keyboard is on Clear, the bar's next control").toBeFocused();
+    expect(await button("Clear").evaluate(node=>node.matches(":focus-visible")),"with its ring").toBe(true);
+    await shootWidths(page,"goal-complete-keyboard-on-clear",button("Clear"));
+    // Clear, confirmed from the keyboard: Set goal is what is left, and the keyboard is on it.
+    await page.keyboard.press("Enter");await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+    await page.keyboard.press("Tab");await expect(question.getByRole("button",{name:"Clear goal",exact:true})).toBeFocused();
+    release=writes.hold();await page.keyboard.press("Enter");await expect(question).toHaveCount(0);
+    await pressedWhileHeld(button("Clearing…"),"Clearing…");
+    release();await expect(status).toHaveText("not set");
+    await expect(button("Set goal"),"once Clear goes the keyboard is on Set goal, the control before it").toBeFocused();
+    // A save the harness refuses says why above the bar, and the keyboard stays on Set goal.
+    await objective.click();await page.keyboard.type("Make the checkout tests pass",{delay:15});
+    await tabTo(page,save);
+    writes.refuse(true);await page.keyboard.press("Enter");
+    await expect(bar.getByRole("alert")).toContainText("Goal store is read-only");
+    await expect(save).toHaveText("Set goal");await expect(save,"the keyboard stays on Set goal when the save is refused").toBeFocused();
+    await expect(objective).toHaveValue("Make the checkout tests pass");
+    await shootWidths(page,"goal-save-refused-keyboard",save);
+  }finally{await writes.harness.close()}
+});
+
+// The same for the notes: Save continuity reads Saving… while the harness takes its time, and the keyboard stays on it; Discard
+// changes, once the edit is discarded and it goes, hands the keyboard to Clear notes, and Clear notes, once the notes are cleared
+// and it goes, to Save continuity; a refused save leaves it on Save continuity too. Save continuity was disabled for the wait, which
+// took the keyboard to the page.
+test("a continuity save the harness is slow to answer says Saving… on Save continuity and the keyboard stays on it, Clear notes hands the keyboard to Save continuity once the notes are cleared, and a refused save keeps it there",async({page})=>{
+  test.setTimeout(120_000);
+  const writes=await openGoalWrites(page,{notes:true});
+  try{
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel"),row=panel.locator(".continuity-actions"),save=row.locator("button.primary"),done=panel.getByLabel("Completed work",{exact:true});
+    const summary=panel.locator(".goal-continuity-details>summary"),question=page.locator("dialog.inspector-text-prompt"),clearNotes=row.locator("button.danger");
+    await panel.getByText("Continuity state",{exact:true}).click();
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      await typeOver(page,done,"Fixed the session refresh in "+mode);
+      await tabTo(page,save);
+      const release=writes.hold(),before=writes.sent.length;await page.keyboard.press("Enter");
+      await pressedWhileHeld(save,"Saving…");
+      await page.keyboard.press("Enter");
+      await shootWidths(page,"goal-notes-save-held-keyboard",save);
+      release();
+      await expect(summary).toContainText("1 explicit note");await expect(done).toHaveValue("Fixed the session refresh in "+mode);
+      await expect(save).toHaveText("Save continuity");await expect(save,"the keyboard is on Save continuity once the notes are saved").toBeFocused();
+      expect(writes.sent.length,"one save for the two presses").toBe(before+1);
+    }
+    // An edit discarded from the keyboard: Discard changes goes, and the keyboard goes on to Clear notes, the bar's next control.
+    await done.click();await page.keyboard.press("End");await page.keyboard.type(" and its rollback",{delay:15});
+    const discard=row.getByRole("button",{name:"Discard changes",exact:true});await tabTo(page,discard);
+    await page.keyboard.press("Enter");await expect(question.getByRole("button",{name:"Keep editing",exact:true})).toBeFocused();
+    await page.keyboard.press("Tab");await page.keyboard.press("Enter");await expect(question).toHaveCount(0);
+    await expect(done).toHaveValue("Fixed the session refresh in light");await expect(discard).toHaveCount(0);
+    await expect(clearNotes,"once Discard changes goes the keyboard is on Clear notes, the bar's next control").toBeFocused();
+    // Clear notes from the keyboard, confirmed: it goes with the notes, and the keyboard goes back to Save continuity.
+    await page.keyboard.press("Enter");await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+    await page.keyboard.press("Tab");const release=writes.hold();await page.keyboard.press("Enter");await expect(question).toHaveCount(0);
+    await pressedWhileHeld(clearNotes,"Clearing…");
+    release();await expect(clearNotes).toHaveCount(0);await expect(done).toHaveValue("");
+    await expect(save,"once Clear notes goes the keyboard is on Save continuity").toBeFocused();
+    // A save the harness refuses says why above Save continuity, and the keyboard stays on it.
+    await done.click();await page.keyboard.type("Moved the form to the new API",{delay:15});
+    await tabTo(page,save);
+    writes.refuse(true);await page.keyboard.press("Enter");
+    await expect(row.getByRole("alert")).toContainText("Continuity store is read-only");
+    await expect(save,"the keyboard stays on Save continuity when the save is refused").toBeFocused();await expect(done).toHaveValue("Moved the form to the new API");
+  }finally{await writes.harness.close()}
+});
+
+// A Goal panel drawn again while its save is on its way (back from Files, with the right panel closed and opened again, or back from
+// another thread) says so as the panel that sent it did: Update goal or Save continuity reads Saving… (Pause Pausing…), marked busy,
+// with the bars' other buttons off, a second press sends nothing until the save lands, and a refusal is said above the bar as it
+// lands. The save went with the panel that sent it, so the one drawn again offered Update goal or Save continuity, Discard changes,
+// Pause, Complete and Clear, a second press saved again, and a refusal was said nowhere.
+test("a Goal panel drawn again while its save is on its way, back from Files, with the right panel closed and opened again or back from another thread, says Saving… with the other buttons off, takes no second press until the save lands, and says a refusal",async({page})=>{
+  test.setTimeout(180_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page,{others:["Second thread"]});
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),save=bar.locator("button.primary"),button=name=>bar.getByRole("button",{name,exact:true});
+    const tabs=page.getByTestId("right-panel").locator(".context-panel-tab-scroll"),composer=page.getByTestId("composer");
+    const openThread=async name=>{const row=threadRow(page,name);await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");await painted(page)};
+    // The ways a person takes the panel away and draws it again.
+    const ways={
+      "back from Files":async()=>{await tabs.getByRole("button",{name:"Files",exact:true}).click();await expect(panel).toHaveCount(0);await tabs.getByRole("button",{name:"Goal",exact:true}).click()},
+      "with the right panel closed and opened again":async()=>{await page.getByRole("button",{name:"Close right panel"}).click();await expect(panel).toHaveCount(0);await page.getByRole("button",{name:"Thread goal",exact:true}).click()},
+      "back from another thread":async()=>{await openThread("Second thread");await expect(save).toHaveText("Set goal");await openThread("Composer thread")},
+    };
+    // A second press as a person makes it on a button that says it is off: a click on it, then Enter.
+    const pressAgain=async target=>{await target.evaluate(node=>node.scrollIntoView({block:"center"}));const box=await target.boundingBox();await page.mouse.click(box.x+box.width/2,box.y+box.height/2);await page.keyboard.press("Enter");await painted(page)};
+    const shoot=async(name,shown)=>{
+      const mode=await page.locator("html").getAttribute("data-mode");
+      for(const width of [1280,700]){await page.setViewportSize({width,height:800});await shown.evaluate(node=>node.scrollIntoView({block:"center"}));await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+    };
+    const sets=()=>socket.sent("thread/goal/set").length;
+    for(const [index,[way,away]] of Object.entries(ways).entries()){
+      await switchMode(page,index===1?"light":"dark");
+      const text="Make the login tests pass, "+way;await typeOver(page,objective,text);
+      socket.hold("thread/goal/set");const before=sets();await save.click();await expect(save).toHaveText("Saving…");
+      await away();await expect(objective,"the edit is kept "+way).toHaveValue(text);await painted(page);
+      // Soft, so a build that loses the save says so for each way.
+      await expect.soft(save,"the panel drawn again "+way+" says the save is on its way").toHaveText("Saving…");
+      await expect.soft(save,"marked busy "+way).toHaveAttribute("aria-busy","true");
+      for(const name of ["Discard changes","Pause","Complete","Clear"])await expect.soft(button(name),name+" is off "+way).toHaveAttribute("aria-disabled","true");
+      if(index<2)await shoot("goal-drawn-again-save-held",save);
+      await pressAgain(save);
+      expect.soft(sets(),"a second press "+way+" sends nothing while the save is on its way").toBe(before+1);
+      socket.release();
+      await expect(save).toHaveText("Update goal");await expect(save).not.toHaveAttribute("aria-busy");
+      await expect(button("Discard changes"),"nothing is left unsaved once the save lands").toHaveCount(0);await expect(objective).toHaveValue(text);
+    }
+    // So does Pause: back from Files it reads Pausing…, marked busy, and once it lands Resume takes its place.
+    const status=panel.locator(".goal-status");
+    socket.hold("thread/goal/set");await button("Pause").click();await expect(button("Pausing…")).toHaveAttribute("aria-busy","true");
+    await ways["back from Files"]();await expect(status).toHaveText("active");
+    await expect.soft(button("Pausing…"),"Pause drawn again says the goal is being paused").toHaveAttribute("aria-busy","true");
+    await expect.soft(save,"with the bar's other buttons off").toHaveAttribute("aria-disabled","true");
+    socket.release();await expect(status).toHaveText("paused");await expect(button("Resume")).not.toHaveAttribute("aria-disabled");
+    await button("Resume").click();await expect(status).toHaveText("active");
+    // The notes the same way: back from Files the panel draws Continuity state open, with Save continuity reading Saving… in sight
+    // and the bars' other buttons off, a second press sends nothing, and once the save lands the note is saved. The section was drawn
+    // closed, so nothing in sight said why the goal's bar was off.
+    const notes=panel.locator(".continuity-actions"),saveNotes=notes.locator("button.primary"),done=panel.getByLabel("Completed work",{exact:true});
+    const summary=panel.locator(".goal-continuity-details>summary"),showNotes=()=>panel.getByText("Continuity state",{exact:true}).click();
+    await showNotes();await typeOver(page,done,"Fixed the session refresh");
+    socket.hold("thread/continuity/set");const notesBefore=socket.sent("thread/continuity/set").length;
+    await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await ways["back from Files"]();
+    await expect.soft(saveNotes,"the panel drawn again draws Continuity state open, its save on its way in sight").toBeVisible();
+    // A build that draws it closed: the person opens it to go on.
+    if(!await saveNotes.isVisible())await showNotes();
+    await expect(done).toHaveValue("Fixed the session refresh");
+    await expect.soft(saveNotes,"the notes drawn again say their save is on its way").toHaveText("Saving…");
+    await expect.soft(saveNotes,"marked busy").toHaveAttribute("aria-busy","true");
+    await expect.soft(notes.getByRole("button",{name:"Discard changes",exact:true}),"the notes' Discard changes is off").toHaveAttribute("aria-disabled","true");
+    await expect.soft(save,"and so is the goal's bar").toHaveAttribute("aria-disabled","true");
+    await shoot("goal-notes-drawn-again-save-held",saveNotes);
+    await pressAgain(saveNotes);
+    expect.soft(socket.sent("thread/continuity/set").length,"a second Save continuity sends nothing while the save is on its way").toBe(notesBefore+1);
+    socket.release();
+    await expect(summary).toContainText("1 explicit note");await expect(saveNotes).toHaveText("Save continuity");
+    await expect(notes.getByRole("button",{name:"Discard changes",exact:true})).toHaveCount(0);await expect(done).toHaveValue("Fixed the session refresh");
+    // A save refused once the panel is drawn again is said above its bar, as to a panel that stays, and the edit stays to save again.
+    await switchMode(page,"light");
+    await typeOver(page,objective,"Make the checkout tests pass");socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await ways["back from Files"]();await expect.soft(save,"the panel drawn again says the save is on its way").toHaveText("Saving…");
+    socket.release("Goal store is read-only");
+    await expect(bar.getByRole("alert"),"the refusal is said above the bar of the panel drawn again").toContainText("Goal store is read-only");
+    await expect(save).toHaveText("Update goal");await expect(objective).toHaveValue("Make the checkout tests pass");await expect(button("Discard changes")).toBeVisible();
+    await shoot("goal-drawn-again-save-refused",bar.getByRole("alert"));
+    // A notes save refused once the panel is drawn again (with the right panel closed and opened again): Continuity state is drawn
+    // open with Saving… in sight, the refusal is said above Save continuity, in view, and the note stays to save again. So it is when
+    // the person closed the section meanwhile: the refusal opens it. The refusal was drawn in the closed section, out of sight, while
+    // the bars came back live.
+    const refusal=notes.getByRole("alert");
+    if(!await saveNotes.isVisible())await showNotes();
+    await typeOver(page,done,"Moved the form to the new API");
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await ways["with the right panel closed and opened again"]();
+    await expect.soft(saveNotes,"the panel drawn again shows the notes' save on its way").toBeVisible();
+    socket.release("Continuity store is read-only");
+    await expect(refusal,"the notes' refusal is said in sight on the panel drawn again").toBeVisible();
+    await expect(refusal).toContainText("Continuity store is read-only");await expect(refusal).toBeInViewport();
+    await expect(done).toHaveValue("Moved the form to the new API");await expect(notes.getByRole("button",{name:"Discard changes",exact:true})).toBeVisible();
+    await expect(save,"the goal's bar is live again").not.toHaveAttribute("aria-disabled");
+    await shoot("goal-notes-drawn-again-save-refused",refusal);
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await ways["back from Files"]();
+    if(await saveNotes.isVisible())await summary.click();
+    await expect(saveNotes,"the person has closed Continuity state").toBeHidden();
+    socket.release("Continuity store is read-only");
+    await expect(refusal,"a refusal opens the section the person closed, and is said in sight").toBeVisible();await expect(refusal).toBeInViewport();
+    // A refusal that lands while no Goal panel is drawn (the person is on Files) is said once the panel is drawn again, above its bar;
+    // it was said nowhere.
+    await typeOver(page,objective,"Make the payment tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await tabs.getByRole("button",{name:"Files",exact:true}).click();await expect(panel).toHaveCount(0);
+    socket.release("Goal store is locked for the release");await page.waitForTimeout(600);await painted(page);
+    await tabs.getByRole("button",{name:"Goal",exact:true}).click();
+    await expect(bar.getByRole("alert"),"a refusal that landed while no panel was drawn is said once it is drawn again").toHaveText("Goal store is locked for the release");
+    await expect(bar.getByRole("alert")).toBeInViewport();
+    await expect(save).toHaveText("Update goal");await expect(objective).toHaveValue("Make the payment tests pass");await expect(button("Discard changes")).toBeVisible();
+    await shoot("goal-refused-while-away",bar.getByRole("alert"));
+  }finally{await harness.close()}
+});
+
+// Two ways a person takes the Goal panel away and draws it again: a look at Files, and the right panel closed and opened again.
+const goalPanelAway={
+  "back from Files":async page=>{const tabs=page.getByTestId("right-panel").locator(".context-panel-tab-scroll");await tabs.getByRole("button",{name:"Files",exact:true}).click();await expect(page.getByTestId("goal-panel")).toHaveCount(0);await tabs.getByRole("button",{name:"Goal",exact:true}).click()},
+  "with the right panel closed and opened again":async page=>{await page.getByRole("button",{name:"Close right panel"}).click();await expect(page.getByTestId("goal-panel")).toHaveCount(0);await page.getByRole("button",{name:"Thread goal",exact:true}).click()},
+};
+// What the person sees of target in the Goal panel without scrolling: all of it in the window, and above the goal's bar pinned at
+// the panel's foot, which toBeVisible and toBeInViewport take for in sight.
+async function inSightAboveBar(target,bar,what){
+  await expect.soft(target,what).toBeInViewport({ratio:1});
+  const box=await target.boundingBox({timeout:2000}).catch(()=>null),barBox=await bar.boundingBox();
+  expect.soft(Boolean(box&&barBox&&box.y+box.height<=barBox.y+0.5),what+", above the goal's bar").toBe(true);
+}
+// The window as the person has it, nothing scrolled into view for the shot, in its mode and width.
+async function shootAsDrawn(page,name){
+  const mode=await page.locator("html").getAttribute("data-mode");
+  await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+page.viewportSize().width+"x800.png"});
+}
+
+// A Goal panel drawn again while Complete is on its way (back from Files, or with the right panel closed and opened again, Complete
+// pressed with the mouse or from the keyboard) draws Continuity state as the person left it, closed, with the panel at its top.
+// Complete's write ("complete") was taken for one of the section's own, whose names begin the same, so the section the person had
+// closed came open with all its notes fields, while Pause on its way left it closed.
+test("a Goal panel drawn again while Complete is on its way, back from Files or with the right panel closed and opened again, draws Continuity state closed as the person left it",async({page})=>{
+  test.setTimeout(120_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),button=name=>bar.getByRole("button",{name,exact:true}),status=panel.locator(".goal-status");
+    const details=panel.locator(".goal-continuity-details"),summary=details.locator(":scope>summary"),done=panel.getByLabel("Completed work",{exact:true});
+    // The person opens Continuity state, looks at it, and closes it.
+    await summary.click();await expect(done).toBeVisible();await summary.click();await expect(done).toBeHidden();
+    for(const [index,[way,away]] of Object.entries(goalPanelAway).entries()){
+      await switchMode(page,index?"light":"dark");
+      socket.hold("thread/goal/set");
+      // With the mouse, then from the keyboard: Tab from the Objective to Complete, and Enter.
+      if(index){await objective.click();await tabTo(page,button("Complete"));await page.keyboard.press("Enter")}else await button("Complete").click();
+      await expect(button("Completing…")).toHaveAttribute("aria-busy","true");
+      await away(page);
+      await expect(button("Completing…"),"the panel drawn again "+way+" says Complete is on its way").toHaveAttribute("aria-busy","true");await painted(page);
+      // Soft, so a build that opens the section says so for each way.
+      await expect.soft(done,"Continuity state is drawn closed "+way+", as the person left it").toBeHidden();
+      expect.soft(await details.evaluate(node=>node.open),"its section is closed "+way).toBe(false);
+      expect.soft(await panel.evaluate(node=>node.scrollTop),"and the panel is drawn at its top "+way).toBe(0);
+      await shootAsDrawn(page,"goal-drawn-again-complete-held");
+      // The person scrolls down to Continuity state, and finds it as they left it.
+      await summary.evaluate(node=>node.scrollIntoView({block:"center"}));await shootAsDrawn(page,"goal-drawn-again-complete-held-continuity-closed");
+      // The harness refuses the first Complete, so the goal is still active for the second, which lands.
+      if(index){socket.release();await expect(status).toHaveText("complete")}
+      else{socket.release("Goal store is read-only");await expect(bar.getByRole("alert")).toContainText("Goal store is read-only");await expect(status).toHaveText("active")}
+    }
+  }finally{await harness.close()}
+});
+
+// A Goal panel drawn again while a notes save is on its way (back from Files, with the right panel closed and opened again, back
+// from another thread, and back from Files in a narrow window) brings Save continuity, which reads Saving…, into view above the
+// goal's bar pinned at the panel's foot, so the person sees why that bar is off. The section was drawn open, but with the panel at
+// its top: its heading lay under the bar and Saving… far below the window. One drawn again while the goal saves stays at its top.
+test("a Goal panel drawn again while a notes save is on its way brings Saving… into view above the goal's bar, in a wide and a narrow window, and one drawn again while the goal saves stays at its top",async({page})=>{
+  test.setTimeout(150_000);
+  const socket=await relaySocket(page);
+  const harness=await openComposerApp(page,{others:["Second thread"]});
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),save=bar.locator("button.primary"),saveNotes=panel.locator(".continuity-actions>button.primary"),done=panel.getByLabel("Completed work",{exact:true});
+    const composer=page.getByTestId("composer");
+    const openThread=async name=>{const row=threadRow(page,name);await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");await painted(page)};
+    const ways=[
+      ["back from Files",1280,goalPanelAway["back from Files"]],
+      ["with the right panel closed and opened again",1280,goalPanelAway["with the right panel closed and opened again"]],
+      ["back from another thread",1280,async()=>{await openThread("Second thread");await expect(save).toHaveText("Set goal");await openThread("Composer thread")}],
+      ["back from Files in a window 700 wide",700,goalPanelAway["back from Files"]],
+    ];
+    await panel.getByText("Continuity state",{exact:true}).click();
+    for(const [index,[way,width,away]] of ways.entries()){
+      await switchMode(page,index%2?"light":"dark");await page.setViewportSize({width,height:800});
+      await typeOver(page,done,"Fixed the session refresh, "+way);
+      socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+      await away(page);
+      await expect(saveNotes,"the panel drawn again "+way+" says the notes' save is on its way").toHaveText("Saving…");await painted(page);
+      await inSightAboveBar(saveNotes,bar,"Saving… is in sight on the panel drawn again "+way);
+      await shootAsDrawn(page,"goal-notes-drawn-again-saving-in-sight-"+(index+1));
+      socket.release();await expect(saveNotes).toHaveText("Save continuity");await expect(done).toHaveValue("Fixed the session refresh, "+way);
+    }
+    await page.setViewportSize({width:1280,height:800});
+    // The goal's save on its way, nothing of Continuity state's: the panel drawn again is drawn at its top.
+    await typeOver(page,objective,"Make the login and signup tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await goalPanelAway["back from Files"](page);await expect(save).toHaveText("Saving…");await painted(page);
+    expect.soft(await panel.evaluate(node=>node.scrollTop),"a panel drawn again while the goal saves is drawn at its top").toBe(0);
+    socket.release();await expect(save).toHaveText("Update goal");
+  }finally{await harness.close()}
+});
+
+// A goal or notes save the harness refuses while the person is opening another thread, whose opening state covers the thread's Goal
+// panel (hidden, and kept for a failed open), is said once the thread's panel is shown again: back on the thread once the other one
+// has opened, above the goal's bar or above Save continuity, in view, or on the panel uncovered when the other thread's open fails.
+// It was said on the covered panel, which went with it once the other thread opened, so back on the thread the edit sat with
+// Discard changes and no refusal, as if it were still to be saved.
+test("a goal or notes save refused while another thread opens is said once the thread's Goal panel is shown again, back on the thread or when the other thread's open fails",async({page})=>{
+  test.setTimeout(150_000);
+  const socket=await relaySocket(page);
+  // The page's clock runs as the real one, and stands still only where a step says so (refusedAsSecondOpens).
+  await page.clock.install();
+  const harness=await openComposerApp(page,{others:["Second thread"]});
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const second=harness.threads[1],composer=page.getByTestId("composer");
+    const bar=panel.locator(":scope>.goal-actions"),save=bar.locator("button.primary"),notes=panel.locator(".continuity-actions"),saveNotes=notes.locator("button.primary");
+    const done=panel.getByLabel("Completed work",{exact:true}),showNotes=async()=>{if(!await done.isVisible())await panel.getByText("Continuity state",{exact:true}).click()};
+    const opened=async name=>{await expect(threadRow(page,name)).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");await painted(page)};
+    // The person clicks Second thread, whose open the harness is slow to answer, so its opening state comes up and covers the Goal
+    // panel; the save on its way (pressed) is refused meanwhile; then the open lands and the person opens the thread again, or the
+    // open fails, which uncovers the panel.
+    const refusedWhileSecondOpens=async(pressed,reason,fails)=>{
+      const open=socket.slow("thread/resume",params=>params.threadId===second.id);
+      await threadRow(page,"Second thread").locator(".thread-main").click();
+      await expect(page.getByTestId("thread-opening")).toBeVisible();await expect(panel).toHaveClass(/opening-covered/);
+      socket.release(reason);await expect(pressed,"the refusal has landed on the covered panel").not.toHaveText("Saving…");await painted(page);
+      if(fails){open("Session store is busy");await expect(page.getByTestId("composer-alert")).toContainText("Could not open “Second thread”");await expect(panel).not.toHaveClass(/opening-covered/)}
+      else{open();await opened("Second thread");await expect(save).toHaveText("Set goal");await threadRow(page,"Composer thread").locator(".thread-main").click();await opened("Composer thread")}
+      await painted(page);
+    };
+    const goalRefusal=bar.getByRole("alert"),notesRefusal=notes.getByRole("alert");
+    // A goal save, refused while Second thread opens, then back on the thread.
+    await typeOver(page,objective,"Make the checkout tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await refusedWhileSecondOpens(save,"Goal store is read-only",false);
+    await expect.soft(goalRefusal,"back on the thread, the goal's refusal that landed while Second thread opened is said above its bar").toHaveText("Goal store is read-only");
+    await expect(objective,"the edit is kept to save again").toHaveValue("Make the checkout tests pass");await expect(save).toHaveText("Update goal");
+    await shootAsDrawn(page,"goal-refused-while-another-thread-opened");
+    // A notes save, the same way, in light: Continuity state is drawn open with the refusal above Save continuity, in sight.
+    await switchMode(page,"light");await showNotes();await typeOver(page,done,"Moved the form to the new API");
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await refusedWhileSecondOpens(saveNotes,"Continuity store is read-only",false);
+    await expect.soft(notesRefusal,"back on the thread, the notes' refusal that landed while Second thread opened is said above Save continuity").toHaveText("Continuity store is read-only");
+    await inSightAboveBar(notesRefusal,bar,"the notes' refusal is in sight back on the thread");
+    await shootAsDrawn(page,"goal-notes-refused-while-another-thread-opened");
+    await showNotes();await expect(done,"the note is kept to save again").toHaveValue("Moved the form to the new API");
+    // A goal save refused while Second thread opens, whose open then fails: the panel uncovered says the refusal.
+    await switchMode(page,"dark");await typeOver(page,objective,"Make the payment tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await refusedWhileSecondOpens(save,"Goal store is locked for the release",true);
+    await expect.soft(goalRefusal,"the goal's refusal is said on the panel uncovered once Second thread's open failed").toHaveText("Goal store is locked for the release");
+    await expect(objective).toHaveValue("Make the payment tests pass");
+    await shootAsDrawn(page,"goal-refused-while-another-thread-failed-to-open");
+    // And a notes save, in light: the refusal above Save continuity, in sight.
+    await switchMode(page,"light");await showNotes();await typeOver(page,done,"Kept the old form for the release");
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await refusedWhileSecondOpens(saveNotes,"Continuity store is locked for the release",true);
+    await expect.soft(notesRefusal,"the notes' refusal is said on the panel uncovered once Second thread's open failed").toHaveText("Continuity store is locked for the release");
+    await inSightAboveBar(notesRefusal,bar,"the notes' refusal is in sight on the panel uncovered");
+    await shootAsDrawn(page,"goal-notes-refused-while-another-thread-failed-to-open");
+    // Refused in the moment after the click on Second thread, before its opening state comes up (once the open has taken 200 ms): the
+    // refusal is said on the panel the person has just clicked away from, still shown, and said again back on the thread once Second
+    // thread has opened, whether its opening state came up meanwhile (covered) or the open landed at once. It went with that panel, so
+    // back on the thread the edit sat with Discard changes and no refusal. When the open fails instead, the panel stays with the
+    // refusal said on it, in sight, once: drawn again from Files it says it no more, as any refusal it said. said is the refusal in
+    // the DOM, shown or hidden under the opening state. The page's clock stands still from just before the click until the refusal
+    // has landed, so the opening state is not up yet when it lands, however long the relay takes to bring it, and an open that
+    // lands at once lands before any opening state could come up; the clock then runs on.
+    const refusedAsSecondOpens=async(pressed,reason,said,{covered=false,fails=false}={})=>{
+      const open=socket.slow("thread/resume",params=>params.threadId===second.id),opening=page.getByTestId("thread-opening");
+      await page.clock.pauseAt(await page.evaluate(()=>Date.now())+1000);
+      await threadRow(page,"Second thread").locator(".thread-main").click();socket.release(reason);
+      await expect(pressed,"the refusal has landed").not.toHaveText("Saving…");
+      await expect(said,"said on the panel the person has clicked away from, before Second thread's opening state is up").toHaveText(reason);
+      await expect(opening).toHaveCount(0);
+      if(!covered&&!fails){open();await expect(save,"Second thread has opened, before any opening state").toHaveText("Set goal");await expect(opening).toHaveCount(0)}
+      await page.clock.resume();
+      if(covered){await expect(opening).toBeVisible();await expect(panel).toHaveClass(/opening-covered/)}
+      if(fails){open("Session store is busy");await opened("Composer thread");await expect(panel).not.toHaveClass(/opening-covered/)}
+      else{if(covered)open();await opened("Second thread");await expect(save).toHaveText("Set goal");await threadRow(page,"Composer thread").locator(".thread-main").click();await opened("Composer thread")}
+      await painted(page);
+    };
+    const goalSaid=bar.locator(":scope>.inline-error"),notesSaid=notes.locator(":scope>.inline-error");
+    // A goal save, in dark: the opening state comes up after the refusal, then the open lands, and back on the thread.
+    await switchMode(page,"dark");await typeOver(page,objective,"Make the refund tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await refusedAsSecondOpens(save,"Goal store is read-only for refunds",goalSaid,{covered:true});
+    await expect.soft(goalRefusal,"back on the thread, the goal's refusal that landed before Second thread's opening state came up is said above its bar").toHaveText("Goal store is read-only for refunds");
+    await expect.soft(goalRefusal).toBeInViewport();
+    await expect(objective,"the edit is kept to save again").toHaveValue("Make the refund tests pass");await expect(save).toHaveText("Update goal");
+    await shootAsDrawn(page,"goal-refused-before-another-thread-opening-state");
+    // A notes save, in light: Second thread opens at once once the refusal has landed, before any opening state.
+    await switchMode(page,"light");await showNotes();await typeOver(page,done,"Moved the refunds to the new API");
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await refusedAsSecondOpens(saveNotes,"Continuity store is read-only for refunds",notesSaid);
+    await expect.soft(notesRefusal,"back on the thread, the notes' refusal that landed as Second thread opened at once is said above Save continuity").toHaveText("Continuity store is read-only for refunds");
+    await inSightAboveBar(notesRefusal,bar,"the notes' refusal that landed as Second thread opened at once is in sight back on the thread");
+    await shootAsDrawn(page,"goal-notes-refused-as-another-thread-opened-at-once");
+    await showNotes();await expect(done,"the note is kept to save again").toHaveValue("Moved the refunds to the new API");
+    // A notes save, in dark, refused before the opening state comes up, and the open then fails: the panel uncovered says the refusal,
+    // in sight above the goal's bar, and drawn again from Files says it no more.
+    await switchMode(page,"dark");await typeOver(page,done,"Kept the refunds form for the release");
+    socket.hold("thread/continuity/set");await saveNotes.click();await expect(saveNotes).toHaveText("Saving…");
+    await refusedAsSecondOpens(saveNotes,"Continuity store is locked for refunds",notesSaid,{covered:true,fails:true});
+    await expect.soft(notesRefusal,"the notes' refusal stays said on the panel uncovered once Second thread's open failed").toHaveText("Continuity store is locked for refunds");
+    await inSightAboveBar(notesRefusal,bar,"the notes' refusal said before the opening state came up is in sight on the panel uncovered");
+    await shootAsDrawn(page,"goal-notes-refused-before-another-thread-failed-to-open");
+    await goalPanelAway["back from Files"](page);await painted(page);
+    await expect(notesSaid,"drawn again from Files, the panel does not say the refusal it said already").toHaveCount(0);
+    await showNotes();await expect(done,"the note is kept to save again").toHaveValue("Kept the refunds form for the release");
+    // A goal save, in light, refused before Second thread's open fails at once: said on the panel that stays, and once.
+    await switchMode(page,"light");await typeOver(page,objective,"Make the invoice tests pass");
+    socket.hold("thread/goal/set");await save.click();await expect(save).toHaveText("Saving…");
+    await refusedAsSecondOpens(save,"Goal store is locked for invoices",goalSaid,{fails:true});
+    await expect(goalRefusal,"the goal's refusal stays said on the panel once Second thread's open failed").toHaveText("Goal store is locked for invoices");
+    await goalPanelAway["back from Files"](page);await expect(objective).toHaveValue("Make the invoice tests pass");await painted(page);
+    await expect(goalSaid,"drawn again from Files, the panel does not say the refusal it said already").toHaveCount(0);
+    await expect(save).toHaveText("Update goal");
+  }finally{await harness.close()}
+});
+
+// The Goal panel's clears (the goal's and the notes'), each held from when hold() is called until the function it gives back is, as
+// a harness slow to answer them; with hold("answer") only the answer waits, once the harness has said the clear is done.
+async function openSlowClears(page){
+  const gates={request:null,answer:null},clears=request=>/^thread\/(goal|continuity)\/clear$/.test(request.method);
+  const harness=await openComposerApp(page,{hold:request=>clears(request)?gates.request:null,answer:request=>clears(request)?gates.answer:null});
+  return {harness,hold(what="request"){let open=()=>{};gates[what]=new Promise(resolve=>{open=resolve});return()=>{gates[what]=null;open()}}};
+}
+// Enter on row's button name, reached with Tab, then Tab from Cancel to the question's confirm button and Enter; meanwhile() runs once
+// the question has gone, while a clear held is on its way.
+async function clearFromKeyboard(page,row,name,meanwhile=async()=>{}){
+  const question=page.locator("dialog.inspector-text-prompt");
+  await tabTo(page,row.getByRole("button",{name,exact:true}));
+  await page.keyboard.press("Enter");await expect(question.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+  await page.keyboard.press("Tab");await page.keyboard.press("Enter");await expect(question).toHaveCount(0);
+  await meanwhile();
+}
+const ringed=locator=>locator.evaluate(node=>node===document.activeElement&&node.matches(":focus-visible"));
+// Each clear below is answered at once, slowly (the button pressed says Clearing… meanwhile), or said done before its answer comes,
+// when what was cleared already shows and its answer is still on its way.
+const CLEAR_ANSWERS=[{mode:"dark"},{mode:"light",slow:"request"},{mode:"dark",slow:"answer"}];
+async function whileClearHeld(page,row,slow,release,cleared){
+  if(slow==="request")await pressedWhileHeld(row.getByRole("button",{name:"Clearing…",exact:true}),"Clearing…");
+  if(slow==="answer"){await cleared();await painted(page);await painted(page)}
+  release?.();
+}
+// Counts each note of a change made elsewhere the page draws from now on, however briefly; the function it gives back stops
+// counting and reads the count.
+async function countChangedNotes(page){
+  await page.evaluate(()=>{
+    const seen={count:0};window.changedNotesSeen=seen;
+    seen.observer=new MutationObserver(records=>{for(const record of records)for(const node of record.addedNodes)if(node.nodeType===1&&(node.matches(".goal-field-changed")||node.querySelector(".goal-field-changed")))seen.count++});
+    seen.observer.observe(document.body,{childList:true,subtree:true});
+  });
+  return ()=>page.evaluate(()=>{const seen=window.changedNotesSeen;seen.observer.disconnect();return seen.count});
+}
+
+// Clear pressed from the keyboard with an edit to the Objective left unsaved: the edit goes with the goal cleared, and Discard
+// changes with it, so once the clear lands the keyboard is on Set goal. It was handed on to Discard changes, which went a moment
+// later and took the keyboard to the page; and an Objective cleared while its answer came was said to have been cleared elsewhere.
+test("Clear pressed from the keyboard with an Objective edit unsaved leaves the keyboard on Set goal once the goal is cleared, with no Discard changes or change said made elsewhere left",async({page})=>{
+  test.setTimeout(150_000);
+  const clears=await openSlowClears(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),status=panel.locator(".goal-status"),save=bar.locator("button.primary");
+    for(const [index,{mode,slow}] of CLEAR_ANSWERS.entries()){
+      await switchMode(page,mode);
+      if(index){await objective.click();await page.keyboard.type("Make the login tests pass",{delay:15});await save.click();await expect(status).toHaveText("active")}
+      // An edit to the Objective, left unsaved, so Discard changes is offered beside Update goal.
+      await typeOver(page,objective,"Make the login and signup tests pass in "+mode);await expect(bar.getByRole("button",{name:"Discard changes",exact:true})).toBeVisible();
+      const release=slow?clears.hold(slow):null,changedNotesSeen=await countChangedNotes(page);
+      await clearFromKeyboard(page,bar,"Clear",()=>whileClearHeld(page,bar,slow,release,()=>expect(status).toHaveText("not set")));
+      await expect(status).toHaveText("not set");await expect(objective).toHaveValue("");
+      await expect.soft(bar.getByRole("button"),"the edit went with the goal: no Discard changes, and no change said made elsewhere").toHaveText(["Set goal"]);
+      expect.soft(await changedNotesSeen(),"the goal this panel cleared is never said to have changed elsewhere ("+(slow||"at once")+")").toBe(0);
+      // Soft, so a build that loses the keyboard says so for each way the clear is answered.
+      await frames(page);await expect.soft(save,"once Clear goes the keyboard is on Set goal, not on the Discard changes that goes with the edit ("+(slow||"at once")+")").toBeFocused();
+      expect.soft(await ringed(save),"with its ring").toBe(true);
+      if(slow!=="answer"&&await ringed(save))await shootWidths(page,"goal-clear-unsaved-keyboard-on-set-goal",save);
+    }
+  }finally{await clears.harness.close()}
+});
+
+// The same for Clear notes with a note saved, then edited and left unsaved: once the notes are cleared the keyboard is on Save
+// continuity.
+test("Clear notes pressed from the keyboard with a note edit unsaved leaves the keyboard on Save continuity once the notes are cleared, with no Discard changes or change said made elsewhere left",async({page})=>{
+  test.setTimeout(150_000);
+  const clears=await openSlowClears(page);
+  try{
+    await page.getByRole("button",{name:"Thread goal",exact:true}).click();
+    const panel=page.getByTestId("goal-panel"),row=panel.locator(".continuity-actions"),save=row.locator("button.primary"),done=panel.getByLabel("Completed work",{exact:true});
+    const summary=panel.locator(".goal-continuity-details>summary");
+    await panel.getByText("Continuity state",{exact:true}).click();
+    for(const {mode,slow} of CLEAR_ANSWERS){
+      await switchMode(page,mode);
+      // A note saved, then edited and left unsaved, so Discard changes is offered beside Save continuity.
+      await typeOver(page,done,"Fixed the session refresh in "+mode);await save.click();await expect(summary).toContainText("1 explicit note");
+      await done.click();await page.keyboard.press("End");await page.keyboard.type(" and its rollback",{delay:15});
+      await expect(row.getByRole("button",{name:"Discard changes",exact:true})).toBeVisible();
+      const release=slow?clears.hold(slow):null,changedNotesSeen=await countChangedNotes(page);
+      await clearFromKeyboard(page,row,"Clear notes",()=>whileClearHeld(page,row,slow,release,()=>expect(summary).toContainText("Derived facts only")));
+      await expect(summary).toContainText("Derived facts only");await expect(done).toHaveValue("");
+      await expect.soft(row.getByRole("button"),"the edit went with the notes: no Discard changes, and no change said made elsewhere").toHaveText(["Save continuity"]);
+      expect.soft(await changedNotesSeen(),"the notes this panel cleared are never said to have changed elsewhere ("+(slow||"at once")+")").toBe(0);
+      await frames(page);await expect.soft(save,"once Clear notes goes the keyboard is on Save continuity, not on the Discard changes that goes with the edit ("+(slow||"at once")+")").toBeFocused();
+      expect.soft(await ringed(save),"with its ring").toBe(true);
+      if(slow!=="answer"&&await ringed(save))await shootWidths(page,"goal-notes-clear-unsaved-keyboard-on-save",save);
+    }
+  }finally{await clears.harness.close()}
+});
+
+// The page's side of the harness's socket, for a clear whose answer comes in the moment the page has drawn what the harness said
+// ahead of it. Once until(selector) is called, the next clear sent (the goal's or the notes') has what comes after it held until its
+// answer comes, and then given to the page at once, while the answer waits until the page has drawn that (nothing matches selector
+// any more) and comes in that moment, before React runs what follows the drawing (its effects). given() counts the answers so given.
+async function lateClearAnswers(page){
+  await page.addInitScript(()=>{
+    const Native=window.WebSocket,late=window.lateClearAnswer={selector:null,awaited:null,held:[],answer:null,given:0};
+    new MutationObserver(()=>{if(late.answer&&!document.querySelector(late.selector)){const give=late.answer;Object.assign(late,{answer:null,selector:null,given:late.given+1});give()}}).observe(document,{subtree:true,childList:true,characterData:true});
+    window.WebSocket=class extends Native{
+      constructor(...args){
+        super(...args);
+        this.addEventListener("message",event=>{
+          if(!event.isTrusted||late.awaited?.socket!==this)return;
+          event.stopImmediatePropagation();
+          let message=null;try{message=JSON.parse(event.data)}catch{}
+          const give=()=>this.dispatchEvent(new MessageEvent("message",{data:event.data}));
+          if(message?.method||message?.id!==late.awaited.id){late.held.push(give);return}
+          late.awaited=null;for(const before of late.held.splice(0))before();late.answer=give;
+        });
+      }
+      send(data){
+        let message=null;try{message=JSON.parse(data)}catch{}
+        if(late.selector&&!late.awaited&&!late.answer&&/^thread\/(goal|continuity)\/clear$/.test(message?.method||""))late.awaited={socket:this,id:message.id};
+        return super.send(data);
+      }
+    };
+  });
+  return {until:selector=>page.evaluate(selector=>{window.lateClearAnswer.selector=selector},selector),given:()=>page.evaluate(()=>window.lateClearAnswer.given)};
+}
+
+// Clear, then Clear notes, pressed from the keyboard with an edit left unsaved, whose answer comes in the moment the panel has drawn
+// the clear the harness said ahead of it (the goal cleared, the notes cleared), before React has run what follows that drawing: the
+// fields are left empty, with no Discard changes or change said made elsewhere, and the keyboard goes on to Set goal, then to Save
+// continuity. The fields as drawn before the answer were taken for edits and put back, the goal's saved Objective too, so a clear
+// left them filled with Discard changes on, and the keyboard there or on the page.
+test("a clear whose answer comes in the moment the panel has drawn the clear the harness said ahead of it leaves the fields empty, with no Discard changes or change said made elsewhere, and the keyboard on Set goal or Save continuity",async({page})=>{
+  test.setTimeout(150_000);
+  const late=await lateClearAnswers(page);
+  const harness=await openComposerApp(page);
+  try{
+    const {panel,objective}=await setGoalInPanel(page);
+    const bar=panel.locator(":scope>.goal-actions"),status=panel.locator(".goal-status"),setGoal=bar.locator("button.primary");
+    const row=panel.locator(".continuity-actions"),saveNotes=row.locator("button.primary"),done=panel.getByLabel("Completed work",{exact:true});
+    const summary=panel.locator(".goal-continuity-details>summary"),continuity=panel.getByText("Continuity state",{exact:true});
+    for(const [index,mode] of ["dark","light"].entries()){
+      await switchMode(page,mode);
+      if(index){await objective.click();await page.keyboard.type("Make the login tests pass",{delay:15});await setGoal.click();await expect(status).toHaveText("active")}
+      // The goal's Clear, with an edit to the Objective left unsaved.
+      await typeOver(page,objective,"Make the login and signup tests pass in "+mode);await expect(bar.getByRole("button",{name:"Discard changes",exact:true})).toBeVisible();
+      let changedNotesSeen=await countChangedNotes(page);await late.until('[data-testid="goal-panel"]>.goal-actions button.danger');
+      await clearFromKeyboard(page,bar,"Clear");
+      await expect(status).toHaveText("not set");await expect.poll(late.given,"the clear's answer came once the goal cleared was drawn").toBe(2*index+1);
+      await frames(page);
+      // Soft, so a build that puts the fields back says what else it does.
+      await expect.soft(objective,"the Objective's edit went with the goal").toHaveValue("");
+      await expect.soft(bar.getByRole("button"),"no Discard changes, and no change said made elsewhere").toHaveText(["Set goal"]);
+      expect.soft(await changedNotesSeen(),"the goal this panel cleared is never said to have changed elsewhere").toBe(0);
+      await expect.soft(setGoal,"once Clear goes the keyboard is on Set goal").toBeFocused();expect.soft(await ringed(setGoal),"with its ring").toBe(true);
+      if(await ringed(setGoal))await shootWidths(page,"goal-clear-answer-after-drawn-keyboard-on-set-goal",setGoal);
+      // The notes' Clear notes, with a note saved, then edited and left unsaved.
+      await continuity.click();
+      await typeOver(page,done,"Fixed the session refresh in "+mode);await saveNotes.click();await expect(summary).toContainText("1 explicit note");
+      await done.click();await page.keyboard.press("End");await page.keyboard.type(" and its rollback",{delay:15});
+      await expect(row.getByRole("button",{name:"Discard changes",exact:true})).toBeVisible();
+      changedNotesSeen=await countChangedNotes(page);await late.until('[data-testid="goal-panel"] .continuity-actions button.danger');
+      await clearFromKeyboard(page,row,"Clear notes");
+      await expect(summary).toContainText("Derived facts only");await expect.poll(late.given,"the clear's answer came once the notes cleared were drawn").toBe(2*index+2);
+      await frames(page);
+      await expect.soft(done,"the note's edit went with the notes").toHaveValue("");
+      await expect.soft(row.getByRole("button"),"no Discard changes, and no change said made elsewhere").toHaveText(["Save continuity"]);
+      expect.soft(await changedNotesSeen(),"the notes this panel cleared are never said to have changed elsewhere").toBe(0);
+      await expect.soft(saveNotes,"once Clear notes goes the keyboard is on Save continuity").toBeFocused();expect.soft(await ringed(saveNotes),"with its ring").toBe(true);
+      if(await ringed(saveNotes))await shootWidths(page,"goal-notes-clear-answer-after-drawn-keyboard-on-save",saveNotes);
+      await continuity.click();
+    }
+  }finally{await harness.close()}
+});
+
+// The Goal panel opened with its goal set (setGoalInPanel) over openGoalWrites' harness, for a keyboard press in its bar and then
+// a click on the transcript's text, which leaves the keyboard on the page. keyboardOn names what has the keyboard (the page, or a
+// control by its words); statusElsewhere sets the goal's status from another window, as Codex ends a goal itself; leftOnPage
+// expects the keyboard still on the page, and Space then to ask nothing (softly, closing a question asked, so a build that moves
+// the keyboard says so for each mode).
+async function goalBar(page,writes){
+  const {panel,objective}=await setGoalInPanel(page);
+  const bar=panel.locator(":scope>.goal-actions"),status=panel.locator(".goal-status"),question=page.locator("dialog.inspector-text-prompt");
+  const keyboardOn=()=>page.evaluate(()=>document.activeElement===document.body?"the page":String(document.activeElement?.textContent||document.activeElement?.tagName).trim());
+  return {objective,bar,status,button:name=>bar.getByRole("button",{name,exact:true}),
+    async statusElsewhere(value){await relayRequest(writes.harness,"thread/goal/set",{threadId:writes.harness.threads[0].id,status:value});await expect(status).toHaveText(value);await painted(page)},
+    async clickTranscript(){await page.getByText("The login page renders.",{exact:true}).click();expect(await keyboardOn(),"a click on the transcript's text leaves the keyboard on the page").toBe("the page")},
+    async leftOnPage(why){
+      expect.soft(await keyboardOn(),why).toBe("the page");await page.keyboard.press("Space");await painted(page);
+      const asked=await question.count();if(asked){await page.keyboard.press("Escape");await expect(question).toHaveCount(0)}
+      expect.soft(asked,"Space asks nothing").toBe(0);
+    },
+  };
+}
+
+// Enter on Pause, then a click on the transcript's text: when Codex ends the goal later (here from another window), Resume and
+// Complete go and the keyboard stays on the page, so Space asks nothing. The press was kept until the next one, and the keyboard was
+// put on Clear with nothing pressed, where Space asked to clear the goal.
+test("Enter on the Goal panel's Pause and then a click on the transcript: when the goal ends later the keyboard stays where the person put it, and Space then asks nothing",async({page})=>{
+  test.setTimeout(120_000);
+  const writes=await openGoalWrites(page);
+  try{
+    const goal=await goalBar(page,writes);
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      if(mode!=="dark")await goal.statusElsewhere("active");
+      // Enter on Pause, reached with Tab: Resume takes its place with the keyboard.
+      await goal.objective.click();await tabTo(page,goal.button("Pause"));
+      await page.keyboard.press("Enter");await expect(goal.status).toHaveText("paused");await expect(goal.button("Resume")).toBeFocused();
+      await goal.clickTranscript();
+      await goal.statusElsewhere("complete");await expect(goal.bar.getByRole("button")).toHaveText(["Update goal","Clear"]);
+      await goal.leftOnPage("once Resume and Complete go, the keyboard stays where the person put it, never on Clear");
+      await page.screenshot({animations:"disabled",path:auditDir+"goal-ended-after-click-keyboard-left-"+mode+"-1280x800.png"});
+    }
+  }finally{await writes.harness.close()}
+});
+
+// Enter on Complete, its write slow, and a click on the transcript's text while it is on its way: once it lands Complete goes and
+// the keyboard stays on the page, where the old press put it on Clear. Without the click it goes on to Clear, as before.
+test("Enter on the Goal panel's Complete, slow to land, and a click on the transcript meanwhile: once it lands the keyboard stays where the person put it, and without the click it goes on to Clear",async({page})=>{
+  test.setTimeout(120_000);
+  const writes=await openGoalWrites(page);
+  try{
+    const goal=await goalBar(page,writes);
+    const completeFromKeyboard=async()=>{
+      await goal.objective.click();await tabTo(page,goal.button("Complete"));
+      const release=writes.hold();await page.keyboard.press("Enter");await pressedWhileHeld(goal.button("Completing…"),"Completing…");
+      return release;
+    };
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      if(mode!=="dark")await goal.statusElsewhere("active");
+      const release=await completeFromKeyboard();
+      await goal.clickTranscript();
+      release();await expect(goal.status).toHaveText("complete");await expect(goal.bar.getByRole("button")).toHaveText(["Update goal","Clear"]);await painted(page);
+      await goal.leftOnPage("once a slow Complete lands after the click, the keyboard stays where the person put it, never on Clear");
+      await page.screenshot({animations:"disabled",path:auditDir+"goal-complete-landed-after-click-keyboard-left-"+mode+"-1280x800.png"});
+    }
+    await goal.statusElsewhere("active");
+    const release=await completeFromKeyboard();release();await expect(goal.status).toHaveText("complete");
+    await expect(goal.button("Clear"),"once Complete goes with the keyboard still on it, the keyboard is on Clear, the bar's next control").toBeFocused();
+  }finally{await writes.harness.close()}
+});
+
+test("removing an attachment chip from the keyboard moves focus to the next chip's remove button, then the one before, then the composer",async({page},testInfo)=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer"),remove=name=>chips(page).getByRole("button",{name:"Remove "+name,exact:true});
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const files=["notes","tool","todo"].map(name=>name+"-"+mode+".txt");
+      for(const name of files)await writeFile(testInfo.outputPath(name),"contents of "+name);
+      await chooseFiles(page,files.map(name=>testInfo.outputPath(name)));
+      await expect(page.locator(".attachment-shelf > span:not(.uploading)")).toHaveCount(3);await expect(chips(page)).toHaveCount(3);
+      // The chips stand in the order the files were stored.
+      const shown=await chips(page).allTextContents();expect([...shown].sort()).toEqual([...files].sort());
+      // Shift+Tab from the composer reaches the last chip's remove button, and once more the middle one.
+      await composer.click();await page.keyboard.press("Shift+Tab");await expect(remove(shown[2])).toBeFocused();
+      await page.keyboard.press("Shift+Tab");await expect(remove(shown[1])).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(chips(page)).toHaveText([shown[0],shown[2]]);await expect(remove(shown[2])).toBeFocused();
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(remove(shown[2])).toBeFocused();await page.screenshot({animations:"disabled",path:auditDir+"attachment-removed-focus-next-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      // The last chip goes: the one before takes focus. The last one left goes: the composer takes it.
+      await page.keyboard.press("Enter");await expect(chips(page)).toHaveText([shown[0]]);await expect(remove(shown[0])).toBeFocused();
+      await page.keyboard.press(" ");await expect(chips(page)).toHaveCount(0);await expect(composer).toBeFocused();
+    }
+  }finally{await harness.close()}
+});
+
+test("an attachment chip removed with the mouse leaves focus in the composer, so the text typed on goes there and removes no other chip",async({page},testInfo)=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer");
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      const files=["alpha","beta","gamma"].map(name=>name+"-"+mode+".txt");
+      for(const name of files)await writeFile(testInfo.outputPath(name),"contents of "+name);
+      await chooseFiles(page,files.map(name=>testInfo.outputPath(name)));
+      await expect(page.locator(".attachment-shelf > span:not(.uploading)")).toHaveCount(3);
+      const shown=await chips(page).allTextContents();
+      // The person writes, clicks the first chip's X, and writes on: each space would press a remove button that had focus.
+      await composer.click();await page.keyboard.type("Check",{delay:20});
+      await chips(page).getByRole("button",{name:"Remove "+shown[0],exact:true}).click();
+      await expect(chips(page)).toHaveText([shown[1],shown[2]]);await expect(composer).toBeFocused();
+      await page.keyboard.type(" these files",{delay:20});
+      await expect(composer).toHaveValue("Check these files");await expect(chips(page)).toHaveText([shown[1],shown[2]]);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await page.screenshot({animations:"disabled",path:auditDir+"attachment-removed-by-mouse-typing-on-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      // Clear the draft and the chips for the next mode.
+      await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+      for(const name of [shown[1],shown[2]])await chips(page).getByRole("button",{name:"Remove "+name,exact:true}).click();
+      await expect(chips(page)).toHaveCount(0);
+    }
+  }finally{await harness.close()}
+});
+
+// What a person sees of each chip in the shelf's view (and of the one whose remove button has focus), by its name: the name "whole",
+// "cut with an ellipsis" or "cut with no ellipsis"; the remove button "at the chip's end" when it lies whole inside the chip at its
+// right end and the page answers it at its middle, or else how far past the chip's end it lies or what the page answers there; and
+// with focus on the button, the name "from its start", or how far the chip scrolled it.
+const readChipEnds=page=>chips(page).evaluateAll(nodes=>{
+  const view=nodes[0].parentElement.getBoundingClientRect();
+  return Object.fromEntries(nodes.filter(chip=>{const box=chip.getBoundingClientRect();return chip.contains(document.activeElement)||box.top>=view.top-0.5&&box.bottom<=view.bottom+0.5}).map(chip=>{
+    const box=chip.getBoundingClientRect(),button=chip.querySelector("button"),x=button.getBoundingClientRect(),at=document.elementFromPoint(x.left+x.width/2,x.top+x.height/2);
+    // The element that holds the name: the chip itself while the name is a bare text node in its row.
+    const holder=[...chip.querySelectorAll("*")].find(node=>node.textContent===chip.title)||chip,style=getComputedStyle(holder);
+    const name=holder.scrollWidth<=holder.clientWidth+1?"whole":style.textOverflow==="ellipsis"&&style.overflowX!=="visible"&&!/flex|grid/.test(style.display)?"cut with an ellipsis":"cut with no ellipsis";
+    const remove=x.right>box.right+0.5?`${Math.round(x.right-box.right)} px past the chip's end`:!button.contains(at)?`answers ${at?.closest(".attachment-shelf>span")===chip?"the chip's name":at?.tagName||"nothing"}`:box.right-x.right>12?`${Math.round(box.right-x.right)} px from the chip's end`:"at the chip's end";
+    const scrolled=Math.round(chip.scrollLeft+holder.scrollLeft);
+    return [chip.title,{name,remove,...(button===document.activeElement?{focused:scrolled?`the name scrolled ${scrolled} px`:"from its start"}:{})}];
+  }));
+});
+
+// A name too long for its chip was a bare text node in the chip's row: it kept its whole width, was cut with no ellipsis and pushed
+// the remove button out past the chip's end, so a click there removed nothing, and Shift+Tab to the button scrolled the name to its
+// end (lane H, p109). The name gives way, cut with an ellipsis, and the button stays whole at the chip's end, the shelf scrolling too.
+test("a long file name on an attachment chip is cut with an ellipsis and its remove button stays whole at the chip's end, where a click removes it and Shift+Tab reaches it with the name kept from its start, also on a shelf that scrolls, at 1280 and 700",async({page},testInfo)=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page,{newTask:true});
+  try{
+    const composer=page.getByTestId("composer"),remove=name=>chips(page).getByRole("button",{name:"Remove "+name,exact:true});
+    const long=["quarterly-figures-final-2026.xlsx","meeting-notes-from-monday.md","customer-interview-transcript-03.txt"],files=[long[0],"a.txt",long[1],"short.md",long[2],"plan.md"];
+    const reports=Array.from({length:20},(_,index)=>`report-${String(index+1).padStart(2,"0")}-quarterly-figures.txt`);
+    const ends=names=>Object.fromEntries(names.map(name=>[name,{name:long.includes(name)||reports.includes(name)?"cut with an ellipsis":"whole",remove:"at the chip's end"}]));
+    for(const name of [...files,...reports])await writeFile(testInfo.outputPath(name),"contents of "+name);
+    await chooseFiles(page,files.map(name=>testInfo.outputPath(name)));
+    await expect(page.locator(".attachment-shelf > span:not(.uploading)")).toHaveCount(6);await expect(chips(page)).toHaveCount(6);
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readChipEnds(page),{message:`three long names and three short ones at ${width}x800 in ${mode}`}).toEqual(ends(files));
+        await page.screenshot({animations:"disabled",path:auditDir+`long-chip-names-${mode}-${width}x800.png`});
+      }
+    }
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");
+    // A click on a long-named chip's end, where its x is, removes that chip, and the draft keeps the keyboard.
+    await composer.click();await page.keyboard.type("Check these files",{delay:20});
+    const box=await chips(page).filter({hasText:long[0]}).boundingBox();
+    await page.mouse.click(box.x+box.width-12,box.y+box.height/2);
+    await expect(chips(page).filter({hasText:long[0]}),"a click on the long-named chip's end removes it").toHaveCount(0);await expect(chips(page)).toHaveCount(5);await expect(composer).toBeFocused();
+    // Shift+Tab from the draft goes back through the remove buttons, each whole at its chip's end with the name kept from its start,
+    // and Enter on the first removes it, focus going on to the next.
+    const order=await chips(page).evaluateAll(nodes=>nodes.map(node=>node.title));
+    for(let at=order.length-1;at>=0;at--){
+      await page.keyboard.press("Shift+Tab");await expect(remove(order[at])).toBeFocused();
+      expect((await readChipEnds(page))[order[at]],`${order[at]} with focus on its remove button`).toEqual({...ends([order[at]])[order[at]],focused:"from its start"});
+    }
+    await page.keyboard.press("Enter");await expect(chips(page)).toHaveCount(4);await expect(remove(order[1])).toBeFocused();
+    await expect(composer).toHaveValue("Check these files");
+    // Ten more at 1280 and ten more at 700, most of the shelf long names: past three rows it scrolls, showing the newest, and the chips
+    // in its view, the newest under the mouse and those Shift+Tab reaches show the same.
+    for(const [width,picked] of [[1280,reports.slice(0,10)],[700,reports.slice(10)]]){
+      await page.setViewportSize({width,height:800});
+      const count=await chips(page).count();await chooseFiles(page,picked.map(name=>testInfo.outputPath(name)));
+      await expect(page.locator(".attachment-shelf > span:not(.uploading)")).toHaveCount(count+10);await expect(chips(page)).toHaveCount(count+10);
+      expect(await page.locator(".attachment-shelf").evaluate(shelf=>shelf.scrollHeight>shelf.clientHeight),`the shelf scrolls at ${width}x800`).toBe(true);
+      const newest=await chips(page).last().getAttribute("title");
+      await expect.poll(async()=>{const seen=await readChipEnds(page);return seen[newest]&&Object.keys(seen).length>=6&&JSON.stringify(seen)===JSON.stringify(ends(Object.keys(seen)))?"as they should":seen},{message:`the chips in the shelf's view at ${width}x800, the newest among them`}).toBe("as they should");
+      await page.screenshot({animations:"disabled",path:auditDir+`long-chip-names-scrolling-shelf-dark-${width}x800.png`});
+      const end=await chips(page).last().boundingBox();
+      await composer.click();await page.mouse.click(end.x+end.width-12,end.y+end.height/2);
+      await expect(chips(page).filter({hasText:newest}),`a click on the newest chip's end at ${width}x800 removes it`).toHaveCount(0);
+      await expect(chips(page)).toHaveCount(count+9);await expect(composer).toBeFocused();
+      const shown=await chips(page).evaluateAll(nodes=>nodes.map(node=>node.title));
+      for(let at=shown.length-1;at>=shown.length-8;at--){
+        await page.keyboard.press("Shift+Tab");await expect(remove(shown[at])).toBeFocused();
+        expect((await readChipEnds(page))[shown[at]],`${shown[at]} with focus on its remove button at ${width}x800`).toEqual({...ends([shown[at]])[shown[at]],focused:"from its start"});
+      }
+      await page.screenshot({animations:"disabled",path:auditDir+`long-chip-name-remove-focused-dark-${width}x800.png`});
+    }
+    await expect(chips(page)).toHaveCount(22);await expect(composer).toHaveValue("Check these files");
+  }finally{await harness.close()}
+});
+
+// The title of the button the page answers at a point, or what it answers there.
+const titleAt=(page,x,y)=>page.evaluate(([x,y])=>{const node=document.elementFromPoint(x,y),button=node?.closest("button");return button?button.title:node?.tagName||"nothing"},[x,y]);
+const chipTitles=page=>chips(page).evaluateAll(nodes=>nodes.map(node=>node.title));
+// count files whose names are too long for their chips, attached with Attach files; their chips are all one width. Says the chips'
+// names in the shelf's order.
+async function attachLongNames(page,testInfo,count){
+  const names=Array.from({length:count},(_,index)=>`report-${String(index+1).padStart(2,"0")}-quarterly-figures.txt`);
+  for(const name of names)await writeFile(testInfo.outputPath(name),"contents of "+name);
+  await chooseFiles(page,names.map(name=>testInfo.outputPath(name)));
+  await expect(page.locator(".attachment-shelf > span:not(.uploading)")).toHaveCount(count);await expect(chips(page)).toHaveCount(count);
+  return chipTitles(page);
+}
+// Opens the Browser panel and attaches count screenshots from it, each a context chip reading "Browser screenshot".
+async function attachBrowserScreenshots(page,count){
+  await page.locator(".sidebar").getByRole("button",{name:"Browser",exact:true}).click();
+  await expect(page.getByTestId("right-panel").getByRole("button",{name:"Attach screenshot",exact:true})).toBeVisible();
+  await attachScreenshots(page,count);
+}
+
+// A double click on a chip's remove button removes that chip only. Chips with names too long for them are all one width, so each
+// chip's x sits where the one before had its x: the first click removed the chip at once, the next chip moved into its place, and
+// the second click landed on its x and removed it too. Browser screenshots' context chips all read the same, and did the same. The
+// rest of the press does nothing, as on a queued follow-up's Remove; a click of its own removes the chip under the pointer.
+test("a double click on an attachment chip's or a context chip's remove button removes only that chip, where the next chip's x comes up under the pointer",async({page},testInfo)=>{
+  test.setTimeout(120_000);
+  await page.addInitScript(screenshotBrowser);
+  const harness=await openComposerApp(page,{newTask:true});
+  try{
+    const composer=page.getByTestId("composer"),remove=name=>chips(page).getByRole("button",{name:"Remove "+name,exact:true});
+    const shown=await attachLongNames(page,testInfo,4);
+    expect(new Set(await chips(page).evaluateAll(nodes=>nodes.map(node=>Math.round(node.getBoundingClientRect().width)))).size,"the long-named chips are one width").toBe(1);
+    // The person writes, then double-clicks the first chip's x: the first click removes it, and the next chip's x comes up under the
+    // pointer, where the second click lands.
+    await composer.click();await page.keyboard.type("Check these files",{delay:20});
+    const box=await remove(shown[0]).boundingBox(),x=box.x+box.width/2,y=box.y+box.height/2;
+    await page.mouse.move(x,y);await page.mouse.down();await page.mouse.up();
+    await expect(chips(page)).toHaveCount(3);
+    expect(await titleAt(page,x,y),"the next chip's x under the pointer").toBe("Remove "+shown[1]);
+    await page.mouse.down({clickCount:2});await page.mouse.up({clickCount:2});await frames(page);
+    expect.soft(await chipTitles(page),"the second click of the double click removes nothing").toEqual(shown.slice(1));
+    await expect(composer).toBeFocused();await expect(composer).toHaveValue("Check these files");
+    await shootBoth(page,"attachment-chip-double-click");
+    // A click of its own removes the chip whose x is under the pointer.
+    const left=await chipTitles(page);
+    await page.mouse.click(x,y);await expect(chips(page)).toHaveCount(left.length-1);
+    expect(await chipTitles(page)).toEqual(left.slice(1));
+    // Three Browser screenshots, the panel closed again so the composer has them on one row, and a double click on the first one's x.
+    await attachBrowserScreenshots(page,3);
+    await page.getByRole("button",{name:"Close right panel"}).click();await expect(page.getByTestId("right-panel")).toHaveCount(0);
+    const context=page.getByTestId("context-chip");
+    expect(new Set(await context.evaluateAll(nodes=>nodes.map(node=>Math.round(node.getBoundingClientRect().top)))).size,"the three context chips share a row").toBe(1);
+    const contextBox=await context.first().getByRole("button",{name:"Remove context"}).boundingBox();
+    const cx=contextBox.x+contextBox.width/2,cy=contextBox.y+contextBox.height/2;
+    await composer.click();
+    await page.mouse.move(cx,cy);await page.mouse.down();await page.mouse.up();
+    await expect(context).toHaveCount(2);
+    expect(await titleAt(page,cx,cy),"the next context chip's x under the pointer").toBe("Remove context");
+    await page.mouse.down({clickCount:2});await page.mouse.up({clickCount:2});await frames(page);
+    expect.soft(await context.count(),"the second click of the double click removes no context chip").toBe(2);
+    await expect(composer).toBeFocused();await expect(composer).toHaveValue("Check these files");
+    await shootBoth(page,"context-chip-double-click");
+  }finally{await harness.close()}
+});
+
+// Enter held on a chip's remove button removes that chip only: removing a chip from the keyboard gives the keyboard to the next
+// chip's x, which the key's repeats pressed, so they removed chip after chip. The rest of the press does nothing, as on a queued
+// follow-up's Remove; a press of its own removes the chip it is on. Eight chips, more than the repeats could take out.
+test("Enter held on an attachment chip's or a context chip's remove button removes only that chip and leaves the keyboard on the next chip's x",async({page},testInfo)=>{
+  test.setTimeout(120_000);
+  await page.addInitScript(screenshotBrowser);
+  const harness=await openComposerApp(page,{newTask:true});
+  try{
+    const composer=page.getByTestId("composer"),remove=name=>chips(page).getByRole("button",{name:"Remove "+name,exact:true});
+    const shown=await attachLongNames(page,testInfo,8);
+    await composer.click();await page.keyboard.type("Check these files",{delay:20});
+    await remove(shown[0]).focus();
+    await holdKey(page,"Enter",()=>expect(chips(page)).toHaveCount(7));
+    expect.soft(await chipTitles(page),"Enter held removes one chip").toEqual(shown.slice(1));
+    await expect.soft(remove(shown[1]),"the keyboard after Enter held on a chip's x").toBeFocused();
+    await shootBoth(page,"attachment-chip-enter-held");
+    // A press of its own removes the chip it is on, the keyboard going on to the next.
+    const left=await chipTitles(page);
+    await remove(left[0]).focus();await page.keyboard.press("Enter");
+    await expect(chips(page)).toHaveCount(left.length-1);await expect(remove(left[1])).toBeFocused();
+    // Eight Browser screenshots, and Enter held on the first one's x.
+    await attachBrowserScreenshots(page,8);
+    const context=page.getByTestId("context-chip"),removeContext=context.getByRole("button",{name:"Remove context"});
+    await removeContext.first().focus();
+    await holdKey(page,"Enter",()=>expect(context).toHaveCount(7));
+    expect.soft(await context.count(),"Enter held removes one context chip").toBe(7);
+    await expect.soft(removeContext.first(),"the keyboard after Enter held on a context chip's x").toBeFocused();
+    await shootBoth(page,"context-chip-enter-held");
+    await expect(composer).toHaveValue("Check these files");
+  }finally{await harness.close()}
+});
+
+// A screenshot as a person pastes it: a PNG drawn in the page, handed over in the paste event's files.
+const pasteImage=(page,name)=>page.getByTestId("composer").evaluate(async(node,name)=>{
+  const canvas=document.createElement("canvas");canvas.width=64;canvas.height=40;const pen=canvas.getContext("2d");pen.fillStyle="#3b82f6";pen.fillRect(0,0,64,40);
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png")),data=new DataTransfer();data.items.add(new File([blob],name,{type:"image/png"}));
+  node.dispatchEvent(new ClipboardEvent("paste",{clipboardData:data,bubbles:true,cancelable:true}));
+},name);
+
+test("a message sent with a pasted screenshot and a long pasted log names both files under its text, as the composer's chips did",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"I see the blue screenshot and the pasted log."}]});
+  try{
+    const composer=page.getByTestId("composer"),bubble=page.locator(".user-bubble").last(),files=bubble.locator(".user-attachments > span");
+    await composer.click();await page.keyboard.type("Here is what I see",{delay:15});
+    // The screenshot and a log too long for the draft each become a chip; the draft stays as typed.
+    await pasteImage(page,"screenshot.png");await expect(chips(page)).toHaveText(["screenshot.png"]);
+    await pasteText(page,"GET /login 500 after the token refresh\n".repeat(1300));
+    await expect(chips(page)).toHaveText(["screenshot.png","pasted-context.txt"]);await expect(composer).toHaveValue("Here is what I see");
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("I see the blue screenshot and the pasted log.",{exact:true})).toBeVisible({timeout:15_000});
+    await expect(chips(page)).toHaveCount(0);
+    // The message names the files that went with it, as the composer's chips did, under its text.
+    await expect(bubble.locator("p")).toHaveText("Here is what I see");
+    await expect(files).toHaveText(["screenshot.png","pasted-context.txt"]);
+    await expect(files.first().locator("svg")).toBeVisible();
+    // Each chip stays inside the message, at both widths and in both modes.
+    await shootBoth(page,"sent-message-files",async()=>{
+      const [frame,chipBoxes]=await Promise.all([bubble.boundingBox(),files.evaluateAll(nodes=>nodes.map(node=>{const {left,right,top,bottom}=node.getBoundingClientRect();return {left,right,top,bottom}}))]);
+      for(const chip of chipBoxes)expect(chip.left>=frame.x&&chip.right<=frame.x+frame.width&&chip.top>=frame.y&&chip.bottom<=frame.y+frame.height,JSON.stringify({chip,frame})).toBe(true);
+    });
+  }finally{await harness.close()}
+});
+
+// The files a message went with are part of what was sent: its thread opened again, or the window reloaded, still names them under
+// the message, and Edit from here brings them back to the composer with its text. They showed only until the thread was left.
+test("the files a message went with show again under it when its thread is opened again or the window reloads, and Edit from here brings them back",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{replies:[{text:"I see the blue screenshot and the pasted log."}]});
+  try{
+    const composer=page.getByTestId("composer"),row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Composer thread"]')});
+    const bubble=page.locator(".user-bubble").filter({hasText:"Here is what I see"}),files=bubble.locator(".user-attachments > span"),sent=["screenshot.png","pasted-context.txt"];
+    await composer.click();await page.keyboard.type("Here is what I see",{delay:15});
+    await pasteImage(page,"screenshot.png");await expect(chips(page)).toHaveText(["screenshot.png"]);
+    await pasteText(page,"GET /login 500 after the token refresh\n".repeat(1300));await expect(chips(page)).toHaveText(sent);
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("I see the blue screenshot and the pasted log.",{exact:true})).toBeVisible({timeout:15_000});
+    await expect(files).toHaveText(sent);
+    // Another view, then the thread again: the message still names its files.
+    await page.getByRole("button",{name:"New task",exact:true}).click();await expect(bubble).toHaveCount(0);
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);
+    await expect(bubble.locator("p")).toHaveText("Here is what I see",{timeout:15_000});
+    await expect(files,"the files, the thread opened again").toHaveText(sent);
+    // The window reloaded: the same.
+    await page.reload();await expect(row).toBeVisible({timeout:15_000});
+    if(!await row.evaluate(node=>node.classList.contains("active")))await row.locator(".thread-main").click();
+    await expect(files,"the files, the window reloaded").toHaveText(sent,{timeout:15_000});await expect(bubble.locator("p")).toHaveText("Here is what I see");
+    await shootBoth(page,"sent-message-files-reopened",()=>expect(files.first()).toBeInViewport());
+    // Edit from here brings the message back to the composer with its files.
+    await bubble.getByRole("button",{name:"Edit from here",exact:true}).click();
+    await page.getByRole("dialog").getByRole("button",{name:"Edit from here",exact:true}).click();
+    await expect(composer).toHaveValue("Here is what I see",{timeout:15_000});
+    await expect(chips(page),"the files come back to the composer with the message").toHaveText(sent);
+    await expect(bubble).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+// Codex keeps the files a message went with as lines after its text ([Image attachment "…" at …]): its thread opened again
+// shows the text alone, with the files named under it, as the bubble did when it was sent. It showed those lines, full paths and all.
+test("on Codex, the files a message went with show again under it when its thread is opened again, without the lines Codex keeps them by",async({page})=>{
+  test.setTimeout(90_000);
+  const thread={id:"codex-sent-files",name:"Codex sent files",preview:"Codex sent files",cwd:process.cwd(),status:{type:"idle"},model:"test/coding-fast",createdAt:Date.now()/1000-60,updatedAt:Date.now()/1000,turns:[]};
+  const harness=await startCodexHarness(thread,[(turn,{emit,threadId,finish})=>{
+    emit({method:"turn/started",params:{threadId,turn:{...turn,items:[]}}});
+    const answer={id:"agent-"+turn.id,type:"agentMessage",text:"I see the screenshot and the log."};turn.items.push(answer);emit({method:"item/completed",params:{threadId,turnId:turn.id,item:answer}});finish("completed");
+  }]);
+  try{
+    await routeCodexApp(page,harness,thread);
+    await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    const row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Codex sent files"]')}),composer=page.getByTestId("composer");
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");
+    const bubble=page.locator(".user-bubble").filter({hasText:"Here is what I see"}),files=bubble.locator(".user-attachments > span"),sent=["screenshot.png","pasted-context.txt"];
+    await composer.click();await page.keyboard.type("Here is what I see",{delay:15});
+    await pasteImage(page,"screenshot.png");await expect(chips(page)).toHaveText(["screenshot.png"]);
+    await pasteText(page,"GET /login 500 after the token refresh\n".repeat(1300));await expect(chips(page)).toHaveText(sent);
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("I see the screenshot and the log.",{exact:true})).toBeVisible({timeout:15_000});
+    await expect(files).toHaveText(sent);
+    expect(harness.turns.at(-1).items[0].content[0].text,"Codex keeps the files as lines after the text").toContain('[Image attachment "screenshot.png" at ');
+    // Another view, then the thread again: the text alone, with the files under it.
+    await page.getByRole("button",{name:"New task",exact:true}).click();await expect(bubble).toHaveCount(0);
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);
+    await expect(bubble.locator("p"),"the message's text, the thread opened again").toHaveText("Here is what I see",{timeout:15_000});
+    await expect(files,"the files, the thread opened again").toHaveText(sent);
+    await expect(page.getByText(/\[(Image|File) attachment /)).toHaveCount(0);
+    await shootBoth(page,"codex-sent-message-files-reopened",()=>expect(files.first()).toBeInViewport());
+  }finally{await harness.close()}
+});
+
+test("removing a context chip from the keyboard moves focus to the chip before it, then to the composer",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer"),context=page.getByTestId("context-chip"),reply=page.locator(".assistant-message-text").last();
+    const cite=page.getByRole("button",{name:"Cite selected assistant text"});
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      // The person drags across the reply, then double-clicks its first word, and cites each: two excerpt chips stand over the composer.
+      const box=await reply.evaluate(node=>{const range=document.createRange();range.selectNodeContents(node);const {left,right,top,bottom}=range.getBoundingClientRect();return {left,right,y:(top+bottom)/2}});
+      await page.mouse.move(box.left+1,box.y);await page.mouse.down();await page.mouse.move(box.right-1,box.y,{steps:6});await page.mouse.up();
+      await cite.click();await expect(context).toHaveCount(1);
+      await page.mouse.dblclick(box.left+6,box.y);await cite.click();await expect(context).toHaveCount(2);
+      const remove=context.getByRole("button",{name:"Remove context"});
+      await composer.click();await page.keyboard.press("Shift+Tab");await expect(remove.nth(1)).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(context).toHaveCount(1);await expect(remove.first()).toBeFocused();
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(remove.first()).toBeFocused();await page.screenshot({animations:"disabled",path:auditDir+"context-chip-removed-focus-before-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      await page.keyboard.press(" ");
+      await expect(context).toHaveCount(0);await expect(composer).toBeFocused();
+    }
+  }finally{await harness.close()}
+});
+
+test("/plan puts the plan prompt with what follows it in the composer, ready to send",async({page})=>{
+  test.setTimeout(60_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer");
+    await composer.click();await page.keyboard.type("/plan the release",{delay:15});await page.keyboard.press("Enter");
+    await expect(composer).toHaveValue("Create a clear execution plan, then carry it out. the release");
+    await expect(composer).toBeFocused();
+    await shootBoth(page,"plan-command",()=>expect(composer).toBeInViewport());
+  }finally{await harness.close()}
+});
+
+test("Enter held on a partial slash command completes it once, and its repeats neither run it nor send; a press of its own does",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Planned the release and carried it out."}]});
+  try{
+    const composer=page.getByTestId("composer"),menu=page.locator(".slash-menu"),users=page.locator(".user-bubble");
+    const plan="Create a clear execution plan, then carry it out. the release";
+    await composer.click();await page.keyboard.type("/pl",{delay:20});
+    await expect(menu.locator("button.active strong")).toHaveText("/plan");
+    // The press completes /plan. Its repeats would run it, and then send the plan prompt it puts in the composer.
+    await holdKey(page,"Enter",()=>expect(composer).toHaveValue("/plan "));
+    await page.keyboard.type("the release",{delay:15});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page"]);
+    await expect(composer).toHaveValue("/plan the release");await expect(menu).toHaveCount(0);await expect(users).toHaveCount(1);
+    await shootBoth(page,"held-enter-slash-command",()=>expect(composer).toBeInViewport());
+    // A press of its own runs /plan, and the next sends the plan prompt.
+    await composer.click();await page.keyboard.press("Control+End");await page.keyboard.press("Enter");
+    await expect(composer).toHaveValue(plan);
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Planned the release and carried it out.")).toBeVisible({timeout:15_000});
+    await expect(users).toHaveCount(2);await expect(users.last()).toContainText(plan);
+    expect(harness.turns(harness.threads[0])).toHaveLength(2);
+  }finally{await harness.close()}
+});
+
+// Escape closes the / menu for the draft as it stands, the / kept. It kept the menu closed for a bare / as long as the composer
+// stayed, which it does from thread to thread: a / typed again once the draft had changed (the / erased, /p erased back to /,
+// other text typed and cleared, another thread opened) showed no menu until the window reloaded. A / typed or pasted over the /
+// selected (Ctrl+A, Shift+Home, a double click, a drag) leaves the draft's text as it was, so React calls no onChange for it, and
+// the menu stayed closed over the / just typed until the next edit that changed the text (UI fix review, round 6).
+test("after Escape closes the / menu, a / typed once the draft has changed opens it again, also back from /p, after other text, typed or pasted over the / selected, and in another thread",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{others:["Release notes"]});
+  try{
+    const composer=page.getByTestId("composer"),menu=page.locator(".composer-wrap .slash-menu");
+    const openThread=async name=>{const row=threadRow(page,name);await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");await painted(page)};
+    // The whole menu, as a bare / opens it, and Escape closing it with the / kept, for as long as the draft stays.
+    const shows=how=>expect.soft(menu.getByText("/new",{exact:true}),how).toBeVisible();
+    const escape=async()=>{await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await expect(composer).toHaveValue("/");await frames(page);await expect(menu).toHaveCount(0)};
+    // Where the / is drawn in the composer (its first character, at the top left of its text), and just right of it.
+    const slashAt=dx=>composer.evaluate((node,dx)=>{const style=getComputedStyle(node),line=parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.2;return {x:parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft)+dx,y:parseFloat(style.borderTopWidth)+parseFloat(style.paddingTop)+line/2}},dx);
+    const selected=how=>expect.poll(()=>composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),{message:`the / ${how}`}).toEqual([0,1]);
+    // The / selected as a person selects it, each way after Escape has closed the menu over it.
+    const selections=[
+      ["selected with Ctrl+A",()=>page.keyboard.press("Control+A")],
+      ["selected with Shift+Home",()=>page.keyboard.press("Shift+Home")],
+      ["selected with a double click",async()=>composer.dblclick({position:await slashAt(2)})],
+      ["selected with a drag",async()=>{const box=await composer.boundingBox(),from=await slashAt(14),to=await slashAt(0);await page.mouse.move(box.x+from.x,box.y+from.y);await page.mouse.down();await page.mouse.move(box.x+(from.x+to.x)/2,box.y+to.y,{steps:4});await page.mouse.move(box.x+to.x,box.y+to.y,{steps:4});await page.mouse.up()}],
+    ];
+    for(const [mode,other] of [["dark","Release notes"],["light","Composer thread"]]){
+      await switchMode(page,mode);
+      await composer.click();await expect(composer).toHaveValue("");
+      await page.keyboard.type("/",{delay:20});await shows(`the first / in ${mode}`);await escape();
+      await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("/",{delay:20});await shows(`a / typed again after Escape in ${mode}`);
+      await page.screenshot({animations:"disabled",path:auditDir+`slash-menu-typed-again-after-escape-${mode}-1280x800.png`});
+      // The / selected and typed over with a /, or a / pasted over it: the draft reads / again, and the menu opens for the new /.
+      for(const [how,select] of selections){
+        await escape();await select();await selected(how);
+        await page.keyboard.type("/",{delay:20});await expect(composer).toHaveValue("/");await shows(`a / typed over the / ${how} after Escape in ${mode}`);
+      }
+      await page.screenshot({animations:"disabled",path:auditDir+`slash-menu-typed-over-selected-slash-after-escape-${mode}-1280x800.png`});
+      await escape();await page.keyboard.press("Control+A");await selected("selected with Ctrl+A for the paste");
+      await pasteText(page,"/");await expect(composer).toHaveValue("/");await shows(`a / pasted over the / after Escape in ${mode}`);
+      await page.screenshot({animations:"disabled",path:auditDir+`slash-menu-pasted-over-slash-after-escape-${mode}-1280x800.png`});
+      await escape();await page.keyboard.type("p",{delay:20});await expect(menu.getByText("/plan",{exact:true})).toBeVisible();
+      await page.keyboard.press("Backspace");await expect(composer).toHaveValue("/");await shows(`/p erased back to / after Escape in ${mode}`);
+      await escape();await page.keyboard.press("Backspace");await page.keyboard.type("Fix the login",{delay:20});
+      await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("/",{delay:20});await shows(`a / after other text after Escape in ${mode}`);
+      await escape();await page.keyboard.press("Backspace");await openThread(other);
+      await composer.click();await page.keyboard.type("/",{delay:20});await shows(`a / in ${other} after Escape in the thread before, in ${mode}`);
+      await page.screenshot({animations:"disabled",path:auditDir+`slash-menu-another-thread-after-escape-${mode}-1280x800.png`});
+      await page.keyboard.press("Backspace");await expect(menu).toHaveCount(0);
+    }
+  }finally{await harness.close()}
+});
+
+// The composer's search for the word at its caret, which fills the @ menu, as the GUI server answers it; and a click dx px right of
+// where the character at index starts on the draft's first line, as a person clicks the caret there (clicks 2: a double click there).
+const mentionSearched=(page,q)=>page.waitForResponse(response=>{const url=new URL(response.url());return url.pathname==="/api/workspace/search"&&url.searchParams.get("q")===q});
+async function clickInDraft(page,index,dx,clicks=1){
+  const composer=page.getByTestId("composer");
+  await composer.click({clickCount:clicks,position:await composer.evaluate((node,[index,dx])=>{
+    const style=getComputedStyle(node),ruler=document.createElement("canvas").getContext("2d");ruler.font=`${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    return {x:parseFloat(style.paddingLeft)+ruler.measureText(node.value.slice(0,index)).width+dx,y:parseFloat(style.paddingTop)+(parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.2)/2};
+  },[index,dx])});
+}
+
+// Escape's dismissal of the / or @ menu goes with the draft, which App keeps while a page (Settings, History) takes the chat's place
+// and the composer with it. The composer drawn again on the way back opened the / menu by itself over the unchanged /, the keyboard
+// still on the sidebar, and Enter in the composer then completed /compact instead of sending the / (round 7). An edit still opens it.
+test("after Escape closes the / or @ menu, Settings or History and back to the chat leave it shut over the unchanged draft, an edit opens it again, and Enter sends the draft as typed",async({page})=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Sent the slash as typed."}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),slash=page.locator(".composer-wrap .slash-menu"),mention=page.getByTestId("file-mention-menu"),destinations=page.getByRole("navigation",{name:"Destinations"});
+    // The draft typed into the emptied composer, its menu open, and Escape closing the menu with the draft kept.
+    const escaped=async(text,menu)=>{
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type(text,{delay:20});await expect(menu).toBeVisible();await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await expect(composer).toHaveValue(text);
+    };
+    // A page opened from the sidebar (or Settings with its key), the composer gone with the chat, and the chat again through Threads
+    // (the sidebar's brand) or the thread's row.
+    const awayAndBack=async(name,heading,back)=>{
+      if(name==="Ctrl+,")await page.keyboard.press("Control+Comma");else await destinations.getByRole("button",{name,exact:true}).click();
+      await expect(page.getByRole("heading",{name:heading,exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+      await (back==="Threads"?page.getByRole("button",{name:"Threads",exact:true}):threadRow(page,"Composer thread").locator(".thread-main")).click();
+      await expect(composer).toBeEnabled();await painted(page);
+    };
+    for(const [mode,width] of [["dark",1280],["light",900]]){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      for(const [name,heading,back] of [["Settings","Settings","Threads"],["Settings","Settings","the thread's row"],["Ctrl+,","Settings","the thread's row"],["History","Thread history","the thread's row"]]){
+        await escaped("/",slash);await awayAndBack(name,heading,back);
+        await expect.soft(slash,`the / menu back from ${name} through ${back} in ${mode} at ${width}`).toHaveCount(0);await expect(composer).toHaveValue("/");
+      }
+      await page.screenshot({animations:"disabled",path:auditDir+`slash-menu-shut-after-history-and-back-${mode}-${width}x800.png`});
+      // The @ menu as well: back in the composer, a click past the draft's end searches for the word at the caret again, and the
+      // menu stays shut.
+      await escaped("Check @log",mention);await awayAndBack("Settings","Settings","Threads");
+      const answered=mentionSearched(page,"log");await clickInDraft(page,10,40);await (await answered).finished();await painted(page);
+      await expect.soft(mention,`the @ menu back from Settings in ${mode} at ${width}`).toHaveCount(0);await expect(composer).toHaveValue("Check @log");
+    }
+    await page.setViewportSize({width:1280,height:800});
+    // An edit back in the composer opens the menu again: /p, and the p erased back to /.
+    await escaped("/",slash);await awayAndBack("Settings","Settings","Threads");
+    await composer.click();await page.keyboard.type("p",{delay:20});await expect(slash.getByText("/plan",{exact:true})).toBeVisible();
+    await page.keyboard.press("Backspace");await expect(composer).toHaveValue("/");await expect(slash.getByText("/new",{exact:true})).toBeVisible();
+    // Enter sends the / as Escape left it, back from History.
+    await page.keyboard.press("Escape");await expect(slash).toHaveCount(0);await awayAndBack("History","Thread history","the thread's row");
+    await composer.click();await page.keyboard.press("End");await page.keyboard.press("Enter");
+    await expect(page.getByText("Sent the slash as typed.",{exact:true})).toBeVisible({timeout:15_000});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","/"]);await expect(composer).toHaveValue("");
+  }finally{await harness.close()}
+});
+
+test("Enter held on the @ file menu attaches the file once, and its repeats send nothing; a press of its own sends the message with it",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"The login redirect is fixed."}]});
+  try{
+    await mkdir(join(harness.repo,"src"),{recursive:true});
+    for(const name of ["login","logout"])await writeFile(join(harness.repo,"src",name+".js"),`export function ${name}(){}\n`);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),users=page.locator(".user-bubble"),context=page.getByTestId("context-chip");
+    await composer.click();await page.keyboard.type("Check @log",{delay:20});
+    await expect(menu.locator("button.active strong")).toHaveText("login.js");
+    // The press attaches login.js. Its repeats would send the message, only begun, with the file.
+    await holdKey(page,"Enter",async()=>{await expect(context).toHaveCount(1);await expect(composer).toHaveValue("Check @src/login.js ")});
+    await page.keyboard.type("for the redirect",{delay:15});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page"]);
+    await expect(composer).toHaveValue("Check @src/login.js for the redirect");await expect(context).toContainText("login.js");await expect(users).toHaveCount(1);
+    await shootBoth(page,"held-enter-file-mention",()=>expect(composer).toBeInViewport());
+    // A press of its own sends it, with the file.
+    await composer.click();await page.keyboard.press("Control+End");await page.keyboard.press("Enter");
+    await expect(page.getByText("The login redirect is fixed.")).toBeVisible({timeout:15_000});
+    await expect(users).toHaveCount(2);await expect(users.last()).toContainText("Check @src/login.js for the redirect");
+    await expect(context).toHaveCount(0);expect(harness.turns(harness.threads[0])).toHaveLength(2);
+  }finally{await harness.close()}
+});
+
+// Escape closes the @ menu for the draft as it stands, as it closes the / menu: the menu stays shut while the caret moves with no
+// edit (an arrow key, Home and End, a click in the word or past the draft's end), and Enter then sends the message as typed. Each
+// move searched again for the word at the caret and opened the menu over the draft, and Enter attached the file it highlighted
+// instead of sending (round 7). An edit opens it again, also one that leaves the draft's text as it was (a letter typed over itself).
+test("after Escape closes the @ file menu, the arrow keys, Home and End or a click leave it shut and Enter sends the message as typed, and an edit opens it again",async({page})=>{
+  test.setTimeout(150_000);
+  const replies=["Sent as typed, with no file.","Sent as typed again, with no file."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip");
+    // A move of the caret into another word of the mention, the composer's search for that word answered and drawn: the menu stays shut.
+    const stays=async(how,q,move)=>{const answered=mentionSearched(page,q);await move();await (await answered).finished();await painted(page);await expect.soft(menu,`the @ menu after Escape and ${how}`).toHaveCount(0)};
+    for(const [mode,width,reply] of [["dark",1280,replies[0]],["light",900,replies[1]]]){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}`;
+      await composer.click();await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await expect(composer).toHaveValue("Check @log");
+      await stays("ArrowLeft"+where,"lo",()=>page.keyboard.press("ArrowLeft"));
+      await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-after-escape-and-arrowleft-${mode}-${width}x800.png`});
+      await stays("ArrowRight"+where,"log",()=>page.keyboard.press("ArrowRight"));
+      await page.keyboard.press("Home");await stays("Home and End"+where,"log",()=>page.keyboard.press("End"));
+      await stays("a click inside @log"+where,"lo",()=>clickInDraft(page,9,2));
+      await stays("a click past the draft's end"+where,"log",()=>clickInDraft(page,10,40));
+      // Enter sends the draft as typed, with no file.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(reply,{exact:true})).toBeVisible({timeout:15_000});
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);
+      await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-enter-sends-after-escape-${mode}-${width}x800.png`});
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Check @log","Check @log"]);
+    await page.setViewportSize({width:1280,height:800});
+    // An edit opens the menu again: a letter typed, a letter erased, a letter typed over itself.
+    await composer.click();await page.keyboard.type("Check @log",{delay:20});await expect(menu).toBeVisible();await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);
+    await page.keyboard.type("i",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+    await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await page.keyboard.press("Backspace");await expect(composer).toHaveValue("Check @log");await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);
+    await stays("Shift+ArrowLeft","lo",()=>page.keyboard.press("Shift+ArrowLeft"));
+    await page.keyboard.type("g",{delay:20});await expect(composer).toHaveValue("Check @log");await expect(menu.locator("button.active strong")).toHaveText("login.js");
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu with the caret inside the word (an arrow key or a click put it there) replaces the whole word, while
+// the menu lists what matches the part before the caret. The rest of the word stayed after the file, so the composer read 'Check
+// @src/login.js g' and a send carried the g (round 8). The punctuation that ends the word is not part of it and stays after the file.
+test("a file picked from the @ menu with the caret inside its word replaces the whole word, keeping the punctuation after it, by Enter, Tab or a click, the caret put there by ArrowLeft or a click",async({page})=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Checked the login file."}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip");
+    // The caret put just before the punctuation after '@log' (a full stop at the draft's end, a comma with more words after it, a
+    // closing bracket) and the menu listing what matches 'log': the file goes on the word, the punctuation stays after it with the
+    // caret between them, and what is typed on goes there. The pick took the whole word up to the next whitespace, the punctuation
+    // with it: 'Look at @src/login.js ' (round 8 repair).
+    for(const [index,[mode,width,draft,left,pick,picked,typed]] of [
+      ["dark",1280,"Look at @log.",1,"Enter","Look at @src/login.js .","Look at @src/login.js now."],
+      ["light",900,"Check @log, then run it",13,"a click","Check @src/login.js , then run it","Check @src/login.js now, then run it"],
+      ["light",1280,"(see @log) please",8,"Tab","(see @src/login.js ) please","(see @src/login.js now) please"],
+    ].entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, the caret put before what follows '@log' in '${draft}' and the file picked by ${pick}`,caret=draft.indexOf("@log")+4;
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type(draft,{delay:20});
+      const answered=mentionSearched(page,"log");for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);
+      await expect.poll(()=>composer.evaluate(node=>node.selectionStart),"the caret"+where).toBe(caret);
+      await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      if(pick==="a click")await menu.locator("button").filter({hasText:"src/login.js"}).click();else await page.keyboard.press(pick);
+      await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(picked);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after the file"+where).toEqual([caret+10,caret+10]);
+      await frames(page);await page.keyboard.type("now",{delay:20});await expect.soft(composer,"the draft typed on"+where).toHaveValue(typed);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-picked-before-the-punctuation-after-its-word-${mode}-${width}x800.png`});
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+    const rounds=[["dark",1280,"ArrowLeft","Enter"],["dark",1280,"a click","a click"],["light",900,"a click","Enter"],["light",900,"ArrowLeft","a click"],["light",1280,"ArrowLeft","Tab"]];
+    for(const [index,[mode,width,move,pick]] of rounds.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, the caret put in the word by ${move} and the file picked by ${pick}`;
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      // The caret between 'lo' and 'g', and the menu then lists what matches 'lo'.
+      const answered=mentionSearched(page,"lo");
+      if(move==="ArrowLeft")await page.keyboard.press("ArrowLeft");else await clickInDraft(page,9,2);
+      await (await answered).finished();await painted(page);
+      await expect.poll(()=>composer.evaluate(node=>node.selectionStart),"the caret"+where).toBe(9);
+      await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      if(pick==="a click")await menu.locator("button").filter({hasText:"src/login.js"}).click();else await page.keyboard.press(pick);
+      await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js ");
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after the file"+where).toEqual([20,20]);
+      await frames(page);await page.keyboard.type("now",{delay:20});await expect.soft(composer,"the draft typed on"+where).toHaveValue("Check @src/login.js now");
+      if(index===0||index===2)await page.screenshot({animations:"disabled",path:auditDir+`mention-picked-inside-its-word-${mode}-${width}x800.png`});
+      if(index<rounds.length-1){await context.locator("button").click();await expect(context).toHaveCount(0)}
+    }
+    // Enter sends the message as it reads, with the file.
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Checked the login file.",{exact:true})).toBeVisible({timeout:15_000});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Check @src/login.js now"]);
+    await expect(page.locator(".user-bubble").last()).toContainText("Check @src/login.js now");await expect(page.locator(".user-bubble").last()).toContainText("login.js");
+    await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+// The file picked from the @ menu is imported before it goes into the draft, and the composer takes keys meanwhile, so a person types
+// on: once the file is in it goes on the word it was picked on, with what was typed meanwhile after it and the caret at its end. The
+// draft as it was at the pick went in over what was typed (an import slowed by a remote environment, a big file or a busy machine), and
+// a letter typed as it went in landed before the caret the next frame put back (round 8). A refused import keeps the draft as typed.
+// Meanwhile the menu's files are dimmed, as they were while they were disabled: aria-disabled took the place of disabled and left them
+// at full strength, a menu that looked live and took no press (round 8 repair).
+test("letters typed on while a file picked from the @ menu imports stay after it once it is in, the caret after them, by Enter or a click, the menu's files dimmed meanwhile, and a refused import leaves them as typed",async({page})=>{
+  test.setTimeout(180_000);
+  const harness=await openComposerApp(page);
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),toast=page.getByTestId("app-action-error");
+    // The import held as a slow one is: hold ms, and until typed settles when it is set. A refusal, when set, refuses it.
+    let hold=0,typed=null,refusal="";
+    await page.route(/\/api\/attachments\/import$/,async route=>{
+      await Promise.all([new Promise(done=>setTimeout(done,hold)),typed]);
+      if(refusal)await route.fulfill({status:400,contentType:"application/json",body:JSON.stringify({error:refusal})});else await route.fallback();
+    });
+    // The menu's files as a person sees them: on or off (aria-disabled), and their opacity.
+    const rowsLook=()=>menu.locator("button").evaluateAll(rows=>[...new Set(rows.map(row=>(row.getAttribute("aria-disabled")==="true"?"off ":"on ")+getComputedStyle(row).opacity))]);
+    // 'Check @log' typed in the emptied composer, login.js picked by Enter (held 80 ms), a click or a double click on it, and 'now'
+    // typed at a person's pace: the first letter 120 ms after Enter or the click is let go, 60 ms a key. Where held names the import
+    // held till the letters are typed, the menu's files are at full strength before the pick and dimmed and off after it.
+    const pickAndType=async(pick,held="")=>{
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      const file=menu.locator("button").filter({hasText:"src/login.js"});
+      if(held)await expect.soft.poll(rowsLook,"the menu's files before the pick"+held).toEqual(["on 1"]);
+      if(pick==="Enter"){await page.keyboard.down("Enter");await page.waitForTimeout(80);await page.keyboard.up("Enter")}
+      else if(pick==="a click")await file.click({delay:80});else await file.dblclick();
+      if(held)await expect.soft.poll(rowsLook,"the menu's files while login.js imports"+held).toEqual(["off 0.62"]);
+      await page.waitForTimeout(120);await page.keyboard.type("now",{delay:60});
+    };
+    for(const [mode,ms] of [["dark",900],["light",900],["dark",300],["light",300]]){
+      await switchMode(page,mode);
+      for(const pick of ["Enter","a click","a double click"]){
+        const where=` in ${mode}, the import ${ms} ms slow and login.js picked by ${pick}`;
+        let release=null;hold=ms;typed=ms===900?new Promise(done=>{release=done}):null;
+        await pickAndType(pick,release?where:"");
+        // At 900 ms every letter is typed while the file imports (at 300 ms it comes in between them): the draft reads as typed.
+        if(release){
+          await expect.soft(composer,"the draft while the file imports"+where).toHaveValue("Check @lognow");await expect(context).toHaveCount(0);
+          if(pick==="Enter")await page.screenshot({animations:"disabled",path:auditDir+`mention-typed-on-while-the-file-imports-${mode}-1280x800.png`});
+          release();
+        }
+        await expect(context).toHaveCount(1);
+        await expect.soft(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js now");
+        expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret"+where).toEqual([23,23]);
+        await page.keyboard.type("!",{delay:20});await expect.soft(composer,"the draft typed on"+where).toHaveValue("Check @src/login.js now!");
+        if(pick==="Enter")await page.screenshot({animations:"disabled",path:auditDir+`mention-typed-on-after-the-file-imported-${ms}ms-${mode}-1280x800.png`});
+        await context.locator("button").click();await expect(context).toHaveCount(0);
+      }
+    }
+    // Something else done while the file is held: letters typed before the word (Home, then 'Please '), the word erased, or letters
+    // typed in another field (the thread search). The draft keeps what was typed, the caret its place and the keyboard its field. The
+    // erased word gets no file, and no chip either (round 9: the chip stayed, and went with the next message).
+    const search=page.getByRole("textbox",{name:"Search threads"});
+    for(const [how,edit,draft,caret,chip] of [
+      ["letters typed before the word",async()=>{await page.keyboard.press("Home");await page.keyboard.type("Please ",{delay:60})},"Please Check @src/login.js ",7,1],
+      ["the word erased",async()=>{for(let key=0;key<4;key++)await page.keyboard.press("Backspace")},"Check ",6,0],
+      ["letters typed in the thread search",async()=>{await search.click();await page.keyboard.type("zz",{delay:60})},"Check @src/login.js ",20,1],
+    ]){
+      let release=null;hold=300;typed=new Promise(done=>{release=done});
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      const landed=chip?null:page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");
+      await page.keyboard.press("Enter");await edit();release();
+      if(chip)await expect(context).toHaveCount(1);else{await (await landed).finished();await painted(page);await expect.soft(context,`the chips with ${how} while the file imports`).toHaveCount(0)}
+      await expect.soft(composer,`the draft with ${how} while the file imports`).toHaveValue(draft);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),`the caret with ${how} while the file imports`).toEqual([caret,caret]);
+      if(how.includes("search")){await expect.soft(search,"the keyboard in the thread search").toBeFocused();await expect(search).toHaveValue("zz");await page.keyboard.press("Control+A");await page.keyboard.press("Backspace")}
+      else await expect.soft(composer,`the keyboard in the composer with ${how}`).toBeFocused();
+      if(await context.count()){await context.locator("button").click();await expect(context).toHaveCount(0)}
+    }
+    // The file in at once. Letters typed straight after Enter, as a script types, each land where they were typed, none before the
+    // caret (the next frame put it back after the file, before a letter typed in between). A double click's second click, on what is
+    // under the menu once the file is in, leaves the keyboard in the composer for what is typed on.
+    hold=0;typed=null;
+    for(const [mode,pick] of [["dark","Enter"],["light","Enter"],["dark","a double click"],["light","a double click"]]){
+      await switchMode(page,mode);
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      if(pick==="Enter")await page.keyboard.press("Enter");
+      else{
+        // The first click, and once the file is in and the menu gone the second, where the pointer still is.
+        await menu.locator("button").filter({hasText:"src/login.js"}).click();await expect(context).toHaveCount(1);await expect(menu).toHaveCount(0);
+        await page.mouse.down({clickCount:2});await page.mouse.up({clickCount:2});
+      }
+      await page.keyboard.type("now",{delay:20});
+      await expect(context).toHaveCount(1);await expect.soft(composer,`the draft typed on straight after ${pick} in ${mode}`).toHaveValue("Check @src/login.js now");
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+    // A refused import: the draft stays as typed, with no file, and the toast says why.
+    hold=300;typed=null;refusal="Remote attachment copy exited with code 255";
+    await pickAndType("Enter");
+    await expect(toast).toHaveText("Could not attach file mention: Remote attachment copy exited with code 255");
+    await frames(page);await expect(composer).toHaveValue("Check @lognow");await expect(context).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+// A page opened while the picked file imports (Settings by Ctrl+, or from the sidebar, History) takes the composer away with the chat,
+// and the person comes back to the thread from its row. Once the file is in it goes on its word in the draft as it is then: with the
+// page still up, into the draft the composer drawn again shows; with the composer drawn again, into it, what was typed there kept and
+// its caret set with it, so no @ menu opens over the draft for the caret it had before. The draft as it was at the pick went in over
+// what was typed before the page opened and after (round 8 repair).
+test("letters typed on while a file picked from the @ menu imports stay after it once it is in, also when Settings or History takes the composer away meanwhile and the thread is opened again before or after the file is in",async({page})=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page);
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),destinations=page.getByRole("navigation",{name:"Destinations"});
+    // The import held until the round lets it in.
+    let held=null;
+    await page.route(/\/api\/attachments\/import$/,async route=>{await held;await route.fallback()});
+    for(const [mode,away,heading,landsAway,draft] of [
+      ["dark","Ctrl+,","Settings",true,"Check @src/login.js now"],
+      ["light","Settings","Settings",false,"Check @src/login.js now!"],
+      ["dark","History","Thread history",false,"Check @src/login.js now!"],
+      ["light","History","Thread history",true,"Check @src/login.js now"],
+    ]){
+      await switchMode(page,mode);
+      const where=` with ${away} opened while the file imports and the file in ${landsAway?"before":"after"} the thread is opened again, in ${mode}`,shown=away==="History"?"history":"settings";
+      let release=null;held=new Promise(done=>{release=done});
+      // The file let in, and the app done with the import's answer.
+      const fileIn=async()=>{const done=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await done).finished();await painted(page)};
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type("Check @log",{delay:20});await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      await page.keyboard.press("Enter");await page.keyboard.type(" now",{delay:60});await expect(composer).toHaveValue("Check @log now");
+      if(away==="Ctrl+,")await page.keyboard.press("Control+Comma");else await destinations.getByRole("button",{name:away,exact:true}).click();
+      await expect(page.getByRole("heading",{name:heading,exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+      if(landsAway)await fileIn();
+      await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);
+      if(!landsAway){
+        await expect(composer).toHaveValue("Check @log now");await expect(context).toHaveCount(0);
+        await clickInDraft(page,14,40);await page.keyboard.type("!",{delay:20});await expect(composer).toHaveValue("Check @log now!");await fileIn();
+      }
+      await expect(context).toHaveCount(1);await expect.soft(composer,"the draft"+where).toHaveValue(draft);
+      if(!landsAway){
+        expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret"+where).toEqual([24,24]);
+        await expect.soft(composer,"the keyboard in the composer"+where).toBeFocused();
+      }
+      // No @ menu over the draft, once a search for the word at the caret the composer had before would have answered.
+      await page.waitForTimeout(400);await painted(page);await expect.soft(menu,"the @ menu"+where).toHaveCount(0);
+      await page.screenshot({animations:"disabled",path:auditDir+(landsAway?`mention-file-in-while-${shown}-is-up`:`mention-file-in-after-${shown}-and-back`)+`-${mode}-1280x800.png`});
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+  }finally{await harness.close()}
+});
+
+// The import of a file picked from the @ menu held as a slow one is: hold ms, and until the round lets it in (held).
+async function holdMentionImports(page){
+  const control={hold:0,held:null};
+  await page.route(/\/api\/attachments\/import$/,async route=>{await Promise.all([new Promise(done=>setTimeout(done,control.hold)),control.held]);await route.fallback()});
+  return control;
+}
+// The emptied composer with 'Check @log' typed in it, or draft, and its @ menu offering login.js first.
+async function typeMention(page,draft="Check @log"){
+  const composer=page.getByTestId("composer");
+  await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+  await page.keyboard.type(draft,{delay:20});await expect(page.getByTestId("file-mention-menu").locator("button.active strong")).toHaveText("login.js");
+}
+// login.js picked from the @ menu as a person picks it: Enter or Tab held 80 ms, or a click.
+async function pickLogin(page,pick){
+  if(pick==="a click")await page.getByTestId("file-mention-menu").locator("button").filter({hasText:"src/login.js"}).click({delay:80});
+  else{await page.keyboard.down(pick);await page.waitForTimeout(80);await page.keyboard.up(pick)}
+}
+
+// A send while the file picked from the @ menu imports waits for it, as a send waits for a file that uploads: Enter and a click on Send
+// do nothing, Send's title says what it waits for, also in the composer drawn again back from Settings, and once the file is in the
+// message goes with it. The message went at once with its text only, and the file's chip, landing in the composer the send had emptied,
+// went with the next message (round 9).
+test("a message sent while a file picked from the @ menu imports waits for the file, Send's title saying so, also back from Settings, and then goes with it, by Enter or a click on Send",async({page})=>{
+  test.setTimeout(240_000);
+  const replies=["Checked it with the file.","Checked it with the file again.","Checked it once more with the file.","Checked it after the file came in.","Checked it back from Settings."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),context=page.getByTestId("context-chip"),send=page.getByTestId("send"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),waiting="Waiting for src/login.js to attach",imports=await holdMentionImports(page);
+    // A click where Send is, as a person clicks it whether it is on or off.
+    const clickSend=async()=>{const box=await send.boundingBox();await page.mouse.click(box.x+box.width/2,box.y+box.height/2)};
+    let sent=1;
+    for(const [index,[mode,ms,pick,how]] of [["dark",900,"Enter","Enter"],["light",900,"a click","a click on Send"],["dark",300,"Tab","a click on Send"],["light",300,"Enter","Enter"]].entries()){
+      await switchMode(page,mode);
+      const where=` in ${mode}, the import ${ms} ms slow, login.js picked by ${pick} and ${how} while it imports`;
+      let release=null;imports.hold=ms;imports.held=new Promise(done=>{release=done});
+      // ' please' typed at a person's pace, the first letter 120 ms after the pick, 60 ms a key, and the message sent.
+      await typeMention(page);await pickLogin(page,pick);await page.waitForTimeout(120);await page.keyboard.type(" please",{delay:60});
+      await expect(send,"Send"+where).toBeDisabled();await expect(send,"Send's title"+where).toHaveAttribute("title",waiting);
+      if(how==="Enter")await page.keyboard.press("Enter");else await clickSend();
+      await painted(page);
+      await expect(composer,"the draft"+where).toHaveValue("Check @log please");await expect(users,"the messages"+where).toHaveCount(sent);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-send-waits-for-the-file-${mode}-1280x800.png`});
+      release();
+      await expect(context).toHaveCount(1);await expect(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js please");
+      await expect(send).toBeEnabled();await expect(send).toHaveAttribute("title","Send message");
+      if(how==="Enter")await page.keyboard.press("Enter");else await send.click();
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});sent++;
+      await expect(users).toHaveCount(sent);await expect(users.last().locator("p")).toHaveText("Check @src/login.js please");await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-sent-with-the-file-once-in-${mode}-1280x800.png`});
+    }
+    // Settings opened while the file imports and the thread opened again from its row: the composer drawn again waits for the file too.
+    let release=null;imports.hold=0;imports.held=new Promise(done=>{release=done});
+    await typeMention(page);await page.keyboard.press("Enter");await page.keyboard.type(" please",{delay:60});await expect(composer).toHaveValue("Check @log please");
+    await page.keyboard.press("Control+Comma");await expect(page.getByRole("heading",{name:"Settings",exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+    await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);
+    await expect(send,"Send back from Settings").toBeDisabled();await expect(send,"Send's title back from Settings").toHaveAttribute("title",waiting);
+    await composer.click();await page.keyboard.press("End");await page.keyboard.press("Enter");await painted(page);
+    await expect(composer,"the draft back from Settings").toHaveValue("Check @log please");await expect(users,"the messages back from Settings").toHaveCount(sent);
+    release();await expect(context).toHaveCount(1);await expect(composer).toHaveValue("Check @src/login.js please");
+    await page.keyboard.press("End");await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[4],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users).toHaveCount(sent+1);await expect(files).toHaveText(["login.js"]);await expect(context).toHaveCount(0);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...Array(5).fill("Check @src/login.js please")]);
+  }finally{await harness.close()}
+});
+
+// A pick whose word is gone once its file is in (erased, or the draft cleared, while it imported) puts nothing on the draft and takes
+// its chip back, so the next message goes without the file: the chip stayed and went with the next message (round 9). A file the draft
+// had already keeps its chip.
+test("a file picked from the @ menu whose word is gone once it is in leaves no chip, and the next message goes without it, while a file the draft had already keeps its chip",async({page})=>{
+  test.setTimeout(150_000);
+  const replies=["The second message went alone.","The file went along."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble"),files=users.last().locator(".user-attachments > span");
+    const imports=await holdMentionImports(page);
+    // The file let in, and the app done with the import's answer.
+    const fileIn=async release=>{const done=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await done).finished();await painted(page)};
+    for(const [mode,pick,how,edit,draft] of [
+      ["dark","Enter","the word erased",async()=>{for(let key=0;key<4;key++)await page.keyboard.press("Backspace")},"Check "],
+      ["light","a click","the word erased",async()=>{for(let key=0;key<4;key++)await page.keyboard.press("Backspace")},"Check "],
+      ["dark","Tab","the draft cleared",async()=>{await page.keyboard.press("Control+A");await page.keyboard.press("Backspace")},""],
+    ]){
+      await switchMode(page,mode);
+      let release=null;imports.hold=300;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,pick);await edit();await expect(composer).toHaveValue(draft);
+      await fileIn(release);
+      await expect.soft(context,`the chips once the file is in, with ${how} while it imported, in ${mode}`).toHaveCount(0);await expect(composer).toHaveValue(draft);
+      if(pick!=="Tab")await page.screenshot({animations:"disabled",path:auditDir+`mention-word-gone-no-chip-${mode}-1280x800.png`});
+    }
+    // The next message goes without the file.
+    await page.keyboard.type("The second message",{delay:20});await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[0],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText("The second message");await expect(files,"the files the second message went with").toHaveCount(0);
+    // login.js on the draft already, picked again on another word that is erased while it imports: its chip stays, and goes with the message.
+    imports.hold=0;imports.held=null;
+    await typeMention(page);await page.keyboard.press("Enter");await expect(context).toHaveCount(1);await expect(composer).toHaveValue("Check @src/login.js ");
+    let release=null;imports.held=new Promise(done=>{release=done});
+    await page.keyboard.type("and @log",{delay:20});await expect(page.getByTestId("file-mention-menu").locator("button.active strong")).toHaveText("login.js");
+    await page.keyboard.press("Enter");for(let key=0;key<4;key++)await page.keyboard.press("Backspace");
+    await fileIn(release);
+    await expect(context,"the chip of the file on the draft already").toHaveCount(1);await expect(composer).toHaveValue("Check @src/login.js and ");
+    await page.keyboard.type("logout",{delay:20});await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[1],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText("Check @src/login.js and logout");await expect(files).toHaveText(["login.js"]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu shows where its chip comes, as attaching (login.js, Attaching… and its icon turning), while it imports
+// with its word in the draft, also in the composer drawn again back from Settings, as a file that uploads shows on the shelf: Enter and
+// Send wait for it, and only Send's title said why, the @ menu that showed the file shut once the caret left its word. Once the word is
+// gone (erased, or the draft emptied by New task) the file will not go with the message, so the chip goes and Send is on again for the
+// draft as it is: Send stayed off, its title waiting for the file, until the import ended (round 9 repair).
+test("a file picked from the @ menu shows as attaching where its chip comes while it imports, also back from Settings, and once its word is gone the wait ends and the message goes without it, also on New task",async({page})=>{
+  test.setTimeout(180_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Checked the login page without the file."}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),send=page.getByTestId("send"),users=page.locator(".user-bubble");
+    const imports=await holdMentionImports(page),waiting="Waiting for src/login.js to attach";
+    // The file let in, and the app done with the import's answer.
+    const fileIn=async release=>{const done=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await done).finished();await painted(page)};
+    // The attaching chip as a person sees it: in the composer's chip row above the draft, the file's name, Attaching… and its icon
+    // turning, or null with none.
+    const readAttaching=()=>page.evaluate(()=>{
+      const chip=document.querySelector("[data-testid=mention-attaching]");if(!chip)return null;
+      const draft=document.querySelector("[data-testid=composer]").getBoundingClientRect(),box=chip.getBoundingClientRect(),icon=chip.querySelector("svg");
+      return {row:Boolean(chip.closest(".composer-wrap [data-testid=context-chips]")),above:box.bottom<=draft.top,name:chip.querySelector("strong")?.textContent,note:chip.querySelector("small")?.textContent,title:chip.title,busy:chip.getAttribute("aria-busy"),turning:icon?getComputedStyle(icon).animationName:"no icon"};
+    });
+    // While the file imports with its word in the draft: the chip, and Send off, its title saying why.
+    const waits=async where=>{
+      await expect.soft.poll(readAttaching,"the attaching chip"+where).toEqual({row:true,above:true,name:"login.js",note:"Attaching…",title:"Attaching src/login.js…",busy:"true",turning:"tb-spin"});
+      await expect.soft(send,"Send"+where).toBeDisabled();await expect.soft(send,"Send's title"+where).toHaveAttribute("title",waiting);
+    };
+    // Once the word is gone: no chip, and Send on for the draft as it is, with its own title.
+    const goesOn=async where=>{
+      await expect.soft.poll(readAttaching,"the attaching chip"+where).toBe(null);
+      await expect.soft(send,"Send"+where).toBeEnabled();await expect.soft(send,"Send's title"+where).toHaveAttribute("title","Send message");
+    };
+    // Picked by Enter or a click and ' please' typed on: the chip shows, Enter sends nothing, and the file's chip takes its place once
+    // the file is in.
+    for(const [mode,width,pick] of [["dark",1280,"Enter"],["light",900,"a click"]]){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} and ' please' typed on while it imports`;
+      let release=null;imports.hold=300;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,pick);await page.waitForTimeout(120);await page.keyboard.type(" please",{delay:60});
+      await expect(composer).toHaveValue("Check @log please");await expect(menu).toHaveCount(0);
+      await waits(where);
+      await page.keyboard.press("Enter");await painted(page);await expect(users,"the messages"+where).toHaveCount(1);await expect(composer).toHaveValue("Check @log please");
+      await page.screenshot({animations:"disabled",path:auditDir+`mention-attaching-chip-${mode}-${width}x800.png`});
+      await fileIn(release);
+      await expect(context).toHaveCount(1);await expect(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js please");
+      expect.soft(await readAttaching(),"the attaching chip once the file is in"+where).toBe(null);await expect(send).toBeEnabled();
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+    await page.setViewportSize({width:1280,height:800});
+    // Settings opened by Ctrl+, while the file imports and the thread opened again from its row: the composer drawn again shows the
+    // chip too.
+    {
+      await switchMode(page,"dark");let release=null;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,"Enter");await page.keyboard.type(" please",{delay:60});await expect(composer).toHaveValue("Check @log please");
+      await page.keyboard.press("Control+Comma");await expect(page.getByRole("heading",{name:"Settings",exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+      await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);
+      await waits(" back from Settings");
+      await page.screenshot({animations:"disabled",path:auditDir+"mention-attaching-chip-back-from-settings-dark-1280x800.png"});
+      await fileIn(release);await expect(context).toHaveCount(1);await expect(composer).toHaveValue("Check @src/login.js please");
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+    // The word erased while the file imports and other words typed: no chip, Send on, and Enter sends the message without the file;
+    // the file in after that leaves no chip, and the composer empty.
+    {
+      await switchMode(page,"light");let release=null;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,"Enter");for(let key=0;key<4;key++)await page.keyboard.press("Backspace");
+      await page.keyboard.type("the login page",{delay:20});await expect(composer).toHaveValue("Check the login page");
+      await goesOn(" with the word erased while the file imports");
+      await page.screenshot({animations:"disabled",path:auditDir+"mention-word-erased-send-on-light-1280x800.png"});
+      await page.keyboard.press("Enter");
+      await expect(page.getByText("Checked the login page without the file.",{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users).toHaveCount(2);await expect(users.last().locator("p")).toHaveText("Check the login page");await expect(users.last().locator(".user-attachments > span")).toHaveCount(0);
+      await fileIn(release);
+      await expect.soft(context,"the chips once the file is in, after the message went without it").toHaveCount(0);await expect(composer).toHaveValue("");
+    }
+    // New task opened while the file imports: its composer shows no chip and Send is on for what is typed there, and the file in leaves
+    // it as typed, with no chip.
+    {
+      await switchMode(page,"dark");let release=null;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,"Enter");await page.keyboard.type(" please",{delay:60});await waits(" before New task");
+      await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"New task",exact:true}).click();
+      await expect(composer).toHaveValue("");await composer.click();await page.keyboard.type("Start on the login page",{delay:20});
+      await goesOn(" on New task");
+      await page.screenshot({animations:"disabled",path:auditDir+"mention-new-task-send-on-dark-1280x800.png"});
+      await fileIn(release);
+      await expect.soft(context,"the chips on New task once the file is in").toHaveCount(0);await expect(composer).toHaveValue("Start on the login page");
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Check the login page"]);
+  }finally{await harness.close()}
+});
+
+// Letters typed on both sides of the picked word while its file imports, after it and then before it (Home or a click at the draft's
+// start) or the other way, keep the word: once the file is in it goes on the word, with all that was typed kept. The two edits read as
+// one over the word, so the file was not put on it and the message went with '@log' in its text and the chip (round 9).
+test("letters typed before and after the word a file is picked on from the @ menu while it imports keep it, so the file goes on it once it is in, by Enter, Tab or a click, Home, End or a click",async({page})=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Checked the login file now."}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),context=page.getByTestId("context-chip"),imports=await holdMentionImports(page);
+    const cases=[
+      ["dark",900,"Enter","after it, then before it with Home",async()=>{await page.keyboard.type(" now",{delay:60});await page.keyboard.press("Home");await page.keyboard.type("Please ",{delay:60})},"Please Check @src/login.js now",7],
+      ["light",900,"a click","before it with Home, then after it with End",async()=>{await page.keyboard.press("Home");await page.keyboard.type("Please ",{delay:60});await page.keyboard.press("End");await page.keyboard.type(" now",{delay:60})},"Please Check @src/login.js now",30],
+      ["dark",300,"Tab","after it, then before it with a click at the draft's start",async()=>{await page.keyboard.type(" now",{delay:60});await clickInDraft(page,0,1);await page.keyboard.type("Please ",{delay:60})},"Please Check @src/login.js now",7],
+      ["light",300,"Enter","'!' straight after it, then before it with Home",async()=>{await page.keyboard.type("!",{delay:60});await page.keyboard.press("Home");await page.keyboard.type("Now ",{delay:60})},"Now Check @src/login.js !",4],
+    ];
+    for(const [index,[mode,ms,pick,how,edit,draft,caret]] of cases.entries()){
+      await switchMode(page,mode);
+      const where=` in ${mode}, the import ${ms} ms slow, login.js picked by ${pick} and letters typed ${how} while it imports`;
+      let release=null;imports.hold=ms;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,pick);await page.waitForTimeout(120);await edit();
+      await expect(context).toHaveCount(0);release();
+      await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(draft);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret"+where).toEqual([caret,caret]);
+      await expect.soft(composer,"the keyboard in the composer"+where).toBeFocused();
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-typed-around-the-word-file-on-it-${mode}-1280x800.png`});
+      if(index<cases.length-1){await context.locator("button").click();await expect(context).toHaveCount(0)}
+    }
+    // Enter sends the message as it reads, with the file.
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Checked the login file now.",{exact:true})).toBeVisible({timeout:15_000});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Now Check @src/login.js !"]);
+    await expect(page.locator(".user-bubble").last().locator(".user-attachments > span")).toHaveText(["login.js"]);
+  }finally{await harness.close()}
+});
+
+// Letters typed after the picked word while its file imports that end with the word's own last letter (' then debug' or ', it keeps
+// failing' after '@log'), with letters typed before it too or with the caret then moved off them (Home, a click), keep the word: once
+// the file is in it goes on the word, all that was typed kept and the caret where it was. The g they end with read as the word's own,
+// so the word looked edited: the file was dropped, its chip taken back and '@log' left in the draft (round 9 repair).
+test("letters typed after the word a file is picked on from the @ menu while it imports that end with the word's last letter keep it, with letters typed before it too or the caret moved off them, so the file goes on it once it is in",async({page})=>{
+  test.setTimeout(150_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Checked the login file, then debugged it."}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),context=page.getByTestId("context-chip"),imports=await holdMentionImports(page);
+    // The file let in, and the app done with the import's answer.
+    const fileIn=async release=>{const done=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await done).finished();await painted(page)};
+    const cases=[
+      ["dark",900,"Enter","' then debug' after it, then 'Please ' before it with Home",async()=>{await page.keyboard.type(" then debug",{delay:60});await page.keyboard.press("Home");await page.keyboard.type("Please ",{delay:60})},"Please Check @src/login.js then debug",7],
+      ["light",900,"a click","', it keeps failing' after it, then 'Please ' before it with a click at the draft's start",async()=>{await page.keyboard.type(", it keeps failing",{delay:40});await clickInDraft(page,0,1);await page.keyboard.type("Please ",{delay:60})},"Please Check @src/login.js , it keeps failing",7],
+      ["dark",300,"Tab","' then debug' after it, the caret then put at the draft's start with Home",async()=>{await page.keyboard.type(" then debug",{delay:60});await page.keyboard.press("Home")},"Check @src/login.js then debug",0],
+      ["light",300,"Enter","' then debug' after it, the caret then put after 'then' with a click",async()=>{await page.keyboard.type(" then debug",{delay:60});await clickInDraft(page,15,1)},"Check @src/login.js then debug",24],
+    ];
+    for(const [index,[mode,ms,pick,how,edit,draft,caret]] of cases.entries()){
+      await switchMode(page,mode);
+      const where=` in ${mode}, the import ${ms} ms slow, login.js picked by ${pick} and ${how} while it imports`;
+      let release=null;imports.hold=ms;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,pick);await page.waitForTimeout(120);await edit();
+      await expect(context).toHaveCount(0);await fileIn(release);
+      await expect.soft(context,"the file's chip once it is in"+where).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(draft);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret"+where).toEqual([caret,caret]);
+      await expect.soft(composer,"the keyboard in the composer"+where).toBeFocused();
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-typed-around-the-word-ending-in-its-letter-${mode}-1280x800.png`});
+      if(index<cases.length-1&&await context.count()){await context.locator("button").click();await expect(context).toHaveCount(0)}
+    }
+    // Enter sends the message as it reads, with the file.
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Checked the login file, then debugged it.",{exact:true})).toBeVisible({timeout:15_000});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Check @src/login.js then debug"]);
+    await expect(page.locator(".user-bubble").last().locator(".user-attachments > span")).toHaveText(["login.js"]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu with the caret inside its word (ArrowLeft or a click put it there) while the import is slow: the caret
+// goes after the word at the pick, so the letters typed straight on go after it, and once the file is in it goes on the whole word with
+// them after it. They went into the word at the caret the pick left there ('Check @lonowg'), and the file was never put on it (round 9).
+test("letters typed straight on after a file is picked from the @ menu with the caret inside its word go after the word while it imports and after the file once it is in, by Enter, Tab or a click",async({page})=>{
+  test.setTimeout(180_000);
+  const harness=await openComposerApp(page);
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),imports=await holdMentionImports(page);
+    const rounds=[["dark",900,"ArrowLeft","Enter"],["dark",900,"a click","a click"],["light",900,"ArrowLeft","Tab"],["light",900,"a click","Enter"],["dark",300,"ArrowLeft","Tab"],["dark",300,"a click","Enter"],["light",300,"ArrowLeft","a click"]];
+    for(const [index,[mode,ms,move,pick]] of rounds.entries()){
+      await switchMode(page,mode);
+      const where=` in ${mode}, the import ${ms} ms slow, the caret put inside '@log' by ${move} and login.js picked by ${pick}`;
+      // At 900 ms every letter is typed while the file imports; at 300 ms it comes in between them.
+      let release=null;imports.hold=ms;imports.held=ms===900?new Promise(done=>{release=done}):null;
+      await typeMention(page);
+      const answered=mentionSearched(page,"lo");if(move==="ArrowLeft")await page.keyboard.press("ArrowLeft");else await clickInDraft(page,9,2);
+      await (await answered).finished();await painted(page);
+      await expect.poll(()=>composer.evaluate(node=>node.selectionStart),"the caret"+where).toBe(9);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      await pickLogin(page,pick);await page.waitForTimeout(120);await page.keyboard.type("now",{delay:60});
+      if(release){
+        await expect.soft(composer,"the draft while the file imports"+where).toHaveValue("Check @lognow");
+        expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret while the file imports"+where).toEqual([13,13]);
+        if(index<4)await page.screenshot({animations:"disabled",path:auditDir+`mention-picked-inside-the-word-typed-while-it-imports-${mode}-1280x800.png`});
+        await expect(context).toHaveCount(0);release();
+      }
+      await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js now");
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret once the file is in"+where).toEqual([23,23]);
+      await page.keyboard.type("!",{delay:20});await expect.soft(composer,"the draft typed on"+where).toHaveValue("Check @src/login.js now!");
+      if(index<4)await page.screenshot({animations:"disabled",path:auditDir+`mention-picked-inside-the-word-after-the-file-is-in-${mode}-1280x800.png`});
+      await context.locator("button").click();await expect(context).toHaveCount(0);
+    }
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu on a word a space follows, the caret put in the word (Home and ArrowRight) or at its end (End and
+// ArrowLeft), leaves the menu shut over the file then on the word, the caret right after it, so the next Enter sends the message with
+// the file. The composer searched for the word at the caret, the file's own path, and opened the menu on it again, and that Enter
+// attached the file a second time instead of sending (round 9). A move of the caret alone leaves the menu shut there, also a click in
+// the composer drawn again back from Settings, opened while the file imported, while an edit of the word opens it again, and so does
+// another @ word of the draft.
+test("a file picked from the @ menu on a word a space follows leaves the menu shut, so the next Enter sends the message with the file, by Enter, Tab or a click, also back from Settings, and an edit of the word or another @ word opens it again",async({page})=>{
+  test.setTimeout(180_000);
+  const replies=["Checked the login file.","Checked the login file again.","Checked it once more.","Checked it a last time.","Checked it back from Settings.","Checked the two words."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),held=await holdMentionImports(page);let imports=0;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The draft typed into the emptied composer and the caret put after '@'+q by from and steps arrow keys, the menu offering login.js.
+    const typeAndPlace=async(draft,from,steps,q)=>{
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type(draft,{delay:20});
+      const answered=mentionSearched(page,q);await page.keyboard.press(from);for(let key=0;key<steps;key++)await page.keyboard.press(from==="Home"?"ArrowRight":"ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+    };
+    // The composer's search for the word at the caret, the file's path, answered and drawn after what moved: the menu stays shut.
+    const stays=async(what,move)=>{const answered=mentionSearched(page,"src/login.js");await move();await (await answered).finished();await painted(page);await expect.soft(menu,what).toHaveCount(0)};
+    for(const [index,[mode,width,draft,from,steps,q,pick]] of [
+      ["dark",1280,"Check @logfile now","Home",9,"lo","Enter"],
+      ["light",900,"Check @logfile now","Home",9,"lo","Tab"],
+      ["dark",1280,"Check @log now","End",4,"log","a click"],
+      ["light",900,"Check @log now","End",4,"log","Enter"],
+    ].entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} on '${draft}' with the caret put after '@${q}' by ${from} and the arrow keys`,before=imports;
+      await typeAndPlace(draft,from,steps,q);
+      await stays("the @ menu once the file is in"+where,async()=>{await pickLogin(page,pick);await expect(context).toHaveCount(1)});
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue("Check @src/login.js now");
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after the file"+where).toEqual([19,19]);
+      await expect.soft(composer,"the keyboard in the composer"+where).toBeFocused();
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-after-a-pick-before-a-space-${mode}-${width}x800.png`});
+      if(index===0){
+        // The caret moved past the space and back: still shut. A letter of the word erased: the menu offers login.js again, and its pick
+        // puts the file back whole, the menu shut again.
+        await stays("the @ menu after ArrowRight and ArrowLeft"+where,async()=>{await page.keyboard.press("ArrowRight");await page.keyboard.press("ArrowLeft")});
+        await page.keyboard.press("Backspace");await expect(composer).toHaveValue("Check @src/login.j now");await expect(menu.locator("button.active strong")).toHaveText("login.js");
+        await stays("the @ menu once the file is in again"+where,()=>page.keyboard.press("Enter"));await expect(composer).toHaveValue("Check @src/login.js now");
+      }
+      // Enter sends the message as it reads, with the file, imported once for each pick.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText("Check @src/login.js now");await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(index===0?2:1);
+    }
+    // Settings opened by Ctrl+, while the file imports, the file in while it is up, and the thread opened again from its row: a click
+    // right after the file, in the composer drawn again, leaves the menu shut too, and Enter sends the message with the file.
+    await switchMode(page,"light");await page.setViewportSize({width:1280,height:800});let release=null,before=imports;held.held=new Promise(done=>{release=done});
+    await typeAndPlace("Check @log now","End",4,"log");await pickLogin(page,"Enter");
+    await page.keyboard.press("Control+Comma");await expect(page.getByRole("heading",{name:"Settings",exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+    const landed=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await landed).finished();await painted(page);held.held=null;
+    await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);
+    await expect(composer).toHaveValue("Check @src/login.js now");await expect(context).toHaveCount(1);
+    await stays("the @ menu after a click right after the file, back from Settings",()=>clickInDraft(page,19,1));
+    expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret clicked right after the file").toEqual([19,19]);
+    await page.screenshot({animations:"disabled",path:auditDir+"mention-menu-shut-after-a-pick-back-from-settings-light-1280x800.png"});
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[4],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText("Check @src/login.js now");await expect(files).toHaveText(["login.js"]);expect.soft(imports-before,"the files imported back from Settings").toBe(1);
+    // Another @ word of the draft opens the menu as before: the pick keeps it shut on its own word only.
+    await switchMode(page,"dark");before=imports;
+    await typeAndPlace("Check @log now and @logout","Home",10,"log");
+    await stays("the @ menu once the file is in, another @ word after it",()=>pickLogin(page,"Enter"));await expect(composer).toHaveValue("Check @src/login.js now and @logout");
+    const answered=mentionSearched(page,"logout");await page.keyboard.press("End");await (await answered).finished();
+    await expect(menu.locator("button.active strong"),"the @ menu on the other @ word").toHaveText("logout.js");
+    await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[5],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText("Check @src/login.js now and @logout");await expect(files).toHaveText(["login.js"]);expect.soft(imports-before,"the files imported with two @ words").toBe(1);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...Array(5).fill("Check @src/login.js now"),"Check @src/login.js now and @logout"]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu leaves the menu shut on the file's word also once the draft has changed, while the file is on the
+// draft: an edit that puts the caret right after the file again ('x' typed after it and erased, or the space the pick added erased),
+// a click right after it or a double click in it once more is typed, also in the composer drawn again back from Settings, and in a
+// narrow window. The pick's dismissal ended at the first edit, so the menu opened again offering the file already attached, and the
+// next Enter imported it a second time instead of sending (round 10).
+test("a file picked from the @ menu leaves the menu shut on its word after an edit puts the caret right after it again, or a click or a double click on it, also back from Settings, so Enter sends the message with the file",async({page})=>{
+  test.setTimeout(180_000);
+  const replies=["Checked the login file.","Checked it without the space.","Checked it after the click.","Checked it after the double click.","Checked it back from Settings.","Checked the release notes."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span");let imports=0;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // What done does, and the composer's search for the word at the caret it leaves (q) answered and drawn.
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    // 'x' typed right after the file and erased, each searched for.
+    const typedAndErased=async()=>{await settled("src/login.jsx",()=>page.keyboard.type("x",{delay:20}));await settled("src/login.js",()=>page.keyboard.press("Backspace"))};
+    const cases=[
+      ["dark",1280,"Check @log now",4,"Enter","'x' typed right after the file and erased",typedAndErased,"Check @src/login.js now"],
+      ["light",900,"Check @log",0,"Tab","the space the pick added erased",()=>settled("src/login.js",()=>page.keyboard.press("Backspace")),"Check @src/login.js"],
+      ["dark",900,"Check @log",0,"a click","'please' typed and a click right after the file",async()=>{await page.keyboard.type("please",{delay:20});await settled("src/login.js",()=>clickInDraft(page,19,1))},"Check @src/login.js please"],
+      ["light",1280,"Check @log",0,"Enter","'please' typed and a double click on 'login' in the file's word",async()=>{await page.keyboard.type("please",{delay:20});await settled("src/",()=>clickInDraft(page,13,1,2))},"Check @src/login.js please"],
+      ["dark",1280,"Check @log now",4,"Enter","'x' typed right after the file and erased, Settings opened by Ctrl+, and the thread again from its row, and a click right after the file",async()=>{
+        await typedAndErased();
+        await page.keyboard.press("Control+Comma");await expect(page.getByRole("heading",{name:"Settings",exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0);
+        await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);await expect(composer).toHaveValue("Check @src/login.js now");
+        await settled("src/login.js",()=>clickInDraft(page,19,1));
+      },"Check @src/login.js now"],
+    ];
+    for(const [index,[mode,width,draft,left,pick,how,edit,sent]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} on '${draft}' and ${how}`,before=imports;
+      // The draft typed into the emptied composer, the caret put after '@log' by left ArrowLeft presses, and the menu offering login.js.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,"log");await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      // The pick, and with the caret right after the file the search for its word answered: the menu shut.
+      const picked=left?mentionSearched(page,"src/login.js"):null;await pickLogin(page,pick);await expect(context).toHaveCount(1);
+      if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(left?"Check @src/login.js now":"Check @src/login.js ");await expect(menu).toHaveCount(0);
+      await edit();
+      await expect.soft(menu,"the @ menu"+where).toHaveCount(0);
+      await expect.soft(composer,"the draft"+where).toHaveValue(sent);await expect(context).toHaveCount(1);
+      if(index<2||index===4)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-after-an-edit-back-to-the-file-${index}-${mode}-${width}x800.png`});
+      // Enter sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(sent);await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    // A file with a space in its name, picked on '@Rel': the @ word at a caret in its path's first part ends at the space, so it never
+    // read as the file's path, and once 'please' was typed a click after 'Rel' or a double click on 'Release' opened the menu offering
+    // the file again, where Enter put it in a second time over '@docs/Release' (round 10 repair). The menu stays shut, and Enter sends
+    // the message with the file.
+    await mkdir(join(harness.repo,"docs"),{recursive:true});await writeFile(join(harness.repo,"docs","Release Notes.md"),"# Release notes\n");
+    await switchMode(page,"light");await page.setViewportSize({width:1280,height:800});
+    const before=imports,spaced="Check @docs/Release Notes.md please";
+    await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+    await settled("Rel",()=>page.keyboard.type("Check @Rel",{delay:20}));await expect(menu.locator("button.active strong")).toHaveText("Release Notes.md");
+    await page.keyboard.press("Enter");await expect(context).toHaveCount(1);await expect(composer).toHaveValue("Check @docs/Release Notes.md ");
+    await page.keyboard.type("please",{delay:20});await expect(composer).toHaveValue(spaced);
+    for(const [how,q,place] of [["a click after 'Rel'","docs/Rel",()=>clickInDraft(page,15,1)],["a double click on 'Release'","docs/",()=>clickInDraft(page,14,1,2)]]){
+      await settled(q,place);await expect.soft(menu,`the @ menu after ${how} in the path of a file with a space in its name`).toHaveCount(0);
+    }
+    await page.screenshot({animations:"disabled",path:auditDir+"mention-menu-shut-on-a-path-with-a-space-light-1280x800.png"});
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(replies[5],{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText(spaced);await expect(files).toHaveText(["Release Notes.md"]);
+    await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported for the path with a space").toBe(1);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(([,,,,,,,sent])=>sent),spaced]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu leaves the menu shut also once the space after it is erased, by Backspace after the space or Delete
+// right after the file ('Check @src/login.jsnow'), or once 'now' is typed on glued to it and the caret put back right after the file
+// or in its path, by the arrow keys, a click or a double click, also in a narrow window. The word no longer read as the file's, so the
+// menu opened on the search for the file's path, offering the file already attached, and Enter imported it a second time, sent nothing
+// and put the file over the whole word, 'now' with it (round 11).
+test("a file picked from the @ menu leaves the menu shut once the space after it is erased or the caret is put back in a word typed on glued to it, by Backspace, Delete, the arrow keys, a click or a double click, so Enter sends the message as typed with the file",async({page})=>{
+  test.setTimeout(180_000);
+  const replies=["Checked it after the Backspace.","Checked it after the Delete.","Checked it after the arrow keys.","Checked it after the click.","Checked it after the double click."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),glued="Check @src/login.jsnow";let imports=0;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // What done does, and the composer's search for the word at the caret it leaves (q) answered and drawn.
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    // The space the pick added erased and 'now' typed on, glued to the file, each searched for (nothing is found for 'src/login.jsnow').
+    const typedOn=async()=>{await settled("src/login.js",()=>page.keyboard.press("Backspace"));await settled("src/login.jsnow",()=>page.keyboard.type("now",{delay:20}))};
+    const erased=async()=>{await page.keyboard.press("ArrowRight");await settled("src/login.js",()=>page.keyboard.press("Backspace"))};
+    const cases=[
+      ["dark",1280,"Check @log now",4,"Enter","Backspace after the space after the file",erased],
+      // Delete leaves the word before the caret as it was, so nothing searches again: the menu's files are those of the pick's search.
+      ["light",900,"Check @log now",4,"Tab","Delete right after the file",async()=>{await page.keyboard.press("Delete");await expect(composer).toHaveValue(glued);await painted(page)}],
+      ["dark",900,"Check @log",0,"a click","'now' typed on glued to the file and the caret put back right after it by ArrowLeft",async()=>{await typedOn();await settled("src/login.js",async()=>{for(let key=0;key<3;key++)await page.keyboard.press("ArrowLeft")})}],
+      ["light",1280,"Check @log",0,"Enter","'now' typed on glued to the file and a click right after it",async()=>{await typedOn();await settled("src/login.js",()=>clickInDraft(page,19,1))}],
+      ["dark",1280,"Check @log now",4,"Enter","Backspace after the space after the file and a double click on 'login'",async()=>{await erased();await settled("src/",()=>clickInDraft(page,13,1,2))}],
+    ];
+    for(const [index,[mode,width,draft,left,pick,how,glue]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} on '${draft}' and ${how}`,before=imports;
+      // The draft typed into the emptied composer, the caret put after '@log' by left ArrowLeft presses, and the menu offering login.js.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,"log");await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      // The pick, and with the caret right after the file the search for its word answered: the menu shut.
+      const picked=left?mentionSearched(page,"src/login.js"):null;await pickLogin(page,pick);await expect(context).toHaveCount(1);
+      if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(left?"Check @src/login.js now":"Check @src/login.js ");await expect(menu).toHaveCount(0);
+      await glue();
+      await expect.soft(composer,"the draft"+where).toHaveValue(glued);
+      await expect.soft(menu,"the @ menu"+where).toHaveCount(0);await expect(context).toHaveCount(1);
+      if(index<2||index===4)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-on-a-file-glued-to-the-next-word-${index}-${mode}-${width}x800.png`});
+      // Enter sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(glued);await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(()=>glued)]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu on a word typed on glued to the file's path ('Check @src/login.jsnow', the caret put back right after
+// the path or in it) goes on the path only, what follows it kept after a space, by Enter, a click or Tab, the caret put there by
+// ArrowLeft, a click or a double click, also in a narrow window: the pick put the file over the whole word, and 'now' went with it
+// (round 11).
+test("a file picked from the @ menu on a word typed on glued to the file's path goes on the path only, so the letters after it stay, by Enter, a click or Tab, the caret put there by ArrowLeft, a click or a double click",async({page})=>{
+  test.setTimeout(150_000);
+  const replies=["Checked it after the arrow keys.","Checked it after the click.","Checked it after the double click."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),sent="Check @src/login.js now";let imports=0;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    for(const [index,[mode,width,how,q,place,pick]] of [
+      ["dark",1280,"ArrowLeft three times","src/login.js",async()=>{for(let key=0;key<3;key++)await page.keyboard.press("ArrowLeft")},"Enter"],
+      ["light",900,"a click after 'lo'","src/lo",()=>clickInDraft(page,13,1),"a click"],
+      ["dark",900,"a double click on 'login'","src/",()=>clickInDraft(page,13,1,2),"Tab"],
+    ].entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, the caret put back by ${how} and login.js picked by ${pick}`,before=imports;
+      // 'Check @src/login.jsnow' typed into the emptied composer, its search answered (nothing found), and the caret put back in the
+      // word: the menu offers login.js.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await settled("src/login.jsnow",()=>page.keyboard.type("Check @src/login.jsnow",{delay:20}));await expect(menu).toHaveCount(0);
+      await settled(q,place);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      await pickLogin(page,pick);await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(sent);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after the file"+where).toEqual([20,20]);
+      await expect.soft(menu,"the @ menu once the file is in"+where).toHaveCount(0);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-pick-on-a-word-glued-to-the-path-keeps-the-rest-${mode}-${width}x800.png`});
+      // Enter sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(sent);await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",sent,sent,sent]);
+  }finally{await harness.close()}
+});
+
+// A file picked from the @ menu is not offered again on its word typed on glued to it ('Check @src/login.jsnow') while the composer's
+// search for the word as it is then is still out (its 120 ms wait and the server's answer, held here so the window stays open): 'now'
+// typed on once the space the pick added is erased, or End, ArrowRight or a click into 'now' once the space before it is erased, also
+// in a narrow window. The menu kept the files found for the file's own path until that search answered, so it opened offering the file
+// already attached, and Enter straight after imported it a second time and sent nothing (round 11 repair).
+test("a file picked from the @ menu is not offered again on a word typed on glued to it while the search for the word is still out, so Enter straight after 'now' is typed, or after End, ArrowRight or a click into it, sends the message as typed with the file once",async({page})=>{
+  test.setTimeout(180_000);
+  const replies=["Checked it straight after the letters.","Checked it after End.","Checked it after ArrowRight.","Checked it after the click."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  let release=()=>{};
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),glued="Check @src/login.jsnow";let imports=0,held=null;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The composer's searches for the word typed on past the file's path ('src/login.jsn', 'src/login.jsnow') wait while held is set.
+    await page.route(/\/api\/workspace\/search\?/,async route=>{if(held&&/^src\/login\.jsn/.test(new URL(route.request().url()).searchParams.get("q")||""))await held;await route.fallback()});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    // The space before 'now' erased by Backspace after it, the caret right after the file and its path's search answered: the menu shut.
+    const spaceErased=async()=>{await page.keyboard.press("ArrowRight");await settled("src/login.js",()=>page.keyboard.press("Backspace"))};
+    const cases=[
+      ["dark",1280,"Check @log",0,"Enter","the space the pick added erased and 'now' typed on glued to the file",async()=>{await settled("src/login.js",()=>page.keyboard.press("Backspace"));await page.keyboard.type("now",{delay:20})}],
+      ["light",900,"Check @log now",4,"Tab","the space before 'now' erased and End",async()=>{await spaceErased();await page.keyboard.press("End")}],
+      ["dark",900,"Check @log now",4,"a click","the space before 'now' erased and ArrowRight",async()=>{await spaceErased();await page.keyboard.press("ArrowRight")}],
+      ["light",1280,"Check @log now",4,"Enter","the space before 'now' erased and a click in 'now'",async()=>{await spaceErased();await clickInDraft(page,21,1)}],
+    ];
+    for(const [index,[mode,width,draft,left,pick,how,glue]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} on '${draft}' and ${how}, the search for the word still out`,before=imports;
+      // The draft typed into the emptied composer, the caret put after '@log' by left ArrowLeft presses, and the menu offering login.js.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,"log");await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      const picked=left?mentionSearched(page,"src/login.js"):null;await pickLogin(page,pick);await expect(context).toHaveCount(1);
+      if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(left?"Check @src/login.js now":"Check @src/login.js ");await expect(menu).toHaveCount(0);
+      // The word typed on, or the caret put in its letters, with its search held: the menu stays shut on the files of the path's search.
+      held=new Promise(done=>{release=done});
+      await glue();await painted(page);
+      await expect.soft(composer,"the draft"+where).toHaveValue(glued);
+      await expect.soft(menu,"the @ menu"+where).toHaveCount(0);await expect(context).toHaveCount(1);
+      if(index<2||index===3)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-on-a-glued-word-its-search-out-${index}-${mode}-${width}x800.png`});
+      // Enter, with the search still out, sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      release();held=null;
+      await expect(users.last().locator("p")).toHaveText(glued);await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(()=>glued)]);
+  }finally{release();await harness.close()}
+});
+
+// A file the @ menu found for an earlier word is not offered on a word typed on glued to a file picked from it ('Check
+// @src/login.jsnow') while the composer's search for the word as it is then is still out (held here so the window stays open):
+// src/logout.js, found for the start of the path ('src/l', 'src/') with the caret put there by a click or a double click, then a click
+// into 'now' or End, or a longer-named file the picked file's name begins (src/login.json, Dockerfile.dev), found for the file's path,
+// with 'now' typed on once the space the pick added is erased, or End or ArrowRight once the space before 'now' is erased, also in a
+// narrow window. The menu offered the files of the earlier search, which the word no longer names, and Enter straight after imported
+// one over the whole word, 'now' with it, and sent nothing (round 12). A letter that still names a file found leaves it offered: after
+// 'n' the menu offers src/login.json.
+test("a file the @ menu found for an earlier word is not offered on a word typed on glued to a file picked from it while the search for the word is still out, so Enter straight after 'now' is typed, or after End, ArrowRight or a click into it, sends the message as typed with the file once",async({page})=>{
+  test.setTimeout(240_000);
+  const replies=["Checked it after a click in the path and one in the letters.","Checked it after a double click on the path and End.","Checked it beside login.json straight after the letters.","Checked it beside login.json after End.","Checked it beside login.json after ArrowRight.","Checked the Dockerfile straight after the letters."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  let release=()=>{};
+  try{
+    await writeLoginFiles(harness);await writeFile(join(harness.repo,"src","login.json"),"{}\n");
+    for(const name of ["Dockerfile","Dockerfile.dev"])await writeFile(join(harness.repo,name),"FROM node:22\n");
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),glued="Check @src/login.jsnow";let imports=0,held=null;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The composer's searches for the word typed on past the picked file ('src/login.jsn…', 'Dockerfilen…') wait while held is set.
+    await page.route(/\/api\/workspace\/search\?/,async route=>{if(held&&/^(src\/login\.jsn|Dockerfilen)/.test(new URL(route.request().url()).searchParams.get("q")||""))await held;await route.fallback()});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    const hold=()=>{held=new Promise(done=>{release=done})};
+    // The space the pick added erased and 'now' typed on glued to the file, each searched for (nothing is found for 'src/login.jsnow').
+    const typedOn=async()=>{await settled("src/login.js",()=>page.keyboard.press("Backspace"));await settled("src/login.jsnow",()=>page.keyboard.type("now",{delay:20}))};
+    const cases=[
+      ["light",1280,"Check @log",0,"login.js","Enter","'now' typed on glued to it, a click after 'src/l', whose search finds src/logout.js, and a click into 'now'",async()=>{await typedOn();await settled("src/l",()=>clickInDraft(page,12,1));await expect(menu).toHaveCount(0);hold();await clickInDraft(page,21,1)},glued],
+      ["dark",900,"Check @log",0,"login.js","a click","'now' typed on glued to it, a double click on 'login', whose search finds src/logout.js, and End",async()=>{await typedOn();await settled("src/",()=>clickInDraft(page,13,1,2));await expect(menu).toHaveCount(0);hold();await page.keyboard.press("End")},glued],
+      ["dark",1280,"Check @log",0,"login.js","Enter","'now' typed on glued to it, src/login.json found for its path",async()=>{
+        await settled("src/login.js",()=>page.keyboard.press("Backspace"));hold();await page.keyboard.type("n");
+        await expect.soft(menu.locator("button small"),"the @ menu after 'n', which names src/login.json").toHaveText(["src/login.json"]);await page.keyboard.type("ow",{delay:20})},glued],
+      ["light",900,"Check @log now",4,"login.js","Tab","the space before 'now' erased by Delete and End, src/login.json found for its path",async()=>{await page.keyboard.press("Delete");await expect(composer).toHaveValue(glued);hold();await page.keyboard.press("End")},glued],
+      ["dark",900,"Check @log now",4,"login.js","a click","the space before 'now' erased by Backspace and ArrowRight twice, src/login.json found for its path",async()=>{await page.keyboard.press("ArrowRight");await settled("src/login.js",()=>page.keyboard.press("Backspace"));hold();for(let key=0;key<2;key++)await page.keyboard.press("ArrowRight")},glued],
+      ["light",1280,"Check @Docker",0,"Dockerfile","Enter","'now' typed on glued to it, Dockerfile.dev found for its name",async()=>{await settled("Dockerfile",()=>page.keyboard.press("Backspace"));hold();await page.keyboard.type("now",{delay:20})},"Check @Dockerfilenow"],
+    ];
+    for(const [index,[mode,width,draft,left,name,pick,how,glue,sent]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, ${name} picked by ${pick} on '${draft}', ${how}, the search for the word still out`,before=imports;
+      const q=draft.split("@")[1].split(" ")[0],path=name==="login.js"?"src/login.js":name;
+      // The draft typed into the emptied composer, the caret put after its @ word by left ArrowLeft presses, and the menu offering the file.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,q);await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText(name);
+      const picked=left?mentionSearched(page,path):null;
+      if(pick==="a click")await menu.locator("button").filter({has:page.getByText(path,{exact:true})}).click({delay:80});
+      else{await page.keyboard.down(pick);await page.waitForTimeout(80);await page.keyboard.up(pick)}
+      await expect(context).toHaveCount(1);if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(draft.replace("@"+q,"@"+path)+(left?"":" "));await expect(menu).toHaveCount(0);
+      // The word typed on, or the caret put in its letters, with its search held: the menu offers none of the files found before.
+      await glue();await painted(page);
+      await expect.soft(composer,"the draft"+where).toHaveValue(sent);
+      await expect.soft(menu,"the @ menu"+where).toHaveCount(0);await expect(context).toHaveCount(1);
+      if(index%2===0)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-on-a-glued-word-files-found-before-${index}-${mode}-${width}x800.png`});
+      // Enter, with the search still out, sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      release();held=null;
+      await expect(users.last().locator("p")).toHaveText(sent);await expect(files).toHaveText([name]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(row=>row.at(-1))]);
+  }finally{release();await harness.close()}
+});
+
+// At a caret in the letters typed on glued to a file picked from the @ menu ('Check @src/login.jsnow') the menu offers only the files
+// the whole word names, whether the search for its part before the caret is out or has answered: one ArrowRight from the path, End and
+// ArrowLeft twice, or a click after 'n' put the caret after 'src/login.jsn', which names src/login.json, so the menu offered it, found
+// for the path or by that search, and Enter imported it over the whole word, 'now' with it, and sent nothing, also in a narrow window
+// (round 12 repair). Typed on as far as 'n', the word names src/login.json whole, and the menu offers it.
+test("at a caret in the letters typed on glued to a file picked from the @ menu the menu offers only files the whole word names, so Enter after one ArrowRight, End and ArrowLeft twice, or a click after 'n' sends the message as typed with the file once, the search for the word out or answered",async({page})=>{
+  test.setTimeout(240_000);
+  const replies=["Checked it after one ArrowRight, the search out.","Checked it after one ArrowRight, the search answered.","Checked it after End and ArrowLeft twice, the search out.","Checked it after a click after the n, the search out.","Checked it after a click after the n, the search answered.","Checked it after End and ArrowLeft twice, the search answered."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  let release=()=>{};
+  try{
+    await writeLoginFiles(harness);await writeFile(join(harness.repo,"src","login.json"),"{}\n");
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),glued="Check @src/login.jsnow";let imports=0,held=null;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The composer's searches for the word past the picked file's path ('src/login.jsn…') wait while held is set.
+    await page.route(/\/api\/workspace\/search\?/,async route=>{if(held&&/^src\/login\.jsn/.test(new URL(route.request().url()).searchParams.get("q")||""))await held;await route.fallback()});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    const hold=()=>{held=new Promise(done=>{release=done})};
+    // The caret put after 'n' by move, the search for 'src/login.jsn' then held (out) or answered.
+    const toN=(out,move)=>out?async()=>{hold();await move()}:()=>settled("src/login.jsn",move);
+    const arrowRight=()=>page.keyboard.press("ArrowRight"),endLeft=async()=>{await page.keyboard.press("End");for(let key=0;key<2;key++)await page.keyboard.press("ArrowLeft")},clickAfterN=()=>clickInDraft(page,20,1);
+    // From 'Check @src/login.js now', the caret right after the file: the space before 'now' erased by Delete, or by Backspace after it.
+    const deleted=async()=>{await page.keyboard.press("Delete");await expect(composer).toHaveValue(glued)};
+    const backspaced=async()=>{await page.keyboard.press("ArrowRight");await settled("src/login.js",()=>page.keyboard.press("Backspace"))};
+    // From 'Check @src/login.js ': the space the pick added erased and 'now' typed on, the searches for the word typed on held from
+    // there (out: the menu offers src/login.json after 'n'), or each answered.
+    const typedOn=async out=>{
+      await settled("src/login.js",()=>page.keyboard.press("Backspace"));if(!out){await settled("src/login.jsnow",()=>page.keyboard.type("now",{delay:20}));return}
+      hold();await page.keyboard.type("n");await expect.soft(menu.locator("button small"),"the @ menu after 'n', which names src/login.json").toHaveText(["src/login.json"]);
+      await page.keyboard.type("ow",{delay:20});
+    };
+    const cases=[
+      ["dark",1280,"Check @log now",4,"Enter","the space before 'now' erased by Delete and one ArrowRight",true,async()=>{await deleted();await toN(true,arrowRight)()}],
+      ["light",900,"Check @log now",4,"Tab","the space before 'now' erased by Backspace and one ArrowRight",false,async()=>{await backspaced();await toN(false,arrowRight)()}],
+      ["dark",900,"Check @log",0,"a click","'now' typed on glued to it, End and ArrowLeft twice",true,async()=>{await typedOn(true);await endLeft()}],
+      ["light",1280,"Check @log",0,"Enter","'now' typed on glued to it and a click after 'n'",true,async()=>{await typedOn(true);await clickAfterN()}],
+      ["dark",1280,"Check @log",0,"Tab","'now' typed on glued to it and a click after 'n'",false,async()=>{await typedOn(false);await toN(false,clickAfterN)()}],
+      ["light",900,"Check @log now",4,"Enter","the space before 'now' erased by Delete, End and ArrowLeft twice",false,async()=>{await deleted();await toN(false,endLeft)()}],
+    ];
+    for(const [index,[mode,width,draft,left,pick,how,out,glue]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick} on '${draft}', ${how}, the search for the word ${out?"still out":"answered"}`,before=imports;
+      // The draft typed into the emptied composer, the caret put after '@log' by left ArrowLeft presses, and the menu offering login.js.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,"log");await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText("login.js");
+      // login.js picked as pickLogin picks it, its button clicked by its exact path, as src/login.json's has it too.
+      const picked=left?mentionSearched(page,"src/login.js"):null;
+      if(pick==="a click")await menu.locator("button").filter({has:page.getByText("src/login.js",{exact:true})}).click({delay:80});
+      else await pickLogin(page,pick);
+      await expect(context).toHaveCount(1);if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(left?"Check @src/login.js now":"Check @src/login.js ");await expect(menu).toHaveCount(0);
+      // The word glued to the file and the caret after its 'n': the menu offers none of the files found, src/login.json with them.
+      await glue();await painted(page);
+      await expect.soft(composer,"the draft"+where).toHaveValue(glued);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after 'n'"+where).toEqual([20,20]);
+      await expect.soft(menu,"the @ menu"+where).toHaveCount(0);await expect(context).toHaveCount(1);
+      if(index%2===0)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-shut-after-n-of-a-glued-word-${index}-${mode}-${width}x800.png`});
+      // Enter sends the message as it reads, with the file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      release();held=null;
+      await expect(users.last().locator("p")).toHaveText(glued);await expect(files).toHaveText(["login.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(()=>glued)]);
+  }finally{release();await harness.close()}
+});
+
+// On a word typed on glued to a file picked from the @ menu ('Check @src/login.jsnow'), letters typed right after the file's path that
+// make the path of a longer file found ('on' after 'js', 'Check @src/login.jsonnow', or '.dev' after 'Dockerfile') have the menu offer
+// that file once the part before the caret is its whole path, the search for the word out or answered, and its pick, by Enter, Tab, a
+// click or a double click, goes on the path only, what follows it kept after a space, also in a narrow window: the menu read the whole
+// word, which names no file, so it stayed shut there, and Enter sent the glued word with the file picked first (round 12 repair,
+// again). Short of the path's last letter the menu stays shut, as a pick there would take a letter of 'now' into the path.
+test("letters typed on a word glued to a file picked from the @ menu that make a longer file's path have the menu offer that file right after its path, so Enter, Tab, a click or a double click puts it on the path only and the letters after it stay, the search for the word out or answered",async({page})=>{
+  test.setTimeout(240_000);
+  const replies=["Checked the json file after a click after 'js'.","Checked the json file after ArrowLeft.","Checked the json file after Delete.","Checked the dev Dockerfile."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  let release=()=>{};
+  try{
+    await writeLoginFiles(harness);await writeFile(join(harness.repo,"src","login.json"),"{}\n");
+    for(const name of ["Dockerfile","Dockerfile.dev"])await writeFile(join(harness.repo,name),"FROM node:22\n");
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),caretAt=()=>composer.evaluate(node=>[node.selectionStart,node.selectionEnd]);let imports=0,held=null;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The composer's searches for the word with letters typed right after the picked file's path ('src/login.jso…', 'Dockerfile.…')
+    // wait while held is set.
+    await page.route(/\/api\/workspace\/search\?/,async route=>{if(held&&/^(src\/login\.jso|Dockerfile\.)/.test(new URL(route.request().url()).searchParams.get("q")||""))await held;await route.fallback()});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    // The space the pick added erased and 'now' typed on glued to the file at path, each searched for.
+    const typedOn=async path=>{await settled(path,()=>page.keyboard.press("Backspace"));await settled(path+"now",()=>page.keyboard.type("now",{delay:20}))};
+    const threeLeft=async()=>{for(let key=0;key<3;key++)await page.keyboard.press("ArrowLeft")};
+    const cases=[
+      ["dark",1280,"Check @log",0,"login.js","src/login.js","Enter","'now' typed on glued to it and a click right after 'js'",async()=>{await typedOn("src/login.js");await settled("src/login.js",()=>clickInDraft(page,19,1))},"on","src/login.json","Enter",true],
+      ["light",900,"Check @log",0,"login.js","src/login.js","Tab","'now' typed on glued to it and ArrowLeft three times",async()=>{await typedOn("src/login.js");await settled("src/login.js",threeLeft)},"on","src/login.json","Tab",false],
+      ["dark",900,"Check @log now",4,"login.js","src/login.js","a click","the space before 'now' erased by Delete",()=>page.keyboard.press("Delete"),"on","src/login.json","a click",true],
+      ["light",1280,"Check @Docker",0,"Dockerfile","Dockerfile","Enter","'now' typed on glued to it and ArrowLeft three times",async()=>{await typedOn("Dockerfile");await settled("Dockerfile",threeLeft)},".dev","Dockerfile.dev","a double click",false],
+    ];
+    for(const [index,[mode,width,draft,left,name,path,pick,how,glue,letters,longer,second,out]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, ${name} picked by ${pick} on '${draft}', ${how}, '${letters}' typed right after its path and ${longer} picked by ${second}, the search for the word ${out?"still out":"answered"}`,before=imports;
+      const q=draft.split("@")[1].split(" ")[0],after=7+path.length,at=7+longer.length,sent=`Check @${longer} now`;
+      // The draft typed into the emptied composer, the caret put after its @ word by left ArrowLeft presses, and the menu offering the file.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,q);await page.keyboard.type(draft,{delay:20});for(let key=0;key<left;key++)await page.keyboard.press("ArrowLeft");
+      await (await answered).finished();await painted(page);await expect(menu.locator("button.active strong")).toHaveText(name);
+      const picked=left?mentionSearched(page,path):null;
+      if(pick==="a click")await menu.locator("button").filter({has:page.getByText(path,{exact:true})}).click({delay:80});
+      else{await page.keyboard.down(pick);await page.waitForTimeout(80);await page.keyboard.up(pick)}
+      await expect(context).toHaveCount(1);if(picked){await (await picked).finished();await painted(page)}
+      await expect(composer).toHaveValue(draft.replace("@"+q,"@"+path)+(left?"":" "));await expect(menu).toHaveCount(0);
+      // The word glued to the file and the caret right after its path: the menu shut.
+      await glue();await painted(page);await expect(composer).toHaveValue(`Check @${path}now`);expect(await caretAt()).toEqual([after,after]);await expect(menu).toHaveCount(0);
+      // The letters typed there but the last, with the searches for the word held from there (out) or each answered: the menu stays
+      // shut, the part before the caret not yet the longer file's path.
+      if(out)held=new Promise(done=>{release=done});
+      const typing=letters.slice(0,-1);if(out)await page.keyboard.type(typing,{delay:20});else await settled(path+typing,()=>page.keyboard.type(typing,{delay:20}));
+      await painted(page);await expect.soft(menu,"the @ menu short of the longer file's last letter"+where).toHaveCount(0);
+      // Its last letter: the menu offers the longer file, the part before the caret its path.
+      const last=()=>page.keyboard.type(letters.slice(-1));if(out)await last();else await settled(longer,last);
+      await painted(page);await expect(composer).toHaveValue(`Check @${longer}now`);expect.soft(await caretAt(),"the caret right after the longer file's path"+where).toEqual([at,at]);
+      await expect(menu.locator("button small"),"the @ menu right after the longer file's path"+where).toHaveText([longer]);
+      if(index%2===0)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-offers-the-longer-file-right-after-its-path-${index}-${mode}-${width}x800.png`});
+      // Its pick goes on its path only, what follows it kept after a space and the caret before it, the menu shut.
+      const file=menu.locator("button").filter({has:page.getByText(longer,{exact:true})});
+      if(second==="a click")await file.click({delay:80});else if(second==="a double click")await file.dblclick();else{await page.keyboard.down(second);await page.waitForTimeout(80);await page.keyboard.up(second)}
+      await expect(context).toHaveCount(2);release();held=null;
+      await expect.soft(composer,"the draft once the longer file is in"+where).toHaveValue(sent);
+      expect.soft(await caretAt(),"the caret once the longer file is in"+where).toEqual([at+1,at+1]);
+      await expect.soft(menu,"the @ menu once the longer file is in"+where).toHaveCount(0);
+      // Enter sends the message as it reads, with both files, each imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(sent);await expect(files).toHaveText([name,longer.split("/").pop()]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(2);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(row=>`Check @${row[10]} now`)]);
+  }finally{release();await harness.close()}
+});
+
+// The @ menu's keyboard highlight stays on its file as the menu narrows to the files the word as it reads names while the search for
+// it is out ('Check @log', ArrowDown twice or ArrowUp twice to src/login.json, then 'i'), or goes to the first file once its file is no
+// longer offered (ArrowDown once to src/logout.js), so Enter or Tab straight after the letter imports the file highlighted, also in a
+// narrow window: the highlight kept its row, which the rows above it leaving took to another file, docs/login-guide.md or
+// src/login.json, and Enter or Tab imported that one (round 12 repair).
+test("the @ menu's keyboard highlight stays on its file as the menu narrows while the search for the word is out, or goes to the first file once its file goes, so Enter or Tab straight after a letter typed imports the file highlighted",async({page})=>{
+  test.setTimeout(150_000);
+  const replies=["Checked the json file after ArrowDown.","Checked the login file after ArrowDown.","Checked the json file after ArrowUp."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  let release=()=>{};
+  try{
+    await writeLoginFiles(harness);await writeFile(join(harness.repo,"src","login.json"),"{}\n");
+    await mkdir(join(harness.repo,"docs"),{recursive:true});await writeFile(join(harness.repo,"docs","login-guide.md"),"# Signing in\n");
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),listed=menu.locator("button small"),active=menu.locator("button.active small");let imports=0,held=null;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    // The composer's search for 'logi' waits while held is set.
+    await page.route(/\/api\/workspace\/search\?/,async route=>{if(held&&new URL(route.request().url()).searchParams.get("q")==="logi")await held;await route.fallback()});
+    const cases=[
+      ["dark",1280,"ArrowDown",2,"src/login.json","src/login.json","Enter"],
+      ["light",900,"ArrowDown",1,"src/logout.js","src/login.js","Tab"],
+      ["dark",900,"ArrowUp",2,"src/login.json","src/login.json","Tab"],
+    ];
+    for(const [index,[mode,width,key,presses,chosen,path,pick]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, ${chosen} highlighted by ${key} ${presses===1?"once":"twice"} on 'Check @log' and 'i' typed, the search for 'logi' still out`,before=imports,name=path.split("/").pop();
+      // 'Check @log' typed into the emptied composer, its search answered, and a file highlighted by the arrow keys.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      const answered=mentionSearched(page,"log");await page.keyboard.type("Check @log",{delay:20});await (await answered).finished();await painted(page);
+      await expect(listed).toHaveText(["src/login.js","src/logout.js","src/login.json","docs/login-guide.md"]);
+      for(let press=0;press<presses;press++)await page.keyboard.press(key);
+      await expect(active).toHaveText(chosen);
+      // 'i' typed with its search held: the menu offers the files of '@log' that 'logi' names, the highlight on the file it was on, or,
+      // that file gone, on the first.
+      held=new Promise(done=>{release=done});await page.keyboard.type("i");await painted(page);
+      await expect.soft(listed,"the @ menu"+where).toHaveText(["src/login.js","src/login.json","docs/login-guide.md"]);
+      await expect.soft(active,"the file highlighted"+where).toHaveText(path);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-menu-highlight-kept-as-it-narrows-${index}-${mode}-${width}x800.png`});
+      // Enter or Tab straight after, the search still out, picks the file highlighted.
+      await page.keyboard.down(pick);await page.waitForTimeout(80);await page.keyboard.up(pick);
+      await expect(context).toHaveCount(1);await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(`Check @${path} `);
+      release();held=null;
+      // Enter sends the message with that file, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(`Check @${path}`);await expect(files).toHaveText([name]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(row=>"Check @"+row[5])]);
+  }finally{release();await harness.close()}
+});
+
+// A file picked from the @ menu on the word of a longer file's name that begins with the picked file's path ('@src/login.json' or
+// '@Dockerfile.dev', typed or its chip taken off, the shorter-named file picked to switch to it) goes on the whole word, as a pick on a
+// word does, by Enter, a click or Tab, the caret put in the word by ArrowLeft or a click, also in a narrow window: the pick went on the
+// path only, as on a word typed on glued past a path ('@src/login.jsnow'), and the rest of the other file's name stayed after it as a
+// word of its own, 'Check @src/login.js on now' or 'Check @Dockerfile .dev now' (round 11 repair).
+test("a file picked from the @ menu on the word of a longer file's name that begins with its path goes on the whole word, so switching to the shorter-named file leaves nothing of the other name, by Enter, a click or Tab, the caret put in the word by ArrowLeft or a click",async({page})=>{
+  test.setTimeout(150_000);
+  const replies=["Checked the shorter file after the arrow keys.","Checked the shorter file after the click.","Checked the Dockerfile."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);await writeFile(join(harness.repo,"src","login.json"),"{}\n");
+    for(const name of ["Dockerfile","Dockerfile.dev"])await writeFile(join(harness.repo,name),"FROM node:22\n");
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span");let imports=0;
+    page.on("request",request=>{if(new URL(request.url()).pathname==="/api/attachments/import")imports++});
+    const settled=async(q,done)=>{const answered=mentionSearched(page,q);await done();await (await answered).finished();await painted(page)};
+    const cases=[
+      ["dark",1280,"Check @src/login.json now","End and ArrowLeft six times","src/login.js",async()=>{await page.keyboard.press("End");for(let key=0;key<6;key++)await page.keyboard.press("ArrowLeft")},["src/login.js","src/login.json"],"login.js","src/login.js","Enter","Check @src/login.js now"],
+      ["light",900,"Check @src/login.json now","a click after 'lo'","src/lo",()=>clickInDraft(page,13,1),["src/login.js","src/logout.js","src/login.json"],"login.js","src/login.js","a click","Check @src/login.js now"],
+      ["dark",900,"Check @Dockerfile.dev now","a click after 'Docker'","Docker",()=>clickInDraft(page,13,1),["Dockerfile","Dockerfile.dev"],"Dockerfile","Dockerfile","Tab","Check @Dockerfile now"],
+    ];
+    for(const [index,[mode,width,draft,how,q,place,listed,name,path,pick,sent]] of cases.entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, ${name} picked by ${pick} on '${draft}', the caret put in the word by ${how}`,before=imports,after=sent.indexOf(" now");
+      // The draft typed into the emptied composer, and the caret put back in its @ word: the menu offers both files, the shorter first.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+      await page.keyboard.type(draft,{delay:20});await expect(menu).toHaveCount(0);
+      await settled(q,place);await expect(menu.locator("button small")).toHaveText(listed);await expect(menu.locator("button.active strong")).toHaveText(name);
+      if(pick==="a click")await menu.locator("button").filter({has:page.getByText(path,{exact:true})}).click({delay:80});
+      else{await page.keyboard.down(pick);await page.waitForTimeout(80);await page.keyboard.up(pick)}
+      await expect(context).toHaveCount(1);
+      await expect.soft(composer,"the draft once the file is in"+where).toHaveValue(sent);
+      expect.soft(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd]),"the caret after the file"+where).toEqual([after,after]);
+      await expect.soft(menu,"the @ menu once the file is in"+where).toHaveCount(0);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-pick-on-a-longer-file-name-takes-the-whole-word-${mode}-${width}x800.png`});
+      // Enter sends the message as it reads, with the file picked, imported once.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText(sent);await expect(files).toHaveText([name]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);expect.soft(imports-before,"the files imported"+where).toBe(1);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...cases.map(row=>row.at(-1))]);
+  }finally{await harness.close()}
+});
+
+// A second @ word typed while the file picked from the @ menu imports ('Check @log', login.js picked, ' and @logout' typed straight on)
+// shows its menu with its files dimmed, and Enter on it does nothing meanwhile. Once the first file is in, the second word's menu is on
+// again, so Enter, Tab, a click or a double click picks its file and the next Enter sends the message with both, also when nothing was
+// pressed meanwhile, and in a narrow window. The first file's landing emptied the menu's files for the word the caret was in by then,
+// whose search had answered already, and nothing searched again for that word, unchanged: the menu was gone, and Enter sent the message
+// with the first file only, '@logout' as text (round 10).
+test("a second @ word typed while a file picked from the @ menu imports keeps its menu once that file is in, so Enter, Tab, a click or a double click picks its file and the next Enter sends the message with both",async({page})=>{
+  test.setTimeout(180_000);
+  const replies=["Checked both files.","Checked both files again.","Checked both once more.","Checked both a last time."];
+  const harness=await openComposerApp(page,{replies:replies.map(text=>({text}))});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),imports=await holdMentionImports(page);
+    // The menu's files as a person sees them: on, or off (aria-disabled) while a picked file imports.
+    const rowsLook=()=>menu.locator("button").evaluateAll(rows=>[...new Set(rows.map(row=>row.getAttribute("aria-disabled")==="true"?"off":"on"))]);
+    for(const [index,[mode,width,pick,second,pressed]] of [["dark",1280,"Enter","Enter",true],["light",900,"a click","Tab",true],["dark",900,"Tab","a click",false],["light",1280,"Enter","a double click",false]].entries()){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      const where=` in ${mode} at ${width}, login.js picked by ${pick}, ' and @logout' typed while it imports${pressed?" and Enter pressed on its menu":""}, and logout.js picked by ${second}`;
+      let release=null;imports.held=new Promise(done=>{release=done});
+      await typeMention(page);await pickLogin(page,pick);
+      // ' and @logout' typed straight on, its search answered while login.js imports: its menu offers logout.js, dimmed.
+      const answered=mentionSearched(page,"logout");await page.keyboard.type(" and @logout",{delay:40});await (await answered).finished();await painted(page);
+      await expect(menu.locator("button.active strong")).toHaveText("logout.js");await expect.soft.poll(rowsLook,"the menu's files while login.js imports"+where).toEqual(["off"]);
+      if(pressed){await page.keyboard.press("Enter");await painted(page);await expect(composer).toHaveValue("Check @log and @logout");await expect(users).toHaveCount(index+1)}
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-second-word-menu-dimmed-while-the-first-imports-${mode}-${width}x800.png`});
+      // login.js in: the menu on '@logout' is on again, offering logout.js.
+      const landed=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await landed).finished();await painted(page);
+      await expect(context).toHaveCount(1);await expect(composer,"the draft once login.js is in"+where).toHaveValue("Check @src/login.js and @logout");
+      await expect.soft(menu.locator("button.active strong"),"the menu on '@logout' once login.js is in"+where).toHaveText("logout.js");
+      await expect.soft.poll(rowsLook,"the menu's files once login.js is in"+where).toEqual(["on"]);
+      if(index<2)await page.screenshot({animations:"disabled",path:auditDir+`mention-second-word-menu-on-once-the-first-is-in-${mode}-${width}x800.png`});
+      // logout.js picked: both files on the draft, the menu shut.
+      const file=menu.locator("button").filter({hasText:"src/logout.js"});
+      if(second==="a click")await file.click();else if(second==="a double click")await file.dblclick();else await page.keyboard.press(second);
+      await expect(context,"the chips once logout.js is picked"+where).toHaveCount(2);await expect(composer).toHaveValue("Check @src/login.js and @src/logout.js ");await expect(menu).toHaveCount(0);
+      // The next Enter sends the message with both.
+      await page.keyboard.press("Enter");
+      await expect(page.getByText(replies[index],{exact:true})).toBeVisible({timeout:15_000});
+      await expect(users.last().locator("p")).toHaveText("Check @src/login.js and @src/logout.js");await expect(files).toHaveText(["login.js","logout.js"]);
+      await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);
+    }
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page",...Array(4).fill("Check @src/login.js and @src/logout.js")]);
+  }finally{await harness.close()}
+});
+
+// Escape on the dimmed menu of a second @ word typed while the file picked from the @ menu imports closes it for the draft as it stands,
+// as on any @ menu: once the first file is in, the menu stays shut on '@logout', in the composer and in the one drawn again back from
+// Settings, opened meanwhile, where a click after '@logout' searches for it again, and Enter sends the message with login.js only,
+// '@logout' as typed. The landing put its own dismissal, of login.js's word, in place of Escape's, and with the menu's files kept for
+// '@logout' the menu came back on by itself, so Enter picked logout.js instead of sending (round 10 repair).
+for(const away of [false,true])test(`Escape on the menu of a second @ word typed while a file picked from the @ menu imports keeps it shut once that file is in${away?", back from Settings opened meanwhile,":""} and Enter sends the message with the first file only`,async({page})=>{
+  test.setTimeout(120_000);
+  const [mode,width,reply]=away?["light",900,"Checked login.js back from Settings, '@logout' as typed."]:["dark",1280,"Checked login.js, '@logout' as typed."];
+  const harness=await openComposerApp(page,{replies:[{text:reply}]});
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),menu=page.getByTestId("file-mention-menu"),context=page.getByTestId("context-chip"),users=page.locator(".user-bubble");
+    const files=users.last().locator(".user-attachments > span"),imports=await holdMentionImports(page),where=` in ${mode} at ${width}`;
+    await switchMode(page,mode);await page.setViewportSize({width,height:800});
+    let release=null;imports.held=new Promise(done=>{release=done});
+    await typeMention(page);await pickLogin(page,"Enter");
+    // ' and @logout' typed straight on, its search answered while login.js imports, and Escape on its menu, which offers logout.js.
+    const answered=mentionSearched(page,"logout");await page.keyboard.type(" and @logout",{delay:40});await (await answered).finished();await painted(page);
+    await expect(menu.locator("button.active strong")).toHaveText("logout.js");
+    await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);await expect(composer).toHaveValue("Check @log and @logout");
+    if(away){await page.keyboard.press("Control+Comma");await expect(page.getByRole("heading",{name:"Settings",exact:true,level:1})).toBeVisible();await expect(composer).toHaveCount(0)}
+    // login.js in, and back from Settings the thread opened again from its row, with a click after '@logout' answered by its search.
+    const landed=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/attachments/import");release();await (await landed).finished();await painted(page);
+    if(away){
+      await threadRow(page,"Composer thread").locator(".thread-main").click();await expect(composer).toBeEnabled();await painted(page);
+      const searched=mentionSearched(page,"logout");await clickInDraft(page,31,1);await (await searched).finished();await painted(page);
+    }
+    await expect(context).toHaveCount(1);await expect(composer,"the draft once login.js is in"+where).toHaveValue("Check @src/login.js and @logout");
+    await expect.soft(menu,"the @ menu once login.js is in"+where).toHaveCount(0);
+    await page.screenshot({animations:"disabled",path:auditDir+`mention-second-word-menu-shut-after-escape${away?"-back-from-settings":""}-${mode}-${width}x800.png`});
+    // Enter sends the message as typed, with login.js only.
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(reply,{exact:true})).toBeVisible({timeout:15_000});
+    await expect(users.last().locator("p")).toHaveText("Check @src/login.js and @logout");await expect(files).toHaveText(["login.js"]);
+    await expect(composer).toHaveValue("");await expect(context).toHaveCount(0);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Look at the login page","Check @src/login.js and @logout"]);
+  }finally{await harness.close()}
+});
+
+// Re-pinned note: the limit is Trebell's own 200,000 characters now (it was 120,000).
+test("Enter on a draft over the 200,000-character limit does what the disabled Send does: nothing, with no failed card; Send's title says why",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  try{
+    const composer=page.getByTestId("composer"),send=page.getByTestId("send"),status=page.locator(".composer-status"),users=page.locator(".user-bubble");
+    const over="Draft is 200,002 characters · maximum 200,000",chunk="The quick brown fox jumps over the lazy dog. ".repeat(700).slice(0,30_000);
+    const length=()=>composer.evaluate(node=>node.value.length);
+    // Six pastes and a shorter seventh reach the limit (a longer one would become an attachment), and two characters typed pass it.
+    await composer.click();for(let part=0;part<6;part++)await pasteText(page,chunk);await pasteText(page,chunk.slice(0,20_000));
+    await expect.poll(length).toBe(200_000);
+    await page.keyboard.type("!!",{delay:20});
+    await expect(status).toContainText(over);await expect(send).toBeDisabled();
+    await page.keyboard.press("Enter");await frames(page);
+    await expect(page.getByText("Message exceeds the 200,000 character limit")).toHaveCount(0);await expect(page.locator(".activity-card-failed")).toHaveCount(0);
+    await expect.poll(length).toBe(200_002);await expect(users).toHaveCount(1);
+    await expect(send).toHaveAttribute("title",over);
+    await shootBoth(page,"over-limit-enter",()=>expect(status).toContainText(over));
+    // Two characters fewer, the draft is at the limit and Send is back.
+    await composer.click();await page.keyboard.press("Control+End");await page.keyboard.press("Backspace");await page.keyboard.press("Backspace");
+    await expect(send).toBeEnabled();await expect(send).toHaveAttribute("title","Send message");await expect(status).toContainText("200,000 / 200,000 chars");
+    expect(harness.turns(harness.threads[0])).toHaveLength(1);
+  }finally{await harness.close()}
+});
+
+// The browser's speech recognition, scripted: "blocked" refuses the microphone as a browser does when its permission is denied
+// (an error "not-allowed", then the end), and "listen" keeps listening until stop() is called.
+async function scriptedDictation(page){
+  await page.addInitScript(()=>{
+    window.__dictation={mode:"blocked",starts:0,stops:0};
+    class Recognition{
+      start(){window.__dictation.starts++;if(window.__dictation.mode==="unavailable")throw new DOMException("Speech recognition is not available.","NotSupportedError");setTimeout(()=>{if(window.__dictation.mode==="blocked"){this.onerror?.({error:"not-allowed"});this.onend?.()}else this.onstart?.()},30)}
+      stop(){window.__dictation.stops++;setTimeout(()=>this.onend?.(),30)}
+      abort(){this.stop()}
+    }
+    window.SpeechRecognition=Recognition;window.webkitSpeechRecognition=Recognition;
+  });
+}
+
+test("dictation says when the microphone is blocked, and a second click on the mic stops listening",async({page})=>{
+  test.setTimeout(90_000);
+  await scriptedDictation(page);
+  const harness=await openComposerApp(page);
+  try{
+    const mic=page.getByRole("button",{name:"Voice dictation"}),alert=page.getByTestId("composer-alert");
+    await mic.click();
+    await expect(alert).toHaveText("The microphone is blocked. Allow microphone access for Trebell Code to dictate.");
+    await expect(mic).toHaveAttribute("aria-pressed","false");
+    await shootBoth(page,"dictation-blocked",()=>expect(alert).toBeInViewport());
+    // Allowed, it listens until the mic is clicked again; the note about the blocked microphone goes as it starts.
+    await page.evaluate(()=>{window.__dictation.mode="listen"});
+    await mic.click();
+    await expect(mic).toHaveAttribute("aria-pressed","true");
+    await expect(mic).toHaveAttribute("title","Listening… click to stop");
+    await expect(alert).toHaveCount(0);
+    await mic.click();
+    await expect(mic).toHaveAttribute("aria-pressed","false");
+    await expect(mic).toHaveAttribute("title","Voice dictation");
+    expect(await page.evaluate(()=>window.__dictation)).toEqual({mode:"listen",starts:2,stops:1});
+    // A recognition that cannot start says so, and the next click starts a new one.
+    await page.evaluate(()=>{window.__dictation.mode="unavailable"});
+    await mic.click();
+    await expect(alert).toHaveText("Dictation could not start: Speech recognition is not available.");
+    await page.evaluate(()=>{window.__dictation.mode="listen"});
+    await mic.click();
+    await expect(mic).toHaveAttribute("aria-pressed","true");
+    await mic.click();
+    await expect(mic).toHaveAttribute("aria-pressed","false");
+  }finally{await harness.close()}
+});
+
+test("the blocked-microphone note gives way to the send: a refused send says it was not sent, and a sent one brings the context meter back",async({page})=>{
+  test.setTimeout(90_000);
+  await scriptedDictation(page);
+  let refusing=true;
+  const harness=await openComposerApp(page,{replies:[{text:"Login page checked."}],refuse:message=>refusing&&message.method==="turn/start"?"Provider quota exhausted":null});
+  try{
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("composer-alert"),mic=page.getByRole("button",{name:"Voice dictation"}),context=page.locator(".composer-context");
+    await composer.click();await page.keyboard.type("Check the login page",{delay:15});
+    await mic.click();
+    await expect(alert).toHaveText("The microphone is blocked. Allow microphone access for Trebell Code to dictate.");
+    // The person sends what they typed instead, and the harness refuses the turn.
+    await composer.click();await page.keyboard.press("Enter");
+    await expect(alert).toHaveText("Not sent: Provider quota exhausted. Your draft is kept.");
+    await expect(composer).toHaveValue("Check the login page");
+    await shootBoth(page,"dictation-blocked-then-send-refused",()=>expect(alert).toBeInViewport());
+    // Blocked again and then sent: the note goes with the message, and the context meter is back.
+    refusing=false;
+    await mic.click();await expect(alert).toHaveText(/microphone is blocked/);
+    await composer.click();await page.keyboard.press("Enter");
+    await expect(page.getByText("Login page checked.")).toBeVisible({timeout:15_000});
+    await expect(composer).toHaveValue("");
+    await expect(alert).toHaveCount(0);await expect(context).toBeVisible();
+    await shootBoth(page,"dictation-blocked-then-sent",()=>expect(context).toBeInViewport());
+  }finally{await harness.close()}
+});
+
+test("a welcome suggestion puts its prompt in the composer with the caret at its end, so Enter sends it",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{newTask:true,replies:[{text:"Found the bug and fixed it."}]});
+  try{
+    const composer=page.getByTestId("composer"),prompt="Find a useful bug, fix it, and run the relevant tests.";
+    for(const mode of ["light","dark"]){
+      await switchMode(page,mode);
+      await page.getByRole("button",{name:"Fix a bug",exact:true}).click();
+      await expect(composer).toHaveValue(prompt);
+      await expect(composer).toBeFocused();
+      expect(await composer.evaluate(node=>[node.selectionStart,node.selectionEnd])).toEqual([prompt.length,prompt.length]);
+      for(const width of [1280,900]){await page.setViewportSize({width,height:800});await expect(composer).toBeFocused();await page.screenshot({animations:"disabled",path:auditDir+"welcome-suggestion-"+mode+"-"+width+"x800.png"})}
+      await page.setViewportSize({width:1280,height:800});
+      if(mode==="light"){await page.keyboard.press("Control+A");await page.keyboard.press("Delete");await expect(composer).toHaveValue("")}
+    }
+    // Enter, straight after the suggestion, sends it.
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".user-bubble").last()).toContainText(prompt);
+    await expect(composer).toHaveValue("");
+  }finally{await harness.close()}
+});
+
+test("Ctrl+S held stashes the draft once, and held on the empty composer brings it back once, as any shortcut held runs once",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page);
+  // The stash list as the GUI server keeps it, here in the page, so later specs on the shared server keep theirs.
+  const stashes=[];let made=0;
+  await page.route(/\/api\/stashes(?:\?.*)?$/,route=>{
+    const request=route.request(),method=request.method();
+    if(method==="POST"){stashes.unshift({...request.postDataJSON(),id:"stash-"+(++made)});return json(route,{ok:true,stash:stashes[0]})}
+    if(method==="DELETE"){const at=stashes.findIndex(stash=>stash.id===new URL(request.url()).searchParams.get("id"));if(at>=0)stashes.splice(at,1);return json(route,{ok:true})}
+    return json(route,{stashes});
+  });
+  try{
+    const composer=page.getByTestId("composer"),shell=page.locator(".app-shell"),draft="Draft to keep for later";
+    const holdCtrl=async(key,pressed)=>{await page.keyboard.down("Control");await holdKey(page,key,pressed);await page.keyboard.up("Control")};
+    await composer.click();await page.keyboard.type(draft,{delay:15});
+    // The press stashes the draft. Each repeat would find the composer empty and bring the stash back, or stash it again.
+    await holdCtrl("s",()=>expect(composer).toHaveValue(""));
+    await page.keyboard.type("Another thought",{delay:15});
+    await expect(composer).toHaveValue("Another thought");expect(stashes.map(stash=>stash.text)).toEqual([draft]);
+    await shootBoth(page,"held-ctrl-s-stashed",()=>expect(composer).toBeInViewport());
+    // Held on the empty composer, it brings the draft back once.
+    await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+    await holdCtrl("s",()=>expect(composer).toHaveValue(draft));
+    await page.keyboard.type(" today",{delay:15});
+    await expect(composer).toHaveValue(draft+" today");expect(stashes).toEqual([]);
+    // Ctrl+B held closes the sidebar, and its repeats do not open it again.
+    await holdCtrl("b",()=>expect(shell).toHaveClass(/sidebar-collapsed/));
+    await expect(shell).toHaveClass(/sidebar-collapsed/);
+    await page.keyboard.press("Control+b");await expect(shell).not.toHaveClass(/sidebar-collapsed/);
+  }finally{await harness.close()}
+});
+
+// An OpenCode thread whose session lists provider agents, so the composer shows the agent picker ("build · primary") beside the
+// model picker, on a socket that answers what the window asks as it opens the thread. The catalog's second model has a longer name.
+async function openAgentsThread(page){
+  const thread={id:"opencode-agents-thread",runtime:"opencode",name:"OpenCode agents",preview:"Agents",agent:"build",cwd:process.cwd(),createdAt:Date.now()/1000-20,updatedAt:Date.now()/1000,status:{type:"idle"},turns:[],
+    providerMeta:{session_info_update:{agents:[{name:"build",mode:"primary"},{name:"plan",mode:"primary"},{name:"reviewer",mode:"subagent"}]}}};
+  const http=createServer(),wss=new WebSocketServer({noServer:true});
+  http.on("upgrade",(req,socket,head)=>wss.handleUpgrade(req,socket,head,ws=>wss.emit("connection",ws,req)));
+  wss.on("connection",ws=>ws.on("message",raw=>{
+    const message=JSON.parse(String(raw)),method=message.method;if(message.id==null||!method)return;
+    const result=method==="initialize"?{userAgent:"composer-agents-fixture"}:method==="thread/list"?{data:[thread],nextCursor:null}:method==="thread/resume"||method==="thread/read"?{thread,itemsBackwardsCursor:null,turnsBackwardsCursor:null}
+      :method==="thread/goal/get"?{goal:null}:method==="thread/runtimeInstances/list"?{supported:false,currentInstanceId:null,items:[]}:method.endsWith("/list")?{data:[],nextCursor:null}:{};
+    ws.send(JSON.stringify({id:message.id,result}));
+  }));
+  await new Promise((resolve,reject)=>http.listen(0,"127.0.0.1",resolve).once("error",reject));
+  const settings={onboardingComplete:true,appearance:"dark",appearanceMode:"dark",panelAnimationMs:0,agentRuntime:"opencode",agentRuntimeInstanceId:"opencode-default",modelProvider:"openai",defaultPermissionMode:"supervised",defaultWorkspaceMode:"current"};
+  const status={id:"opencode-default",kind:"opencode",name:"OpenCode",available:true,installed:true,authenticated:true,version:"1.0.0-fixture"};
+  await keepThreadMeta(page);
+  await page.route(/\/api\/bootstrap$/,route=>json(route,{mock:false,provider:"openai",providerReady:true,agentRuntime:"opencode",agentRuntimeInstanceId:"opencode-default",agentRuntimeReady:true,appServerReady:true,wsUrl:`ws://127.0.0.1:${http.address().port}/api/agent/ws`,cwd:process.cwd(),platform:process.platform,version:"composer-agents-fixture",activeEnvironmentId:null,activeEnvironment:null}));
+  await page.route(/\/api\/state$/,route=>json(route,{settings,projects:[],threadMeta:{[thread.id]:{projectless:true,environmentId:null}}}));
+  await page.route(/\/api\/settings$/,route=>json(route,route.request().method()==="POST"?Object.assign(settings,route.request().postDataJSON()||{}):settings));
+  await page.route(/\/api\/models(?:\?.*)?$/,route=>json(route,{agentRuntime:"opencode",ready:true,models:["opencode/fixture-fast","opencode/fixture-large"],defaultModel:"opencode/fixture-fast",error:null,
+    metadata:{models:[{id:"opencode/fixture-fast",name:"OpenCode Fixture Fast",agent:"opencode"},{id:"opencode/fixture-large",name:"OpenCode Fixture Large Context",agent:"opencode"}]}}));
+  await page.route(/\/api\/agent-runtimes(?:\?.*)?$/,route=>json(route,{selectedRuntime:"opencode",selectedInstanceId:status.id,definitions:[{id:"opencode",name:"OpenCode",protocol:"http"}],instances:[{id:status.id,kind:"opencode",displayName:"OpenCode",enabled:true}],statuses:[status]}));
+  for(const [path,value] of [[/\/api\/projects$/,{projects:[]}],[/\/api\/general-workspace$/,{path:process.cwd(),environmentId:null}],[/\/api\/stashes$/,{stashes:[]}],[/\/api\/recovery$/,{enabled:false,items:[]}],
+    [/\/api\/checkpoints(?:\?.*)?$/,{checkpoints:[]}],[/\/api\/environment\/themes$/,{environmentKey:"local",environmentName:"Local machine",directory:"",themes:[]}]])await page.route(path,route=>json(route,value));
+  await page.addInitScript(()=>localStorage.setItem("trebell-layout-v1",JSON.stringify({sidebarWidth:258,rightPanelWidth:460,terminalHeight:330})));
+  await page.setViewportSize({width:1280,height:800});
+  await page.goto("/");
+  await page.locator('.thread-main[title="OpenCode agents"]').click();
+  await expect(page.locator(".agent-picker")).toHaveValue("build");
+  return {async close(){for(const ws of wss.clients)ws.terminate();wss.close();await new Promise(resolve=>http.close(resolve))}};
+}
+// The composer's right-hand controls as a person finds them: what the page answers at the middle of each (the control itself, or what
+// covers it), the ones that run over each other, whether the mic sits between the model picker and Send, and the model's name: whole,
+// or cut with an ellipsis, and then whether its row had room left for more of it. That room is the bar's width along the model
+// picker's row less the controls on that row and the gaps the layout puts between them (a group's gap, the bar's between the two
+// groups, a control's margins), so wherever the row lays its free space (between the groups, or before the right group on a row of its
+// own) it counts.
+const readComposerRight=page=>page.locator(".composer-bar").evaluate(bar=>{
+  const parts={agent:".agent-picker",model:"[data-testid=model-picker]",mic:".mic-btn",send:"[data-testid=send]"},names=Object.keys(parts),nodes={},boxes={},hits={},overlaps=[];
+  for(const name of names){nodes[name]=bar.querySelector(parts[name]);boxes[name]=nodes[name].getBoundingClientRect()}
+  for(const name of names){const box=boxes[name],at=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);hits[name]=names.find(other=>nodes[other].contains(at))||String(at?.className||at?.tagName)}
+  names.forEach((a,index)=>names.slice(index+1).forEach(b=>{const p=boxes[a],q=boxes[b];if(p.left<q.right-1&&q.left<p.right-1&&p.top<q.bottom-1&&q.top<p.bottom-1)overlaps.push(a+"/"+b)}));
+  const barBox=bar.getBoundingClientRect(),barStyle=getComputedStyle(bar),model=boxes.model;
+  const row=[...bar.children].flatMap(group=>[...group.children].map(node=>({node,group,box:node.getBoundingClientRect()})))
+    .filter(({box})=>box.width>0&&box.top<model.bottom-1&&box.bottom>model.top+1).sort((a,b)=>a.box.left-b.box.left);
+  let free=0,end=barBox.left+parseFloat(barStyle.paddingLeft),previous=null;
+  for(const item of row){
+    const style=getComputedStyle(item.node),gap=previous?parseFloat(getComputedStyle(previous.group===item.group?item.group:bar).columnGap)||0:0;
+    free+=Math.max(0,item.box.left-parseFloat(style.marginLeft)-gap-end);end=item.box.right+parseFloat(style.marginRight);previous=item;
+  }
+  free+=Math.max(0,barBox.right-parseFloat(barStyle.paddingRight)-end);
+  const label=nodes.model.querySelector("strong"),whole=label.scrollWidth<=label.clientWidth+1;
+  const cut=getComputedStyle(label).textOverflow==="ellipsis"?"cut with an ellipsis":"cut";
+  return {hits,overlaps,micBetween:boxes.model.right<=boxes.mic.left+1&&boxes.mic.right<=boxes.send.left+1,label:whole?"whole":free<=2?cut+", its row full":`${cut}, ${Math.round(free)} px free in its row`};
+});
+const controlsClear={hits:{agent:"agent",model:"model",mic:"mic",send:"send"},overlaps:[],micBetween:true};
+
+// Beside OpenCode's agent picker, the model picker kept its whole label in a group held to about half the composer, so from 1000 wide
+// down it ran over the mic and a click there opened the model picker. The mic stays between the model picker and Send at every width,
+// in both modes, and a name too long for its pill is cut with an ellipsis only where its row has no room left for it (a cap of 32vw
+// cut the longer name at 700 with about 46 px of the row free), whole in the open picker.
+test("beside OpenCode's agent picker the mic stays clickable between the model picker and Send at every width, the model's name whole or cut with an ellipsis",async({page})=>{
+  test.setTimeout(150_000);
+  await scriptedDictation(page);
+  const fixture=await openAgentsThread(page);
+  try{
+    const picker=page.getByTestId("model-picker"),mic=page.getByRole("button",{name:"Voice dictation"}),menu=page.locator(".model-picker-menu");
+    const shown=expect.stringMatching(/^(whole|cut with an ellipsis, its row full)$/);
+    await expect(picker).toContainText("OpenCode Fixture Fast");
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,1100,1000,900,800,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readComposerRight(page),{message:`the composer's controls at ${width}x800 in ${mode}`}).toEqual({...controlsClear,label:shown});
+        await mic.click({trial:true,timeout:5000});
+        if([1280,900,700].includes(width))await page.screenshot({animations:"disabled",path:auditDir+`agent-picker-composer-${mode}-${width}x800.png`});
+      }
+    }
+    // The longer name, picked from the open picker, is whole there. In the composer it is whole wherever its row has room for it, and
+    // cut with an ellipsis only where that row is full, clear of the mic: at 1280 and 700, and with the right panel open at 1280 and
+    // 1100, which stacks the composer's two groups and, at 1100, leaves the right group's row too narrow for the whole name.
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");
+    await picker.click();await expect(menu).toBeVisible();
+    expect(await menu.locator(":scope>button strong").evaluateAll(nodes=>nodes.map(node=>node.textContent+(node.scrollWidth>node.clientWidth+1?" (cut)":"")))).toEqual(["OpenCode Fixture Fast","OpenCode Fixture Large Context"]);
+    await menu.getByRole("button",{name:/OpenCode Fixture Large Context/}).click();
+    await expect(menu).toHaveCount(0);await expect(picker).toContainText("OpenCode Fixture Large Context");
+    const panelToggle=page.getByTestId("right-panel-toggle"),panel=page.getByTestId("right-panel");
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readComposerRight(page),{message:`the longer name at ${width}x800 in ${mode}`}).toEqual({...controlsClear,label:shown});
+        await mic.click({trial:true,timeout:5000});
+      }
+      await page.screenshot({animations:"disabled",path:auditDir+`agent-picker-longer-model-${mode}-700x800.png`});
+      await page.setViewportSize({width:1280,height:800});await panelToggle.click();await expect(panel).toBeVisible();
+      for(const width of [1280,1100]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readComposerRight(page),{message:`the longer name beside the right panel at ${width}x800 in ${mode}`}).toEqual({...controlsClear,label:shown});
+        await mic.click({trial:true,timeout:5000});
+        await page.screenshot({animations:"disabled",path:auditDir+`agent-picker-longer-model-panel-${mode}-${width}x800.png`});
+      }
+      await page.setViewportSize({width:1280,height:800});await panelToggle.click();await expect(panel).toHaveCount(0);
+    }
+    // At 900, a click where the mic is goes to the mic: it says the microphone is blocked, and the model picker stays closed.
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");await page.setViewportSize({width:900,height:800});
+    await expect.poll(()=>readComposerRight(page),{message:"the composer's controls at 900x800"}).toEqual({...controlsClear,label:shown});
+    const box=await mic.boundingBox();await page.mouse.click(box.x+box.width/2,box.y+box.height/2);
+    await expect(page.getByTestId("composer-alert")).toHaveText("The microphone is blocked. Allow microphone access for Trebell Code to dictate.");
+    await expect(menu).toHaveCount(0);
+  }finally{await fixture.close()}
+});
+
+// A reply long enough to scroll that ends with a line with a link in it, then its done chip: what a person rereads, clicks and cites
+// while writing.
+const LONG_REPLY=[...Array.from({length:30},(_,index)=>`Paragraph ${index+1} of the reply about the login flow and its session token.`),"Last line of the reply: sign out on a 401, see the [session notes](https://example.invalid/notes)."].join("\n\n");
+// The end of the last reply against the composer: whether the view is at its end, and for the reply's last line, the link in it and
+// the done chip, "clear" when it is above the composer and its chips and the page answers it at its middle, or else where it is and
+// what the page answers there.
+const readReplyEnd=page=>page.evaluate(()=>{
+  const scroll=document.querySelector(".conversation-scroll"),wrap=document.querySelector(".composer-wrap"),chip=wrap.querySelector(".attachment-shelf>span");
+  const top=Math.min(wrap.getBoundingClientRect().top,chip?chip.getBoundingClientRect().top:Infinity);
+  const line=[...scroll.querySelectorAll("p")].filter(node=>node.textContent.startsWith("Last line of the reply")).pop();
+  const clear=(node,x)=>{
+    if(!node)return "missing";
+    const box=node.getBoundingClientRect(),at=document.elementFromPoint(x(box),box.top+box.height/2);
+    return box.bottom<=top+0.5&&node.contains(at)?"clear":`${Math.round(box.top)}-${Math.round(box.bottom)} answers ${String(at?.className||at?.tagName)}${at?.closest(".composer-wrap")?" in the composer":""}, composer top ${Math.round(top)}`;
+  };
+  return {atEnd:scroll.scrollHeight-scroll.clientHeight-scroll.scrollTop<=1,line:clear(line,box=>box.left+20),link:clear(line?.querySelector("a"),box=>box.left+box.width/2),
+    chip:clear([...scroll.querySelectorAll("[data-testid=turn-outcome]")].pop(),box=>box.left+box.width/2)};
+});
+const replyEndClear={atEnd:true,line:"clear",link:"clear",chip:"clear"};
+const distanceFromEnd=page=>page.locator(".conversation-scroll").evaluate(node=>Math.round(node.scrollHeight-node.clientHeight-node.scrollTop));
+// The first paragraph wholly below the view's top, and where it is on screen.
+const firstParagraphInView=page=>page.locator(".conversation-scroll").evaluate(node=>{
+  const top=node.getBoundingClientRect().top,paragraph=[...node.querySelectorAll("p")].find(item=>item.getBoundingClientRect().top>=top);
+  return paragraph?{text:paragraph.textContent.slice(0,13),top:Math.round(paragraph.getBoundingClientRect().top)}:null;
+});
+// The mouse wheel over the thread, as a person scrolls it, then the view once it holds still.
+async function wheelThread(page,dy,steps=1){
+  const view=await page.locator(".conversation-scroll").boundingBox();
+  await page.mouse.move(view.x+view.width/2,view.y+Math.min(200,view.height/2));
+  for(let step=0;step<steps;step++)await page.mouse.wheel(0,dy);
+  const top=()=>page.locator(".conversation-scroll").evaluate(node=>Math.round(node.scrollTop));
+  await expect.poll(async()=>{const before=await top();await page.waitForTimeout(120);return before===await top()}).toBe(true);
+}
+// A message of several lines, written with Shift+Enter between them.
+async function typeLines(page,count){
+  await page.keyboard.type("Line 1 of a longer message",{delay:10});
+  for(let line=2;line<=count;line++){await page.keyboard.press("Shift+Enter");await page.keyboard.type("Line "+line,{delay:10})}
+}
+
+// The thread's scroll area ended where the composer's top is with an empty draft, so a draft of several lines (the composer growing
+// from 115 to 235 px) and its attachment chips covered the end of the last reply even with the thread at its end, and the empty
+// attachment shelf, drawn over the reply, took the clicks on its last line. The end of the reply stays clear of the composer however
+// tall it grows, a thread at its end stays there, and one scrolled up keeps what is being read in place.
+test("a draft of several lines and its attachment chips leave the end of the last reply clear to read, click and cite, and a thread scrolled up keeps its place",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the login flow",items:[replyItem("login-reply",LONG_REPLY)]}]});
+  try{
+    const composer=page.getByTestId("composer"),lastLine=page.locator(".conversation-scroll p").filter({hasText:"Last line of the reply"});
+    await expect(lastLine).toBeVisible();
+    await expect.poll(()=>readReplyEnd(page),{message:"the empty composer"}).toEqual(replyEndClear);
+    // Scrolled up to reread, the person writes eight lines: the paragraph at the view's top stays where it is.
+    await wheelThread(page,-400);
+    const reading=await firstParagraphInView(page);
+    await composer.click();await typeLines(page,8);await expect(composer).toHaveValue(/\nLine 8$/);
+    await expect.poll(()=>firstParagraphInView(page),{message:"the paragraph being read"}).toEqual(reading);
+    expect(await distanceFromEnd(page)).toBeGreaterThan(48);
+    // Scrolled to its end, the end of the reply shows above the grown composer, and the empty attachment shelf takes no room over it.
+    await wheelThread(page,1200,6);
+    await expect.poll(()=>readReplyEnd(page),{message:"an eight-line draft, the thread scrolled to its end"}).toEqual(replyEndClear);
+    await expect(page.locator(".attachment-shelf")).toBeHidden();
+    // At its end, the thread stays there as the draft goes and grows again, with no scrolling.
+    await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+    await expect.poll(()=>readReplyEnd(page),{message:"the draft cleared"}).toEqual(replyEndClear);
+    await typeLines(page,8);
+    await expect.poll(()=>readReplyEnd(page),{message:"eight lines written again at the thread's end"}).toEqual(replyEndClear);
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,900,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readReplyEnd(page),{message:`an eight-line draft at ${width}x800 in ${mode}`}).toEqual(replyEndClear);
+        await page.screenshot({animations:"disabled",path:auditDir+`grown-draft-reply-end-${mode}-${width}x800.png`});
+      }
+    }
+    await page.setViewportSize({width:1280,height:800});await switchMode(page,"dark");
+    await expect.poll(()=>readReplyEnd(page),{message:"back at 1280x800"}).toEqual(replyEndClear);
+    // A triple-click on the last line selects it and offers Cite, and its link takes a click.
+    const box=await lastLine.boundingBox();
+    await page.mouse.click(box.x+30,box.y+box.height/2,{clickCount:3});
+    expect(await page.evaluate(()=>String(getSelection()))).toMatch(/^Last line of the reply/);
+    await expect(page.getByTestId("assistant-selection-cite")).toBeVisible();
+    await lastLine.getByRole("link",{name:"session notes"}).click({trial:true,timeout:5000});
+    // Two pasted screenshots: their chips sit above the composer, clear of the reply's text, and the thread stays at its end.
+    await composer.click();await pasteImage(page,"screen-1.png");await pasteImage(page,"screen-2.png");
+    await expect(chips(page)).toHaveText(["screen-1.png","screen-2.png"]);
+    await expect.poll(()=>readReplyEnd(page),{message:"eight lines and two screenshots"}).toEqual(replyEndClear);
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`grown-draft-with-files-reply-end-${mode}-1280x800.png`})}
+  }finally{await harness.close()}
+});
+
+// The desktop shell's agent browser, as far as the Browser panel's Attach screenshot goes: each capture is a small PNG.
+function screenshotBrowser(){
+  const state={open:false,url:"",title:"",canGoBack:false,canGoForward:false,loading:false,width:1280,height:800};
+  Object.defineProperty(window,"trebellDesktop",{configurable:true,value:{browser:{state:async()=>state,onState:()=>()=>{},
+    screenshot:async()=>({dataUrl:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="})}}});
+}
+// Attach screenshot pressed in the Browser panel count times, each press waited on until its chip is in the composer.
+async function attachScreenshots(page,count){
+  const capture=page.getByTestId("right-panel").getByRole("button",{name:"Attach screenshot",exact:true}),chip=page.getByTestId("context-chip"),before=await chip.count();
+  for(let press=1;press<=count;press++){await capture.click();await expect(chip).toHaveCount(before+press)}
+}
+// Each of the new task's suggestions against the composer: "clear" when it is wholly above the composer and its chips, inside the
+// conversation's view, and the page answers it at its middle, or else where it is and what the page answers there.
+const readSuggestions=page=>page.evaluate(()=>{
+  const wrap=document.querySelector(".chat-workspace .composer-wrap"),view=document.querySelector(".chat-workspace .conversation-scroll").getBoundingClientRect();
+  const top=Math.min(wrap.getBoundingClientRect().top,...[...wrap.querySelectorAll(".attachment-shelf>span")].map(chip=>chip.getBoundingClientRect().top));
+  return [...document.querySelectorAll(".welcome .suggestions button")].map(button=>{
+    const box=button.getBoundingClientRect(),at=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+    return box.bottom<=top+0.5&&box.top>=view.top&&box.bottom<=view.bottom+0.5&&button.contains(at)?"clear":`${button.textContent} ${Math.round(box.top)}-${Math.round(box.bottom)} answers ${String(at?.className||at?.tagName)}${at?.closest(".composer-wrap")?" in the composer":""}, composer top ${Math.round(top)}, view ${Math.round(view.top)}-${Math.round(view.bottom)}`;
+  });
+});
+const suggestionsClear=["clear","clear","clear"];
+
+// Browser screenshots attached in the Browser panel grow the composer a row of chips for every two or three. The thread ends above
+// them, but the new task's welcome kept its place over the composer, so a dozen of them beside the open panel covered the lower half
+// of its suggestions, as did fewer under a draft of several lines. The welcome makes room for the chips, the panel open or closed and
+// in narrower windows, and keeps its place as a draft grows; the thread at its end keeps the end of its last reply clear of ten.
+test("ten Browser screenshots attached leave the end of the last reply clear above the composer, and a dozen the new task's suggestions",async({page})=>{
+  test.setTimeout(150_000);
+  await page.addInitScript(screenshotBrowser);
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the session flow",items:[replyItem("session-reply",LONG_REPLY)]},{user:"Explain the login flow",items:[replyItem("login-reply",LONG_REPLY)]}]});
+  try{
+    const composerTop=()=>page.locator(".chat-workspace .composer-wrap").evaluate(node=>Math.round(node.getBoundingClientRect().top));
+    await page.locator(".sidebar").getByRole("button",{name:"Browser",exact:true}).click();
+    await expect(page.getByTestId("right-panel").getByRole("button",{name:"Attach screenshot",exact:true})).toBeVisible();
+    // On the thread scrolled to its end, ten chips leave the end of its last reply clear.
+    await wheelThread(page,1200,6);
+    const before=await composerTop();
+    await attachScreenshots(page,10);
+    await wheelThread(page,1200,6);
+    await expect.poll(()=>readReplyEnd(page),{message:"ten chips, the thread at its end"}).toEqual(replyEndClear);
+    test.info().annotations.push({type:"thread with ten chips",description:JSON.stringify({composerTopBefore:before,composerTopAfter:await composerTop(),end:await readReplyEnd(page),lastLineBottom:await page.locator(".conversation-scroll p").filter({hasText:"Last line of the reply"}).last().evaluate(node=>Math.round(node.getBoundingClientRect().bottom)),viewBottom:await page.locator(".conversation-scroll").evaluate(node=>Math.round(node.getBoundingClientRect().bottom))})});
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`ten-chips-reply-end-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    // On New task, a dozen chips leave its suggestions clear, the Browser panel open (a narrow conversation, six rows of chips) or closed.
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"New task",exact:true}).click();
+    await expect(page.locator(".welcome h1")).toHaveText("What do you want to build?");await expect(page.getByTestId("context-chip")).toHaveCount(0);
+    await attachScreenshots(page,12);
+    await expect.poll(()=>readSuggestions(page),{message:"a dozen chips on New task, the Browser panel open"}).toEqual(suggestionsClear);
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`dozen-chips-welcome-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    await page.getByRole("button",{name:"Close right panel"}).click();await expect(page.getByTestId("right-panel")).toHaveCount(0);
+    for(const width of [1280,900,700]){
+      await page.setViewportSize({width,height:800});
+      await expect.poll(()=>readSuggestions(page),{message:`a dozen chips on New task at ${width}x800, the panel closed`}).toEqual(suggestionsClear);
+      if(width<1280)await page.screenshot({animations:"disabled",path:auditDir+`dozen-chips-welcome-dark-${width}x800.png`});
+    }
+    await page.setViewportSize({width:1280,height:800});
+    await page.getByRole("button",{name:"Fix a bug",exact:true}).click({trial:true,timeout:5000});
+    // A draft of several lines leaves the welcome where it was, the chips still clear.
+    const placed=await page.locator(".welcome h1").evaluate(node=>Math.round(node.getBoundingClientRect().top));
+    await page.getByTestId("composer").click();await typeLines(page,6);
+    await expect.poll(()=>readSuggestions(page),{message:"a six-line draft and a dozen chips on New task"}).toEqual(suggestionsClear);
+    expect(await page.locator(".welcome h1").evaluate(node=>Math.round(node.getBoundingClientRect().top)),"the welcome keeps its place as the draft grows").toBe(placed);
+  }finally{await harness.close()}
+});
+
+// What a person sees of the composer with chips on its attachment shelf: the typed draft (at its first line's start and its middle),
+// the + (Attach files) and the mode picker (at their top edge and middle), each "clear" when no chip lies over it and the page answers
+// it there, or else the chips over it and what the page answers; and the chips, "whole" when the page answers each in the shelf's view.
+const readComposerClear=page=>page.evaluate(()=>{
+  const wrap=document.querySelector(".chat-workspace .composer-wrap"),shelf=wrap.querySelector(".attachment-shelf"),chips=[...shelf.children],view=shelf.getBoundingClientRect();
+  const named=node=>node?.closest(".attachment-shelf>span")?.title||(typeof node?.className==="string"&&node.className)||node?.tagName||"nothing";
+  const clear=(node,points)=>{
+    const box=node.getBoundingClientRect(),under=chips.filter(chip=>{const b=chip.getBoundingClientRect();return b.left<box.right-1&&box.left<b.right-1&&b.top<box.bottom-1&&box.top<b.bottom-1});
+    const at=points(box).map(([x,y])=>document.elementFromPoint(x,y));
+    return !under.length&&at.every(hit=>node.contains(hit))?"clear":`under ${under.map(named).join(", ")||"no chip"}, answers ${at.map(named).join(" and ")}`;
+  };
+  const edgeAndMiddle=box=>[[box.left+box.width/2,box.top+3],[box.left+box.width/2,box.top+box.height/2]];
+  const unseen=chips.filter(chip=>{const b=chip.getBoundingClientRect();return b.top<view.top-0.5||b.bottom>view.bottom+0.5||!chip.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2))});
+  return {draft:clear(wrap.querySelector("textarea"),box=>[[box.left+30,box.top+22],[box.left+box.width/2,box.top+box.height/2]]),attach:clear(wrap.querySelector('button[aria-label="Attach files"]'),edgeAndMiddle),
+    mode:clear(wrap.querySelector(".composer-left select.permission-picker"),edgeAndMiddle),chips:unseen.length?unseen.map(named).join(", ")+" out of view":"whole"};
+});
+const composerClear={draft:"clear",attach:"clear",mode:"clear",chips:"whole"};
+
+// Screenshots pasted one by one onto a typed draft: the attachment shelf stood a row above the composer and wrapped down onto it, so
+// at 1280 the sixth chip and those after it (at 900 the fifth) lay over the draft and took a click on it, and at 700 a third row lay
+// over the + and the mode picker, which took no click. The shelf's rows go up from the composer's top, the thread and a refused file's
+// message end above them, and past three rows the shelf scrolls, showing the newest, on a thread and on New task alike.
+test("screenshots pasted onto a draft stack up above the composer and leave the draft, the + and the mode picker clear to click, on a thread and on New task at 1280, 900 and 700",async({page},testInfo)=>{
+  test.setTimeout(180_000);
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the login flow",items:[replyItem("login-reply",LONG_REPLY)]}]});
+  try{
+    const composer=page.getByTestId("composer"),uploading=page.locator(".attachment-shelf > span.uploading"),alert=page.getByTestId("app-action-error");
+    // Pasted one at a time, each waited on until it is in.
+    const paste=async(prefix,from,to)=>{for(let index=from;index<=to;index++){await pasteImage(page,`${prefix}-${String(index).padStart(2,"0")}.png`);await expect(chips(page)).toHaveCount(index);await expect(uploading).toHaveCount(0)}};
+    await wheelThread(page,1200,6);
+    await composer.click();await page.keyboard.type("Look at these screenshots",{delay:20});
+    await paste("screenshot",1,9);
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,900,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readComposerClear(page),{message:`nine screenshots on a thread at ${width}x800 in ${mode}`}).toEqual(composerClear);
+        await expect.poll(()=>readReplyEnd(page),{message:`the reply's end above nine screenshots at ${width}x800 in ${mode}`}).toEqual(replyEndClear);
+        await page.screenshot({animations:"disabled",path:auditDir+`nine-screenshots-thread-${mode}-${width}x800.png`});
+      }
+    }
+    // At 700, three rows of chips: the + opens the file chooser and the mode picker takes a click; there and at 1280, a click on the
+    // start of the draft puts the caret there.
+    const [chooser]=await Promise.all([page.waitForEvent("filechooser",{timeout:5000}),page.getByRole("button",{name:"Attach files"}).click({timeout:5000})]);await chooser.setFiles([]);
+    await page.locator(".composer-left select.permission-picker").first().click({trial:true,timeout:5000});
+    for(const width of [700,1280]){
+      await page.setViewportSize({width,height:800});
+      await page.locator(".conversation-scroll").click({position:{x:12,y:12}});await expect(composer).not.toBeFocused();
+      const box=await composer.boundingBox();await page.mouse.click(box.x+18,box.y+22);
+      await expect(composer,`a click on the start of the draft at ${width}x800`).toBeFocused();
+      expect(await composer.evaluate(node=>node.selectionStart)).toBeLessThanOrEqual(1);
+    }
+    await expect(composer).toHaveValue("Look at these screenshots");await expect(chips(page)).toHaveCount(9);
+    // A file refused beside them is said above the shelf's top row, at 1280 (two rows) and 700 (three).
+    const big=testInfo.outputPath("recording.bin");await writeFile(big,Buffer.alloc(51*1024*1024,7));
+    for(const width of [1280,700]){
+      await page.setViewportSize({width,height:800});
+      await chooseFiles(page,big);await expect(alert).toHaveText("Could not attach files: recording.bin: Attachment is larger than 50 MB",{timeout:2000});
+      const [toast,top]=await Promise.all([alert.boundingBox(),chips(page).first().boundingBox()]);
+      expect(toast.y+toast.height,`the refusal above the shelf's top row at ${width}x800`).toBeLessThanOrEqual(top.y);
+    }
+    await page.screenshot({animations:"disabled",path:auditDir+"nine-screenshots-refusal-light-700x800.png"});
+    await expect(alert).toBeHidden({timeout:10_000});
+    // On New task, six screenshots (two rows at 1280) leave the draft, the + and the mode picker clear, and the suggestions too.
+    await page.setViewportSize({width:1280,height:800});
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"New task",exact:true}).click();
+    await expect(page.locator(".welcome h1")).toHaveText("What do you want to build?");await expect(chips(page)).toHaveCount(0);
+    await composer.click();await page.keyboard.type("New task with screenshots",{delay:20});
+    await paste("welcome",1,6);
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const width of [1280,900,700]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readComposerClear(page),{message:`six screenshots on New task at ${width}x800 in ${mode}`}).toEqual(composerClear);
+        await expect.poll(()=>readSuggestions(page),{message:`the suggestions above six screenshots at ${width}x800 in ${mode}`}).toEqual(suggestionsClear);
+        await page.screenshot({animations:"disabled",path:auditDir+`six-screenshots-new-task-${mode}-${width}x800.png`});
+      }
+    }
+    // Past about three rows the shelf scrolls, with the theme's own scrollbar as the conversation has it, and each screenshot pasted
+    // brings the newest into view with a part of the row above it showing, so the older chips are seen to be there, the controls still
+    // clear; a composer drawn again (New task again after Settings) shows the newest too. It scrolled with the platform's thin bar, which
+    // macOS shows only while it scrolls, cut exactly between rows, and a composer drawn again opened on its oldest rows: 18 screenshots
+    // showed 10, and nothing said 8 more were attached. rowAbove: what shows of the row above the shelf's top.
+    const shelfEnd=()=>page.locator(".attachment-shelf").evaluate(shelf=>{
+      const view=shelf.getBoundingClientRect(),last=shelf.lastElementChild.getBoundingClientRect();
+      const above=Math.max(0,...[...shelf.children].map(chip=>chip.getBoundingClientRect()).filter(box=>box.top<view.top-0.5).map(box=>Math.round(Math.min(box.bottom,view.bottom)-view.top)));
+      return {scrolls:shelf.scrollHeight>shelf.clientHeight,newest:last.top>=view.top-0.5&&last.bottom<=view.bottom+0.5?"in view":"out of view",rowAbove:above>=6?"shows in part":`hidden (${above}px)`};
+    });
+    const scrollbars=()=>page.evaluate(()=>{
+      const bar=node=>{const {scrollbarWidth,scrollbarColor}=getComputedStyle(node);return {scrollbarWidth,scrollbarColor}},shelf=document.querySelector(".chat-workspace .attachment-shelf");
+      return {shelf:bar(shelf),conversation:bar(document.querySelector(".chat-workspace .conversation-scroll")),shelfGutter:shelf.offsetWidth-shelf.clientWidth};
+    });
+    const capped={scrolls:true,newest:"in view",rowAbove:"shows in part"};
+    for(const [width,count] of [[1280,17],[700,18]]){
+      await page.setViewportSize({width,height:800});await paste("welcome",await chips(page).count()+1,count);
+      await expect.poll(async()=>{const {draft,attach,mode}=await readComposerClear(page),{scrolls,newest}=await shelfEnd();return {draft,attach,mode,scrolls,newest}},{message:`${count} screenshots on New task at ${width}x800`}).toEqual({draft:"clear",attach:"clear",mode:"clear",scrolls:true,newest:"in view"});
+      expect.soft((await shelfEnd()).rowAbove,`a part of the row above the newest shows with ${count} screenshots at ${width}x800`).toBe("shows in part");
+      const bars=await scrollbars();testInfo.annotations.push({type:`scrollbars with ${count} screenshots at ${width}x800`,description:JSON.stringify(bars)});
+      expect.soft(bars.shelf,`the shelf's scrollbar at ${width}x800 is the theme's, as the conversation's`).toEqual(bars.conversation);
+      await page.screenshot({animations:"disabled",path:auditDir+`${count}-screenshots-new-task-light-${width}x800.png`});
+    }
+    await page.setViewportSize({width:1280,height:800});
+    const destinations=page.getByRole("navigation",{name:"Destinations"});
+    await destinations.getByRole("button",{name:"Settings",exact:true}).click();await expect(composer).toHaveCount(0);
+    await destinations.getByRole("button",{name:"New task",exact:true}).click();await expect(chips(page)).toHaveCount(18);
+    await expect.poll(shelfEnd,{message:"18 screenshots on New task again after Settings"}).toEqual(capped);
+    await page.screenshot({animations:"disabled",path:auditDir+"18-screenshots-new-task-after-settings-light-1280x800.png"});
+    await expect(composer).toHaveValue("New task with screenshots");
+  }finally{await harness.close()}
+});
+
+// A stash store that takes no draft, so each Ctrl+S fails into the app's error toast, and two files for the @ menu to list on "@log".
+const failStashes=page=>page.route(/\/api\/stashes(?:\?.*)?$/,route=>route.request().method()==="POST"?route.fulfill({status:500,contentType:"application/json",body:JSON.stringify({error:"The stash store is read-only."})}):json(route,{stashes:[]}));
+const stashFailed="Could not stash or restore draft: The stash store is read-only.";
+async function writeLoginFiles(harness){
+  await mkdir(join(harness.repo,"src"),{recursive:true});
+  for(const name of ["login","logout"])await writeFile(join(harness.repo,"src",name+".js"),`export function ${name}(){}\n`);
+}
+// The app's error toast as a person sees it: its lines, its place (under the header, or just above the attachment shelf's top row, or
+// where it is), and the open / or @ menu, "clear" when the toast lies over no part of it.
+const readErrorToast=page=>page.evaluate(()=>{
+  const toast=document.querySelector("[data-testid=app-action-error]"),menu=document.querySelector(".composer-wrap .slash-menu,.composer-wrap [data-testid=file-mention-menu]");
+  const header=document.querySelector(".chat-workspace .workspace-header").getBoundingClientRect(),rowTop=Math.min(...[...document.querySelectorAll(".chat-workspace .attachment-shelf>span")].map(chip=>chip.getBoundingClientRect().top));
+  const box=toast.getBoundingClientRect(),style=getComputedStyle(toast),open=menu?.getBoundingClientRect();
+  return {lines:Math.round((toast.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom))/parseFloat(style.lineHeight)),
+    place:box.top>=header.bottom&&box.top<=header.bottom+16?"under the header":box.bottom<=rowTop&&box.bottom>=rowTop-16?"above the shelf's top row":`${Math.round(box.top)}-${Math.round(box.bottom)}`,
+    menu:!open?"none":box.bottom<=open.top||box.top>=open.bottom||box.right<=open.left||box.left>=open.right?"clear":"under the toast"};
+});
+
+// With chips on the shelf and the / or @ menu open, the rule that sets the toast's foot above the shelf and the one that sets its head
+// under the header both applied, so a failed action's toast stretched from the header to the shelf, a red box over the conversation and
+// the menu. With a menu open the toast goes under the header in its one line, as with no chips; with the menu closed, above the shelf.
+test("with screenshots on the shelf and the / or @ menu open, a failed Ctrl+S says so in a one-line toast under the header, clear of the menu, and above the shelf once the menu closes",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page);await failStashes(page);
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("app-action-error");
+    await composer.click();
+    for(const name of ["menu-shot-1.png","menu-shot-2.png"]){await pasteImage(page,name);await expect(chips(page).filter({hasText:name})).toBeVisible()}
+    await expect(page.locator(".attachment-shelf > span.uploading")).toHaveCount(0);
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      // A command word whose menu Escape closed keeps it closed when typed again, so the light pass types another.
+      for(const [typed,menu,kind] of [[mode==="dark"?"/":"/p",page.locator(".composer-wrap .slash-menu"),"slash"],["Check @log",page.getByTestId("file-mention-menu"),"mention"]]){
+        await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+        await page.keyboard.type(typed,{delay:20});await expect(menu).toBeVisible();
+        await page.keyboard.press("Control+s");await expect(alert).toHaveText(stashFailed);
+        for(const width of [1280,900]){
+          await page.setViewportSize({width,height:800});await expect(menu).toBeVisible();
+          await expect.poll(()=>readErrorToast(page),{message:`the toast with the ${kind} menu open at ${width}x800 in ${mode}`}).toEqual({lines:1,place:"under the header",menu:"clear"});
+          await page.screenshot({animations:"disabled",path:auditDir+`chips-${kind}-menu-failed-stash-${mode}-${width}x800.png`});
+        }
+        // Escape closes the menu, and the toast goes down above the shelf's top row; the next Ctrl+S's toast is there too.
+        await page.setViewportSize({width:1280,height:800});
+        await page.keyboard.press("Escape");await expect(menu).toBeHidden();
+        await expect.poll(()=>readErrorToast(page),{message:`the toast once the ${kind} menu closed in ${mode}`}).toEqual({lines:1,place:"above the shelf's top row",menu:"none"});
+        await page.keyboard.press("Control+s");await expect(alert).toHaveText(stashFailed);
+        await expect.poll(()=>readErrorToast(page),{message:`the next toast with the ${kind} menu closed in ${mode}`}).toEqual({lines:1,place:"above the shelf's top row",menu:"none"});
+        await expect(composer).toHaveValue(typed);await expect(chips(page)).toHaveCount(2);
+      }
+    }
+  }finally{await harness.close()}
+});
+
+// An archive's undo toast against the attachment shelf: its place (just above the shelf's top row, or where it is), an error toast's
+// beside it, and the chips, "whole" when the page answers each chip and its remove button at their middle, or else the ones it does not.
+const readUndoToast=page=>page.evaluate(()=>{
+  const undo=document.querySelector("[data-testid=thread-undo-toast]").getBoundingClientRect(),error=document.querySelector("[data-testid=app-action-error]")?.getBoundingClientRect();
+  const chips=[...document.querySelectorAll(".chat-workspace .attachment-shelf>span")],rowTop=Math.min(...chips.map(chip=>chip.getBoundingClientRect().top));
+  const answers=node=>{const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2))};
+  const hidden=chips.filter(chip=>!answers(chip)||!answers(chip.querySelector("button"))).map(chip=>chip.title);
+  return {undo:undo.bottom<=rowTop&&undo.bottom>=rowTop-16?"above the shelf's top row":`${Math.round(undo.top)}-${Math.round(undo.bottom)}, the shelf's top row at ${Math.round(rowTop)}`,
+    ...(error?{error:error.bottom<=undo.top?"above the undo toast":`${Math.round(error.top)}-${Math.round(error.bottom)}, the undo toast at ${Math.round(undo.top)}-${Math.round(undo.bottom)}`}:{}),
+    chips:hidden.length?hidden.join(", ")+" under a toast":"whole"};
+});
+const threadRow=(page,name)=>page.locator(".thread-row").filter({has:page.locator(`.thread-main[title="${name}"]`)});
+// Archive from the thread's row menu in the sidebar, as a person does, and its Undo on the toast it brings.
+async function archiveThread(page,name){
+  const row=threadRow(page,name);await row.hover();await row.locator(".thread-menu summary").click();await expect(row.locator(".thread-menu")).toHaveAttribute("open","");
+  await row.getByRole("button",{name:"Archive",exact:true}).click();await expect(row).toHaveCount(0);await expect(page.getByTestId("thread-undo-toast")).toContainText("Thread archived");
+}
+async function undoArchive(page){
+  const toast=page.getByTestId("thread-undo-toast");await toast.getByRole("button",{name:"Undo",exact:true}).click();await expect(toast).toHaveCount(0);
+}
+
+// The undo toast of an archive sat 12 px above the composer's top, where the attachment shelf now stands, over the middle of its rows:
+// chips' names and remove buttons under it could not be read or clicked for its 5 s. It sits above the shelf's top row, as the error
+// toast does, and the error toast of a refused Undo above it.
+test("an archive's undo toast sits above the attachment shelf's top row, so every chip and its remove button stay clickable, and a refused Undo's error toast sits above it",async({page})=>{
+  test.setTimeout(120_000);
+  let refuseUndo=false;
+  const harness=await openComposerApp(page,{others:["Archive me A","Archive me B"],refuse:message=>refuseUndo&&message.method==="thread/unarchive"?"Archive store is read-only":null});
+  try{
+    const composer=page.getByTestId("composer"),undoToast=page.getByTestId("thread-undo-toast"),alert=page.getByTestId("app-action-error");
+    // Nine screenshots pasted one at a time onto a typed draft: two rows of chips at 1280, three at 900.
+    await composer.click();await page.keyboard.type("Look at these screenshots",{delay:20});
+    for(let index=1;index<=9;index++){await pasteImage(page,`shelf-${String(index).padStart(2,"0")}.png`);await expect(chips(page)).toHaveCount(index);await expect(page.locator(".attachment-shelf > span.uploading")).toHaveCount(0)}
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      await archiveThread(page,"Archive me A");
+      for(const width of [1280,900]){
+        await page.setViewportSize({width,height:800});
+        await expect.poll(()=>readUndoToast(page),{message:`the undo toast over nine chips at ${width}x800 in ${mode}`}).toEqual({undo:"above the shelf's top row",chips:"whole"});
+        await page.screenshot({animations:"disabled",path:auditDir+`undo-toast-nine-chips-${mode}-${width}x800.png`});
+      }
+      await page.setViewportSize({width:1280,height:800});
+      await undoArchive(page);await expect(threadRow(page,"Archive me A")).toHaveCount(1);
+    }
+    // An Undo the harness refuses says so in the error toast; an archive meanwhile brings an undo toast beside it, under it.
+    refuseUndo=true;await archiveThread(page,"Archive me A");await undoArchive(page);
+    await expect(alert).toHaveText("Could not put back “Archive me A”: Archive store is read-only.");
+    refuseUndo=false;await archiveThread(page,"Archive me B");
+    await expect.poll(()=>readUndoToast(page),{message:"the error toast and the undo toast over nine chips"}).toEqual({undo:"above the shelf's top row",error:"above the undo toast",chips:"whole"});
+    await page.screenshot({animations:"disabled",path:auditDir+"undo-and-error-toasts-nine-chips-light-1280x800.png"});
+    // A click on the remove button of the third chip, at the toast's height, removes that chip and leaves the undo toast up.
+    const remove=await chips(page).getByRole("button",{name:"Remove shelf-03.png",exact:true}).boundingBox();
+    await page.mouse.click(remove.x+remove.width/2,remove.y+remove.height/2);
+    await expect(chips(page)).toHaveCount(8);await expect(chips(page).filter({hasText:"shelf-03.png"})).toHaveCount(0);await expect(undoToast).toContainText("Thread archived");
+    await undoArchive(page);await expect(threadRow(page,"Archive me B")).toHaveCount(1);
+    await expect(composer).toHaveValue("Look at these screenshots");
+  }finally{await harness.close()}
+});
+
+// The two toasts against the header and an open / or @ menu or model picker: the undo toast's place, the error toast's against it,
+// and the menu, "clear" when neither toast lies over any part of it.
+const readMenuToasts=page=>page.evaluate(()=>{
+  const box=selector=>document.querySelector(selector)?.getBoundingClientRect(),over=(a,b)=>Boolean(a&&b&&a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom);
+  const header=box(".chat-workspace .workspace-header"),undo=box("[data-testid=thread-undo-toast]"),error=box("[data-testid=app-action-error]"),menu=box(".composer-wrap .slash-menu")||box(".composer-wrap [data-testid=file-mention-menu]")||box(".composer-wrap .model-picker-menu");
+  const at=node=>`${Math.round(node.top)}-${Math.round(node.bottom)}`;
+  return {undo:undo.top>=header.bottom&&undo.top<=header.bottom+16?"under the header":at(undo),
+    ...(error?{error:error.top>=undo.bottom?"under the undo toast":`${at(error)}, the undo toast at ${at(undo)}`}:{}),
+    menu:over(undo,menu)||over(error,menu)?"under a toast":"clear"};
+});
+
+// The menus open upward over the space above the composer, where an archive's undo toast sat, over their last rows. With a menu open
+// the undo toast shows under the header, as the error toast does, and a failed action's toast under it.
+test("with the / or @ menu open, an archive's undo toast shows under the header, clear of the menu, and a failed Ctrl+S's toast under it",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{others:["Archive me A"]});await failStashes(page);
+  try{
+    await writeLoginFiles(harness);
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("app-action-error");
+    for(const mode of ["dark","light"]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);
+      for(const [typed,menu,kind] of [["/",page.locator(".composer-wrap .slash-menu"),"slash"],["Check @log",page.getByTestId("file-mention-menu"),"mention"]]){
+        await expect(alert).toHaveCount(0,{timeout:10_000});
+        await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+        await page.keyboard.type(typed,{delay:20});await expect(menu).toBeVisible();
+        await archiveThread(page,"Archive me A");await expect(menu).toBeVisible();
+        await expect.poll(()=>readMenuToasts(page),{message:`the undo toast with the ${kind} menu open in ${mode}`}).toEqual({undo:"under the header",menu:"clear"});
+        await page.keyboard.press("Control+s");await expect(alert).toHaveText(stashFailed);
+        for(const width of [1280,900]){
+          await page.setViewportSize({width,height:800});await expect(menu).toBeVisible();
+          await expect.poll(()=>readMenuToasts(page),{message:`both toasts with the ${kind} menu open at ${width}x800 in ${mode}`}).toEqual({undo:"under the header",error:"under the undo toast",menu:"clear"});
+          await page.screenshot({animations:"disabled",path:auditDir+`undo-and-error-toasts-${kind}-menu-${mode}-${width}x800.png`});
+        }
+        await page.setViewportSize({width:1280,height:800});
+        await undoArchive(page);await expect(threadRow(page,"Archive me A")).toHaveCount(1);
+        await expect(composer).toHaveValue(typed);
+      }
+    }
+  }finally{await harness.close()}
+});
+
+// The model picker closes on a press anywhere outside it, and while it is open the toasts stand under the header: a press on the
+// undo toast's Undo closed the picker, the toast went back above the composer between the press and the release, and the click went
+// to the page instead of Undo, so the thread stayed archived with the toast out of reach. A press on either toast leaves the picker
+// open, so the toast stays where it was pressed: a mouse click on Undo brings the thread back, and a drag over a failed action's
+// words selects them.
+test("with the model picker open, a mouse click on the undo toast's Undo brings the archived thread back, and a drag over a failed action's toast selects its words, the picker staying open and the toasts where they were pressed",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{others:["Archive me A"]});await failStashes(page);
+  try{
+    const composer=page.getByTestId("composer"),picker=page.getByTestId("model-picker"),menu=page.locator(".composer-wrap .model-picker-menu");
+    const undoToast=page.getByTestId("thread-undo-toast"),alert=page.getByTestId("app-action-error");
+    const place=locator=>locator.evaluate(node=>{const box=node.getBoundingClientRect();return [box.left,box.top,box.width,box.height].map(Math.round).join(",")});
+    for(const [mode,width] of [["dark",1280],["light",900]]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      await expect(alert).toHaveCount(0,{timeout:10_000});
+      await archiveThread(page,"Archive me A");
+      await picker.click();await expect(menu).toBeVisible();
+      await expect.poll(()=>readMenuToasts(page),{message:`the undo toast with the model picker open at ${width}x800 in ${mode}`}).toEqual({undo:"under the header",menu:"clear"});
+      await page.screenshot({animations:"disabled",path:auditDir+`undo-toast-model-picker-${mode}-${width}x800.png`});
+      // Undo clicked with the mouse, as a person clicks it: the press, then the release where it was pressed.
+      const undo=await undoToast.getByRole("button",{name:"Undo",exact:true}).boundingBox();
+      await page.mouse.click(undo.x+undo.width/2,undo.y+undo.height/2);
+      await expect(threadRow(page,"Archive me A"),`the archived thread is back after a click on Undo at ${width}x800 in ${mode}`).toHaveCount(1);
+      await expect(undoToast).toHaveCount(0);await expect(menu,"the picker stays open after a click on a toast").toBeVisible();
+      await page.screenshot({animations:"disabled",path:auditDir+`undo-clicked-model-picker-${mode}-${width}x800.png`});
+      await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);
+      // A failed Ctrl+S with the picker open: its toast under the header, and a drag across its words selects them where it stands.
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.type("Draft to stash",{delay:20});
+      await picker.click();await expect(menu).toBeVisible();
+      await page.keyboard.press("Control+s");await expect(alert).toHaveText(stashFailed);
+      await expect.poll(()=>readErrorToast(page),{message:`the failed action's toast with the model picker open at ${width}x800 in ${mode}`}).toMatchObject({place:"under the header"});
+      // The toast slides 8 px up into its place over 0.24 s (tb-toast-in), which the poll above can catch mid-slide: read it at rest.
+      await alert.evaluate(async node=>{await Promise.all(node.getAnimations().map(animation=>animation.finished))});
+      const before=await place(alert),box=await alert.boundingBox();
+      await page.mouse.move(box.x+36,box.y+box.height/2);await page.mouse.down();
+      await page.mouse.move(box.x+box.width-12,box.y+box.height/2,{steps:8});await page.mouse.up();
+      expect(await page.evaluate(()=>String(window.getSelection())),`the words a drag across the failed action's toast selects at ${width}x800 in ${mode}`).toContain("stash or restore draft");
+      expect(await place(alert),"the failed action's toast stays where the drag began").toBe(before);
+      await expect(menu,"the picker stays open after a drag over a toast").toBeVisible();
+      await page.screenshot({animations:"disabled",path:auditDir+`error-toast-selected-model-picker-${mode}-${width}x800.png`});
+      await page.keyboard.press("Escape");await expect(menu).toHaveCount(0);
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+    }
+  }finally{await harness.close()}
+});
+
+// With the right panel maximized the undo toast stays at the window's foot, as with no menu open, while a / typed keeps its menu
+// open behind the panel. A failed action's toast beside the undo toast took the place an open menu gives it under the undo toast,
+// 52 px below the header with nothing above it. It keeps its place under the header there.
+test("with the right panel maximized over an open / menu, a failed Ctrl+S's toast beside an archive's undo toast shows under the header, the undo toast at the window's foot",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{others:["Archive me A"]});await failStashes(page);
+  try{
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("app-action-error"),slash=page.locator(".composer-wrap .slash-menu");
+    const workspace=page.locator(".workspace-shell"),right=page.getByTestId("right-panel");
+    // The error toast against its place under the header (the workspace shell's --tb-toast-top), the undo toast against the window's
+    // foot, and whether the two lie apart.
+    const readToasts=()=>page.evaluate(()=>{
+      const shell=document.querySelector(".workspace-shell"),probe=document.createElement("div");
+      probe.style.cssText="position:absolute;top:var(--tb-toast-top);height:0;visibility:hidden";shell.append(probe);
+      const under=probe.getBoundingClientRect().top;probe.remove();
+      const error=document.querySelector("[data-testid=app-action-error]").getBoundingClientRect(),undo=document.querySelector("[data-testid=thread-undo-toast]").getBoundingClientRect();
+      const at=box=>`${Math.round(box.top)}-${Math.round(box.bottom)}`;
+      return {error:Math.abs(error.top-under)<1?"under the header":`${at(error)}, ${Math.round(error.top-under)} px below its place under the header`,
+        undo:Math.abs(innerHeight-24-undo.bottom)<1?"at the window's foot":at(undo),apart:error.bottom<=undo.top||undo.bottom<=error.top};
+    });
+    for(const [mode,width] of [["dark",1280],["light",900]]){
+      await page.setViewportSize({width:1280,height:800});await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      await expect(alert).toHaveCount(0,{timeout:10_000});
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+      await page.keyboard.type("/",{delay:20});await expect(slash).toBeVisible();
+      await page.getByTestId("right-panel-toggle").click();await expect(right).toBeVisible();
+      await right.getByRole("button",{name:"Maximize right panel",exact:true}).click();await expect(workspace).toHaveClass(/right-maximized/);
+      await archiveThread(page,"Archive me A");
+      await page.keyboard.press("Control+s");await expect(alert).toHaveText(stashFailed);await expect(alert).toHaveClass(/with-thread-undo/);
+      await expect.poll(readToasts,{message:`both toasts with the right panel maximized over the / menu at ${width}x800 in ${mode}`}).toEqual({error:"under the header",undo:"at the window's foot",apart:true});
+      await page.screenshot({animations:"disabled",path:auditDir+`undo-and-error-toasts-maximized-panel-${mode}-${width}x800.png`});
+      await undoArchive(page);await expect(threadRow(page,"Archive me A")).toHaveCount(1);
+      await right.getByRole("button",{name:"Close right panel",exact:true}).click();await expect(right).toHaveCount(0);
+      await expect(composer).toHaveValue("/");
+    }
+  }finally{await harness.close()}
+});
+
+// The composer is off while a send goes (Sending…), and the browser drops the keyboard it had there, or on Send, on the page: the next
+// message typed went nowhere. Once the send has gone the keyboard is in the composer again, after Enter and after Send, while the reply
+// runs (Queue a follow-up…) and after it, so the next message typed at once lands there. A person typing types at 20 ms a key.
+const typeOn=(page,text)=>page.keyboard.type(text,{delay:20});
+const heldGate=()=>{let open=()=>{};const promise=new Promise(resolve=>{open=resolve});return {promise,open}};
+// The page at 1280 and 900 wide in the mode it is in, with the keyboard left where it is.
+async function shootHere(page,name){
+  const mode=await page.locator("html").getAttribute("data-mode");
+  for(const width of [1280,900]){await page.setViewportSize({width,height:800});await page.screenshot({animations:"disabled",path:auditDir+name+"-"+mode+"-"+width+"x800.png"})}
+  await page.setViewportSize({width:1280,height:800});
+}
+
+test("the keyboard is back in the composer once a send has gone, after Enter and after Send, while the reply runs and after it, so the next message typed lands there",async({page})=>{
+  test.setTimeout(120_000);
+  const slow=heldGate();
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."},async()=>{await slow.promise;return {text:"Reply number two, after a slow provider."}},{text:"Reply number three."},{text:"Reply number four."}]});
+  try{
+    const composer=page.getByTestId("composer"),users=page.locator(".user-bubble"),queued=page.locator(".queued-message"),reply=text=>page.getByText(text,{exact:true});
+    const idle="Ask Trebell Code anything…";
+    // Enter (dark): once the message is in and the composer is on again, the next message, typed at once, lands there.
+    await composer.click();await typeOn(page,"First message");await page.keyboard.press("Enter");
+    await expect(users.last()).toContainText("First message");await expect(composer).toBeEnabled();
+    await typeOn(page,"Second message");
+    await expect(composer,"the keyboard after Enter").toBeFocused();await expect(composer).toHaveValue("Second message");
+    await expect(reply("Reply number one.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder",idle);
+    await shootHere(page,"keyboard-after-enter");
+    // A slow reply runs: the follow-up typed at once, as the composer asks for it, lands there; Enter queues it, and the keyboard is
+    // still there for the next.
+    await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder","Queue a follow-up…");
+    await typeOn(page,"A follow-up typed while it runs");
+    await expect(composer,"the keyboard while the reply runs").toBeFocused();await expect(composer).toHaveValue("A follow-up typed while it runs");
+    await shootHere(page,"keyboard-follow-up-while-running");
+    await page.keyboard.press("Enter");
+    await expect(queued).toHaveCount(1);await expect(composer).toBeEnabled();await expect(composer).toHaveValue("");
+    await typeOn(page,"One more");
+    await expect(composer,"the keyboard after a follow-up is queued").toBeFocused();await expect(composer).toHaveValue("One more");
+    await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+    // The slow reply ends, and the queued follow-up goes and is answered.
+    slow.open();
+    await expect(reply("Reply number three.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder",idle);
+    // Send (light): the click puts the keyboard on Send, which goes off with the composer; it comes back to the composer.
+    await switchMode(page,"light");
+    await composer.click();await typeOn(page,"Fourth message");await page.getByTestId("send").click();
+    await expect(users.last()).toContainText("Fourth message");await expect(composer).toBeEnabled();
+    await typeOn(page,"After the button");
+    await expect(composer,"the keyboard after Send").toBeFocused();await expect(composer).toHaveValue("After the button");
+    await expect(reply("Reply number four.")).toBeVisible({timeout:15_000});
+    await shootHere(page,"keyboard-after-send-button");
+    expect(sentTexts(harness)).toEqual(["Look at the login page","First message","Second message","A follow-up typed while it runs","Fourth message"]);
+  }finally{slow.open();await harness.close()}
+});
+
+test("on Codex the keyboard is back in the composer once a send has gone, after Enter while the turn runs and after Send",async({page})=>{
+  test.setTimeout(90_000);
+  const running=heldGate();
+  const thread={id:"codex-keyboard",name:"Codex keyboard",preview:"Codex keyboard",cwd:process.cwd(),status:{type:"idle"},model:"test/coding-fast",createdAt:Date.now()/1000-60,updatedAt:Date.now()/1000,turns:[]};
+  const answer=(text,wait=null)=>async(turn,{emit,threadId,finish})=>{
+    emit({method:"turn/started",params:{threadId,turn:{...turn,items:[]}}});
+    await wait;
+    const item={id:"agent-"+turn.id,type:"agentMessage",text};turn.items.push(item);emit({method:"item/completed",params:{threadId,turnId:turn.id,item}});finish("completed");
+  };
+  const harness=await startCodexHarness(thread,[answer("Codex reply one.",running.promise),answer("Codex reply two.")]);
+  try{
+    await routeCodexApp(page,harness,thread);
+    await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,route.request().postDataJSON()||{}):route.fallback());
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    const row=page.locator(".thread-row").filter({has:page.locator('.thread-main[title="Codex keyboard"]')}),composer=page.getByTestId("composer");
+    await row.locator(".thread-main").click();await expect(row).toHaveClass(/active/);await expect(composer).not.toHaveAttribute("placeholder","Opening thread…");
+    // Enter (dark): while Codex runs the turn, the follow-up typed at once lands in the composer.
+    await composer.click();await typeOn(page,"Codex message");await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder","Queue a follow-up…");
+    await typeOn(page,"A follow-up for Codex");
+    await expect(composer,"the keyboard after Enter on Codex").toBeFocused();await expect(composer).toHaveValue("A follow-up for Codex");
+    await shootHere(page,"codex-keyboard-after-enter");
+    await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");
+    running.open();
+    await expect(page.getByText("Codex reply one.",{exact:true})).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder","Ask Trebell Code anything…");
+    // Send (light): the keyboard comes back from Send to the composer, and the next message lands there.
+    await switchMode(page,"light");
+    await composer.click();await typeOn(page,"Codex by the button");await page.getByTestId("send").click();
+    await expect(page.getByText("Codex reply two.",{exact:true})).toBeVisible({timeout:15_000});
+    await typeOn(page,"Next for Codex");
+    await expect(composer,"the keyboard after Send on Codex").toBeFocused();await expect(composer).toHaveValue("Next for Codex");
+    await shootHere(page,"codex-keyboard-after-send-button");
+    expect(harness.turns.map(turn=>turn.items[0].content[0].text)).toEqual(["Codex message","Codex by the button"]);
+  }finally{running.open();await harness.close()}
+});
+
+// The keyboard comes back only to a page that has no other place for it: a field clicked, or the palette opened with its key, while the
+// send goes keeps it, and what is typed on goes there.
+test("a field clicked or the palette opened while a send goes keeps the keyboard once the send has gone",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."},{text:"Reply number two."}]});
+  // The send waits on its repository context while hold is a gate not yet opened.
+  let hold=null;await page.route(/\/api\/context\/packet$/,async route=>{await hold?.promise;await route.fallback()});
+  try{
+    const composer=page.getByTestId("composer"),search=page.getByRole("textbox",{name:"Search threads"}),palette=page.getByTestId("command-palette");
+    // The sidebar's search, clicked while the composer says Sending… (dark).
+    hold=heldGate();
+    await composer.click();await typeOn(page,"First message");await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder","Sending…");
+    await search.click();await typeOn(page,"Compo");
+    hold.open();
+    await expect(page.getByText("Reply number one.",{exact:true})).toBeVisible({timeout:15_000});await expect(composer).toBeEnabled();
+    await typeOn(page,"ser");
+    await expect(search,"the field clicked while the send went").toBeFocused();await expect(search).toHaveValue("Composer");await expect(composer).toHaveValue("");
+    await shootHere(page,"keyboard-field-clicked-during-send");
+    await page.keyboard.press("Escape");await expect(search).toHaveValue("");
+    // The palette, opened with Ctrl+K while the composer says Sending… (light).
+    await switchMode(page,"light");
+    hold=heldGate();
+    await composer.click();await typeOn(page,"Second message");await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder","Sending…");
+    await page.keyboard.press("Control+K");await expect(palette).toBeVisible();
+    hold.open();
+    await expect(page.getByText("Reply number two.",{exact:true})).toBeVisible({timeout:15_000});await expect(composer).toBeEnabled();
+    await typeOn(page,"usage");
+    const query=palette.getByRole("textbox");
+    await expect(query,"the palette opened while the send went").toBeFocused();await expect(query).toHaveValue("usage");await expect(composer).toHaveValue("");
+    await shootHere(page,"keyboard-palette-opened-during-send");
+    await page.keyboard.press("Escape");await expect(palette).toBeHidden();
+    expect(sentTexts(harness)).toEqual(["Look at the login page","First message","Second message"]);
+  }finally{hold?.open();await harness.close()}
+});
+
+// What a person types straight on after Enter or Send, while the composer says Sending…, lands in the composer, which keeps the
+// keyboard through the send: Send and Enter send none of it until the send has gone, as the line under the composer and Send's title
+// say, and then it is the next message. The send waits on its repository context (a slow context packet) while hold is a gate not yet
+// opened, and goes at once without one.
+test("text typed straight on after Enter or Send while the composer says Sending… stays in the composer and is the next message once the send has gone",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."},{text:"Reply number two."},{text:"Reply number three."},{text:"Reply number four."}]});
+  let hold=null;await page.route(/\/api\/context\/packet$/,async route=>{await hold?.promise;await route.fallback()});
+  try{
+    const composer=page.getByTestId("composer"),send=page.getByTestId("send"),reply=text=>page.getByText(text,{exact:true}),idle="Ask Trebell Code anything…";
+    const waits=page.getByTestId("composer-sending"),waitsText=/^Sending.* · your draft stays here until the last message has gone\.$/;
+    // Enter (dark), the send held: the next message typed straight on is in the composer, and Enter there sends nothing yet.
+    hold=heldGate();
+    await composer.click();await typeOn(page,"First message");await page.keyboard.press("Enter");await typeOn(page,"Second message");
+    await expect(composer).toHaveAttribute("placeholder",/^Sending/);
+    await expect(composer,"the keyboard while the send goes").toBeFocused();await expect(composer).toHaveValue("Second message");await expect(send).toBeDisabled();
+    await expect(waits).toHaveText(waitsText);await expect(send).toHaveAttribute("title",/^Sending/);
+    await page.keyboard.press("Enter");await expect(composer).toHaveValue("Second message");
+    await shootHere(page,"typed-while-sending-after-enter");
+    hold.open();
+    await expect(reply("Reply number one.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder",idle);await expect(waits).toHaveCount(0);
+    await expect(composer,"the keyboard once the send has gone").toBeFocused();await expect(composer).toHaveValue("Second message");
+    // Enter sends it, and what is typed straight on while that send goes at once lands there too.
+    await page.keyboard.press("Enter");await typeOn(page,"Third message");
+    await expect(reply("Reply number two.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder",idle);
+    await expect(composer).toBeFocused();await expect(composer).toHaveValue("Third message");
+    // Send (light), held: the keyboard goes from Send, which turns off, to the composer, so what is typed straight on lands there.
+    await switchMode(page,"light");
+    hold=heldGate();
+    await send.click();await typeOn(page,"Fourth message");
+    await expect(composer).toHaveAttribute("placeholder",/^Sending/);
+    await expect(composer,"the keyboard while the send from Send goes").toBeFocused();await expect(composer).toHaveValue("Fourth message");await expect(send).toBeDisabled();
+    await expect(waits).toHaveText(waitsText);
+    await shootHere(page,"typed-while-sending-after-send-button");
+    hold.open();
+    await expect(reply("Reply number three.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder",idle);await expect(waits).toHaveCount(0);
+    await expect(composer).toBeFocused();await expect(composer).toHaveValue("Fourth message");
+    await send.click();await expect(reply("Reply number four.")).toBeVisible({timeout:15_000});await expect(composer).toHaveValue("");
+    expect(sentTexts(harness)).toEqual(["Look at the login page","First message","Second message","Third message","Fourth message"]);
+  }finally{hold?.open();await harness.close()}
+});
+
+// What a person adds to the composer while a send goes (Sending…), a screenshot pasted or a file attached with +, stays there once the
+// send has gone and goes with the next message: only the files that went with the send leave the composer.
+test("a screenshot pasted or a file attached while the composer says Sending… stays for the next message once the send has gone",async({page})=>{
+  test.setTimeout(120_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."},{text:"Reply number two."},{text:"Reply number three."},{text:"Reply number four."}]});
+  let hold=null;await page.route(/\/api\/context\/packet$/,async route=>{await hold?.promise;await route.fallback()});
+  try{
+    const composer=page.getByTestId("composer"),sentFiles=page.locator(".user-bubble").last().locator(".user-attachments > span"),reply=text=>page.getByText(text,{exact:true});
+    // Dark: a screenshot pasted while the first message goes stays on the shelf, and goes with the second.
+    hold=heldGate();
+    await composer.click();await typeOn(page,"First message");await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder",/^Sending/);
+    await pasteImage(page,"pasted-while-sending.png");await expect(chips(page)).toHaveText(["pasted-while-sending.png"]);
+    hold.open();
+    await expect(reply("Reply number one.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder","Ask Trebell Code anything…");
+    await expect(chips(page),"the screenshot pasted while the send went").toHaveText(["pasted-while-sending.png"]);
+    await shootHere(page,"pasted-while-sending-kept");
+    await typeOn(page,"Second message");await page.keyboard.press("Enter");
+    await expect(reply("Reply number two.")).toBeVisible({timeout:15_000});
+    await expect(sentFiles).toHaveText(["pasted-while-sending.png"]);await expect(chips(page)).toHaveCount(0);
+    // Light: the file sent with the third message leaves the composer, and the one attached with + while it goes stays.
+    await switchMode(page,"light");
+    await chooseFiles(page,[{name:"sent-notes.txt",mimeType:"text/plain",buffer:Buffer.from("Notes sent with the third message.")}]);await expect(chips(page)).toHaveText(["sent-notes.txt"]);
+    hold=heldGate();
+    await composer.click();await typeOn(page,"Third message");await page.keyboard.press("Enter");
+    await expect(composer).toHaveAttribute("placeholder",/^Sending/);
+    await chooseFiles(page,[{name:"next-notes.txt",mimeType:"text/plain",buffer:Buffer.from("Notes for the next message.")}]);await expect(chips(page)).toHaveText(["sent-notes.txt","next-notes.txt"]);
+    hold.open();
+    await expect(reply("Reply number three.")).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder","Ask Trebell Code anything…");
+    await expect(chips(page),"the file attached while the send went").toHaveText(["next-notes.txt"]);
+    await shootHere(page,"attached-while-sending-kept");
+    await composer.click();await typeOn(page,"Fourth message");await page.keyboard.press("Enter");
+    await expect(reply("Reply number four.")).toBeVisible({timeout:15_000});
+    await expect(sentFiles).toHaveText(["next-notes.txt"]);await expect(chips(page)).toHaveCount(0);
+    expect(sentTexts(harness)).toEqual(["Look at the login page","First message","Second message","Third message","Fourth message"]);
+  }finally{hold?.open();await harness.close()}
+});
+
+// A send Stop ends while what the person typed on waits in the composer gives its draft back before that text, as a draft of its own:
+// nothing failed and nothing ran in the background. It came back under a "recovered failed background draft" line, which went into
+// the next message unless the person deleted it.
+test("a send stopped while text typed on waits in the composer gives its draft back before that text, with no note",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."}]});
+  let hold=null;await page.route(/\/api\/context\/packet$/,async route=>{await hold?.promise;await route.fallback()});
+  try{
+    const composer=page.getByTestId("composer"),stopButton=page.getByRole("button",{name:"Stop",exact:true});
+    for(const mode of ["dark","light"]){
+      await switchMode(page,mode);
+      hold=heldGate();
+      await composer.click();await typeOn(page,"Fix the login bug");await page.keyboard.press("Enter");await typeOn(page,"and the signup page");
+      await expect(composer).toHaveAttribute("placeholder",/^Sending/);await expect(composer).toHaveValue("and the signup page");
+      await stopButton.click();hold.open();
+      await expect(composer,"the draft back before what was typed on").toHaveValue("Fix the login bug\n\nand the signup page");
+      await expect(composer).not.toHaveAttribute("placeholder",/^Sending/);await expect(page.getByTestId("composer-alert")).toHaveCount(0);
+      await shootHere(page,"stopped-send-draft-before-typed");
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+    }
+    expect(sentTexts(harness)).toEqual(["Look at the login page"]);
+  }finally{hold?.open();await harness.close()}
+});
+
+// The draft leaves the composer as the send starts, before the send first waits (its files checked with the server, a running clone,
+// a command such as /goal), so what the person types straight on lands there and is the next message, as the line under the composer
+// says. The composer held the draft being sent, read-only, through each of those waits, and dropped every key typed, saying nothing.
+test("text typed straight on while a send's files are checked lands in the composer and is the next message",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await openComposerApp(page,{replies:[{text:"Reply number one."},{text:"Reply number two."}]});
+  let check=null;await page.route(/\/api\/attachments\/validate$/,async route=>{await check?.promise;await route.fallback()});
+  try{
+    const composer=page.getByTestId("composer"),waits=page.getByTestId("composer-sending"),files=text=>page.locator(".user-bubble").filter({hasText:text}).locator(".user-attachments > span");
+    for(const [mode,answer] of [["dark","Reply number one."],["light","Reply number two."]]){
+      await switchMode(page,mode);
+      const note=mode+"-notes.txt",message=`Look at the ${mode} notes`,next=`Next ${mode} message`;
+      await chooseFiles(page,[{name:note,mimeType:"text/plain",buffer:Buffer.from("Notes on the login page.")}]);await expect(chips(page)).toHaveText([note]);
+      check=heldGate();
+      await composer.click();await typeOn(page,message);await page.keyboard.press("Enter");await typeOn(page,next);
+      await expect(composer).toHaveAttribute("placeholder",/^Sending/);
+      await expect(composer,"what was typed while the files were checked").toHaveValue(next);await expect(composer).toBeFocused();
+      await expect(waits).toHaveText(/^Sending.* · your draft stays here until the last message has gone\.$/);
+      await shootHere(page,"typed-while-files-checked");
+      check.open();
+      await expect(files(message),"the message went with its file").toHaveText([note]);
+      await expect(page.getByText(answer,{exact:true})).toBeVisible({timeout:15_000});await expect(composer).not.toHaveAttribute("placeholder",/^Sending/);
+      await expect(composer,"what was typed is the next message").toHaveValue(next);await expect(chips(page)).toHaveCount(0);
+      await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("");
+    }
+    expect(sentTexts(harness)).toEqual(["Look at the login page","Look at the dark notes","Look at the light notes"]);
+  }finally{check?.open();await harness.close()}
+});
+
+test("text typed straight on while /goal sets the thread's goal lands in the composer and stays once the goal is set",async({page})=>{
+  test.setTimeout(90_000);
+  const goalSet=heldGate();
+  const harness=await openComposerApp(page,{hold:message=>message.method==="thread/goal/set"&&message.params?.objective?goalSet.promise:null});
+  try{
+    const composer=page.getByTestId("composer"),panel=page.getByTestId("goal-panel"),objective="Make the login page load in a second";
+    await composer.click();await typeOn(page,"/goal "+objective);await page.keyboard.press("Enter");await typeOn(page,"Then check the signup page");
+    await expect(composer,"what was typed while /goal ran").toHaveValue("Then check the signup page");await expect(composer).toBeFocused();
+    await shootHere(page,"typed-while-goal-is-set");
+    await switchMode(page,"light");await shootHere(page,"typed-while-goal-is-set");
+    goalSet.open();
+    await expect(panel.getByLabel("Objective",{exact:true})).toHaveValue(objective);
+    await expect(composer,"what was typed stays once the goal is set").toHaveValue("Then check the signup page");
+  }finally{goalSet.open();await harness.close()}
+});
+
+// Cite puts a sentence in the draft that says what the cited text is for, which the message needs (a draft with no text cannot be
+// sent, and a harness is handed a citation as a file it may not read). Each Cite added it again, two spaces after the last, and a
+// citation removed with its chip's x left its sentence: two citations went with four sentences. The draft says it once while any
+// citation is attached, in words that fit any number of them (it named one excerpt over two, round 10 repair), and the last one
+// removed takes it, leaving what the person typed.
+test("Cite says once in the draft that the cited text is context, however many citations it holds, and the last one removed takes that sentence with it",async({page})=>{
+  test.setTimeout(90_000);
+  const PARAGRAPHS=["First paragraph about the session token and where it is kept.","Second paragraph about the refresh timer and when it fires."],NOTE="Use the cited assistant text as context.";
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the session handling",items:[replyItem("cite-reply",PARAGRAPHS.join("\n\n"))]}],replies:[{text:"Summarized both excerpts."}]});
+  try{
+    const composer=page.getByTestId("composer"),paragraphs=page.locator(".assistant-message-text").last().locator("p"),cite=page.getByTestId("assistant-selection-cite"),citations=page.getByTestId("context-chip");
+    const remove=index=>citations.nth(index).getByRole("button",{name:"Remove context"});
+    await expect(paragraphs).toHaveText(PARAGRAPHS);
+    // A triple-click selects a paragraph and Cite comes above it, once the selection has settled (one still changing places Cite again).
+    const select=async index=>{
+      await paragraphs.nth(index).click({clickCount:3});await expect(cite).toBeVisible();
+      await expect.poll(()=>page.evaluate(()=>String(getSelection()).trim())).toBe(PARAGRAPHS[index]);await frames(page);
+    };
+    // Cited with a click, then from the keyboard (Tab from the selection to Cite, and Enter): two citations, the sentence once.
+    await select(1);await cite.click();
+    await expect(citations).toHaveCount(1);await expect(composer,"the draft with one citation").toHaveValue(NOTE+" ");
+    await select(0);await page.keyboard.press("Tab");await expect(cite).toBeFocused();await page.keyboard.press("Enter");
+    await expect(citations).toHaveCount(2);await expect(composer,"the draft with two citations").toHaveValue(NOTE+" ");
+    await shootHere(page,"cite-two-citations-one-sentence");
+    // The first removed with its x leaves the sentence for the other; the last, its x reached with Shift+Tab and pressed, takes it.
+    await remove(0).click();
+    await expect(citations).toHaveCount(1);await expect(composer,"the draft with one citation left").toHaveValue(NOTE+" ");
+    await composer.click();await page.keyboard.press("Shift+Tab");await expect(remove(0)).toBeFocused();await page.keyboard.press("Enter");
+    await expect(citations).toHaveCount(0);await expect(composer,"the draft with no citation left").toHaveValue("");await expect(composer).toBeFocused();
+    // In a narrower window: words typed beside a citation stay when it goes, and the message goes with them and the sentence once
+    // for the two citations made next, with a double click on Cite and from the keyboard.
+    await page.setViewportSize({width:900,height:800});
+    await select(1);await cite.click();await expect(citations).toHaveCount(1);
+    await composer.click();await page.keyboard.press("Control+End");await typeOn(page,"Summarize these");
+    await expect(composer).toHaveValue(NOTE+" Summarize these");
+    await remove(0).click();
+    await expect(citations).toHaveCount(0);await expect(composer,"the words typed, once the citation is gone").toHaveValue("Summarize these");
+    await select(1);await cite.dblclick();await expect(citations).toHaveCount(1);
+    await select(0);await page.keyboard.press("Tab");await expect(cite).toBeFocused();await page.keyboard.press("Enter");
+    await expect(citations).toHaveCount(2);await expect(composer,"the words typed and two citations").toHaveValue("Summarize these "+NOTE+" ");
+    await composer.click();await page.keyboard.press("Enter");
+    await expect(page.getByText("Summarized both excerpts.",{exact:true})).toBeVisible({timeout:15_000});
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Explain the session handling","Summarize these "+NOTE]);
+    const sent=harness.turns(harness.threads[0]).at(-1).items.find(item=>item.type==="userMessage")?.content||[];
+    expect(sent.filter(part=>part.type==="mention").length,"the citations that went with it").toBe(2);
+    await expect(citations).toHaveCount(0);await expect(composer).toHaveValue("");
+  }finally{await harness.close()}
+});
+
+// A citation can be on the draft as a file with none of Cite's chips: Edit from here brings a cited message's file back as a plain
+// attachment on the shelf, and a Trebell Native follow-up queued with a citation and loaded again after a reload brings its file back
+// with a file chip. Cite's sentence counted Cite's chips only: the citation Cite added next, removed with its x, took the sentence
+// though the file brought back was still attached, and the file brought back, removed from the shelf or by its chip's x, left the
+// sentence behind. Nor was a sentence the person put in the plural Cite's, so the next Cite added its own beside it and the last
+// citation removed left it (round 10 repair). The sentence stays while any citation file is on the draft and goes with the last one.
+test("Cite's sentence stays while a citation file brought back by Edit from here or with a queued follow-up is on the draft, goes with the last one removed from the shelf or by its chip, and is Cite's in the plural too",async({page})=>{
+  test.setTimeout(180_000);
+  const PARAGRAPHS=["First paragraph about the session token and where it is kept.","Second paragraph about the refresh timer and when it fires."];
+  let openMain=()=>{};const mainHeld=new Promise(done=>{openMain=done});
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the session handling",items:[replyItem("cite-reply",PARAGRAPHS.join("\n\n"))]}],replies:[
+    {text:"Summarized the first excerpt."},{text:"Summarized the second excerpt."},async()=>{await mainHeld;return {text:"The main task is done."}},{text:"Checked the queued excerpt."},
+  ]});
+  try{
+    const composer=page.getByTestId("composer"),cite=page.getByTestId("assistant-selection-cite"),citations=page.getByTestId("context-chip"),shelf=chips(page);
+    const paragraphs=page.locator(".assistant-message-text").filter({hasText:PARAGRAPHS[0]}).locator("p"),row=threadRow(page,"Composer thread"),queued=page.locator(".queued-message");
+    // A triple-click selects a paragraph and Cite comes above it, once the selection has settled; Cite then adds the count-th chip.
+    const citeParagraph=async(index,count)=>{
+      await paragraphs.nth(index).click({clickCount:3});await expect(cite).toBeVisible();
+      await expect.poll(()=>page.evaluate(()=>String(getSelection()).trim())).toBe(PARAGRAPHS[index]);await frames(page);
+      await cite.click();await expect(citations).toHaveCount(count);
+    };
+    const emptyDraft=async()=>{await composer.click();await page.keyboard.press("Control+A");await page.keyboard.press("Backspace");await expect(composer).toHaveValue("")};
+    const removeFromShelf=()=>shelf.getByRole("button",{name:"Remove assistant-citation.txt",exact:true}).click();
+    // The draft sent, and the message brought back by Edit from here: its text with Cite's sentence, its file on the shelf with no chip.
+    const sendAndEdit=async(reply,note)=>{
+      await composer.click();await page.keyboard.press("Enter");
+      await expect(page.getByText(reply,{exact:true})).toBeVisible({timeout:15_000});
+      const bubble=page.locator(".user-bubble").filter({hasText:"Summarize this"});await expect(bubble.locator(".user-attachments > span")).toHaveText(["assistant-citation.txt"]);
+      await bubble.getByRole("button",{name:"Edit from here",exact:true}).click();
+      await page.getByRole("dialog").getByRole("button",{name:"Edit from here",exact:true}).click();
+      await expect(composer).toHaveValue("Summarize this "+note,{timeout:15_000});await expect(bubble).toHaveCount(0);
+      await expect(shelf).toHaveText(["assistant-citation.txt"]);await expect(citations).toHaveCount(0);
+    };
+    // Cite's sentence as this build words it, after the words typed.
+    await composer.click();await typeOn(page,"Summarize this");await citeParagraph(1,1);
+    const note=(await composer.inputValue()).slice("Summarize this ".length).trim();expect(note,"Cite's sentence").toMatch(/^Use the \w+ assistant \w+ as context\.$/);
+    await expect(composer).toHaveValue("Summarize this "+note+" ");
+    // The file brought back, removed from the shelf, takes the sentence.
+    await sendAndEdit("Summarized the first excerpt.",note);
+    await removeFromShelf();await expect(shelf).toHaveCount(0);
+    await expect.soft(composer,"the draft once the citation Edit from here brought back is removed from the shelf").toHaveValue("Summarize this");
+    // Cited, sent and brought back again: a citation Cite adds to it, removed with its x, leaves the sentence for the file brought back,
+    // which takes it once removed from the shelf.
+    await emptyDraft();await typeOn(page,"Summarize this");await citeParagraph(1,1);await expect(composer).toHaveValue("Summarize this "+note+" ");
+    await sendAndEdit("Summarized the second excerpt.",note);
+    await citeParagraph(0,1);await expect(composer,"the draft with a citation added to the one brought back").toHaveValue("Summarize this "+note);
+    await citations.getByRole("button",{name:"Remove context"}).click();await expect(citations).toHaveCount(0);
+    await expect.soft(composer,"the draft once the citation added is removed, the one brought back still on the shelf").toHaveValue("Summarize this "+note);
+    await shootHere(page,"cite-sentence-kept-for-a-citation-brought-back");
+    await removeFromShelf();await expect(shelf).toHaveCount(0);await expect(composer,"the draft once the citation brought back is removed too").toHaveValue("Summarize this");
+    // A sentence the person put in the plural is Cite's too: the next Cite adds none beside it, and the last citation removed takes it.
+    await citeParagraph(1,1);await expect(composer).toHaveValue("Summarize this "+note+" ");
+    const plural="Use the cited assistant excerpts as context.";
+    await emptyDraft();await typeOn(page,"Summarize these "+plural+" ");
+    await citeParagraph(0,2);await expect.soft(composer,"the draft with the sentence in the plural, cited again").toHaveValue("Summarize these "+plural+" ");
+    await citations.first().getByRole("button",{name:"Remove context"}).click();await expect(citations).toHaveCount(1);
+    await citations.getByRole("button",{name:"Remove context"}).click();await expect(citations).toHaveCount(0);
+    await expect.soft(composer,"the draft once the last citation is removed, the sentence in the plural").toHaveValue("Summarize these");
+    // A follow-up queued with a citation while a turn runs, loaded again after a reload and edited: its file comes back with a file chip,
+    // whose x takes the sentence. Escape ends the edit, and once the turn ends the follow-up goes as it was queued, with its file.
+    await emptyDraft();await typeOn(page,"Run the main task");await page.keyboard.press("Enter");
+    await expect(page.getByRole("button",{name:"Stop",exact:true})).toBeVisible({timeout:15_000});await expect(composer).toHaveAttribute("placeholder","Queue a follow-up…");
+    await citeParagraph(1,1);await composer.click();await page.keyboard.press("Control+End");await typeOn(page,"Check this");
+    await expect(composer).toHaveValue(note+" Check this");await page.keyboard.press("Enter");
+    await expect(queued).toContainText("Queued in Trebell Native");await expect(queued.locator("p")).toHaveText(note+" Check this");await expect(citations).toHaveCount(0);
+    await page.reload();await expect(row).toBeVisible({timeout:15_000});
+    if(!await row.evaluate(node=>node.classList.contains("active")))await row.locator(".thread-main").click();
+    await expect(queued.locator("p")).toHaveText(note+" Check this",{timeout:15_000});await expect(composer).toBeEnabled();
+    await queued.getByRole("button",{name:"Edit",exact:true}).click();
+    await expect(composer).toHaveValue(note+" Check this");await expect(citations).toHaveCount(1);
+    await citations.getByRole("button",{name:"Remove context"}).click();await expect(citations).toHaveCount(0);
+    await expect.soft(composer,"the queued follow-up's draft once its citation is removed by its file chip's x").toHaveValue("Check this");
+    await shootHere(page,"cite-sentence-gone-with-a-queued-citation");
+    await composer.click();await page.keyboard.press("Escape");await expect(composer).toHaveValue("");await expect(queued.locator("p")).toHaveText(note+" Check this");
+    openMain();
+    await expect(page.getByText("Checked the queued excerpt.",{exact:true})).toBeVisible({timeout:20_000});
+    const followUp=page.locator(".user-bubble").filter({hasText:"Check this"});
+    await expect(followUp.locator("p")).toHaveText(note+" Check this");await expect(followUp.locator(".user-attachments > span")).toHaveText(["assistant-citation.txt"]);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Explain the session handling","Run the main task",note+" Check this"]);
+  }finally{openMain();await harness.close()}
+});
+
+// Cite comes after the last message in the page's order, whichever reply the selection is in, so Tab from text selected in a reply that
+// is not the last went on to the next message's Edit from here, whose Enter asked to remove the messages after it, and Shift+Tab to the
+// one before. Tab and Shift+Tab from a selection in any reply reach the Cite above it, and go on from there; with no Cite shown (after
+// Escape, or nothing selected) Tab goes where it went.
+test("Tab or Shift+Tab from text selected in any reply, not only the last, reaches the Cite above it, and Enter cites that text",async({page})=>{
+  test.setTimeout(120_000);
+  const PARAGRAPHS=["First paragraph about the session token and where it is kept.","Second paragraph about the refresh timer and when it fires."],LAST="You are welcome, ask again any time.",NOTE="Use the cited assistant text as context.";
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the session handling",items:[replyItem("cite-reply-a",PARAGRAPHS.join("\n\n"))]},{user:"Thanks for that",items:[replyItem("cite-reply-b",LAST)]}]});
+  try{
+    const composer=page.getByTestId("composer"),cite=page.getByTestId("assistant-selection-cite"),citations=page.getByTestId("context-chip"),dialog=page.getByRole("dialog");
+    const replies=page.locator(".assistant-message-text"),earlier=replies.first().locator("p"),last=replies.last().locator("p");
+    const editFromHere=page.locator(".user-bubble").getByRole("button",{name:"Edit from here",exact:true});
+    // Where the keyboard is: Cite by its test id, another button by its text (and a message's by that message's).
+    const keyboardOn=()=>page.evaluate(()=>{
+      const node=document.activeElement,bubble=node?.closest(".user-bubble");
+      return !node||node===document.body?"nothing":node.dataset.testid||node.textContent.trim().slice(0,60)+(bubble?" of '"+bubble.querySelector("p").textContent+"'":"");
+    });
+    const reaches=(key,what)=>expect.poll(keyboardOn,{message:"where "+key+" from "+what+" puts the keyboard"}).toBe("assistant-selection-cite");
+    await expect(earlier).toHaveText(PARAGRAPHS);await expect(last).toHaveText([LAST]);await expect(editFromHere).toHaveCount(2);
+    // A triple-click selects a paragraph (a double click its first word), and Cite comes above it once the selection has settled.
+    const select=async(paragraph,text,word=false)=>{
+      await(word?paragraph.dblclick({position:{x:12,y:8}}):paragraph.click({clickCount:3}));await expect(cite).toBeVisible();
+      await expect.poll(()=>page.evaluate(()=>String(getSelection()).trim())).toBe(text);await frames(page);
+    };
+    // What Enter on Cite cites: the text's chip and Cite's sentence in the draft, with no question asked; the chip's x then takes both.
+    const cited=async text=>{
+      await expect(citations).toHaveCount(1);await expect(citations.first()).toContainText("Assistant excerpt");await expect(citations.first()).toContainText(text.length+" chars");
+      await expect(composer).toHaveValue(NOTE+" ");await expect(dialog).toHaveCount(0);
+      await citations.first().getByRole("button",{name:"Remove context"}).click();await expect(citations).toHaveCount(0);await expect(composer).toHaveValue("");
+    };
+    for(const [mode,width] of [["dark",1280],["light",900]]){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      // A paragraph of the earlier reply, a message below it: Tab reaches Cite and Enter cites the paragraph; so does Shift+Tab, and
+      // Tab from a word double-clicked or words dragged over there. Then the last reply's, as before.
+      await select(earlier.nth(0),PARAGRAPHS[0]);
+      await page.keyboard.press("Tab");await reaches("Tab","text selected in the earlier reply");await expect(cite).toBeFocused();
+      await page.screenshot({animations:"disabled",path:auditDir+"cite-tab-from-an-earlier-reply-"+mode+"-"+width+"x800.png"});
+      await page.keyboard.press("Enter");await cited(PARAGRAPHS[0]);
+      await select(earlier.nth(1),PARAGRAPHS[1]);
+      await page.keyboard.press("Shift+Tab");await reaches("Shift+Tab","text selected in the earlier reply");
+      await page.keyboard.press("Enter");await cited(PARAGRAPHS[1]);
+      await select(earlier.nth(1),"Second",true);
+      await page.keyboard.press("Tab");await reaches("Tab","a word double-clicked in the earlier reply");
+      await page.keyboard.press("Enter");await cited("Second");
+      const box=await earlier.nth(0).boundingBox(),y=box.y+box.height/2;
+      await page.mouse.move(box.x+2,y);await page.mouse.down();await page.mouse.move(box.x+140,y,{steps:6});await page.mouse.up();
+      await expect(cite).toBeVisible();const dragged=await page.evaluate(()=>String(getSelection()).trim());expect(dragged.length).toBeGreaterThan(5);await frames(page);
+      await page.keyboard.press("Tab");await reaches("Tab","words dragged over in the earlier reply");
+      await page.keyboard.press("Enter");await cited(dragged);
+      await select(last.nth(0),LAST);
+      await page.keyboard.press("Tab");await reaches("Tab","text selected in the last reply");
+      await page.keyboard.press("Enter");await cited(LAST);
+    }
+    await switchMode(page,"dark");await page.setViewportSize({width:1280,height:800});
+    // From Cite, Tab and Shift+Tab go on, and from what they reach go on again: neither keeps or brings the keyboard back to Cite.
+    for(const key of ["Tab","Shift+Tab"]){
+      await select(earlier.nth(0),PARAGRAPHS[0]);
+      await page.keyboard.press(key);await reaches(key,"text selected in the earlier reply");
+      for(const from of ["Cite","what it reached from Cite"]){
+        await page.keyboard.press(key);await expect.poll(keyboardOn,{message:"where "+key+" from "+from+" puts the keyboard"}).not.toMatch(/^(assistant-selection-cite|nothing)$/);
+      }
+    }
+    // With no Cite shown, Tab goes where it went: from a selection that Escape took Cite away from, to the next message's Edit from
+    // here, whose Enter asks as before (Escape keeps the messages); from a click on the question that selects nothing, to its own.
+    await select(earlier.nth(0),PARAGRAPHS[0]);
+    await page.keyboard.press("Escape");await expect(cite).toHaveCount(0);
+    await page.keyboard.press("Tab");await expect(editFromHere.nth(1)).toBeFocused();
+    await page.keyboard.press("Enter");await expect(dialog).toContainText("Edit from this message?");await expect(dialog.getByRole("button",{name:"Cancel",exact:true})).toBeFocused();
+    await page.keyboard.press("Escape");await expect(dialog).toHaveCount(0);
+    await page.locator(".user-bubble p").first().click();await expect(cite).toHaveCount(0);
+    await page.keyboard.press("Tab");await expect(editFromHere.nth(0)).toBeFocused();await expect(cite).toHaveCount(0);
+    // A click on Cite cites as before.
+    await select(earlier.nth(0),PARAGRAPHS[0]);await cite.click();await cited(PARAGRAPHS[0]);
+    await expect(page.locator(".user-bubble > p")).toHaveText(["Explain the session handling","Thanks for that"]);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(["Explain the session handling","Thanks for that"]);
+  }finally{await harness.close()}
+});
+
+// From Cite the keys go on beside the reply it cites, as if Cite stood where the selected text is: Tab to the first control after
+// the selection, the next question's Edit from here, and Shift+Tab to the last one before it, the Edit from here of the question the
+// reply answers, with the view where it was and Cite still there. Cite's place in the page's order is after the conversation's last
+// message, so from an earlier reply of a thread taller than the window Shift+Tab went down to the last question's Edit from here,
+// the view jumping to the end, which took Cite away, and Tab went on below the conversation, past every message between. Nor is Cite
+// a stop in that order any more: Tab from the last question's Edit from here reached it there, far from the text it cites.
+test("Tab and Shift+Tab from Cite go on beside the reply it cites in a thread taller than the window, with the view where it was",async({page})=>{
+  test.setTimeout(120_000);
+  const QUESTIONS=["Explain the session handling","And the refresh timer?","Where is the token kept?","What happens on sign out?","Thanks for that"];
+  const paragraphs=index=>["Reply "+(index+1)+" first paragraph, about the session token and where it is kept.","Reply "+(index+1)+" second paragraph, about the refresh timer and when it fires.","Reply "+(index+1)+" third paragraph, about what signing out clears."];
+  const harness=await openComposerApp(page,{turns:QUESTIONS.map((user,index)=>({user,items:[replyItem("cite-tall-reply-"+index,paragraphs(index).join("\n\n"))]}))});
+  try{
+    const scroller=page.locator(".conversation-scroll"),cite=page.getByTestId("assistant-selection-cite"),replies=page.locator(".assistant-message-text"),cited=replies.nth(1).locator("p");
+    const editFromHere=question=>page.locator(".user-bubble").filter({hasText:question}).getByRole("button",{name:"Edit from here",exact:true});
+    // Where the keyboard is: Cite by its test id, another button by its text (and a message's by that message's).
+    const keyboardOn=()=>page.evaluate(()=>{
+      const node=document.activeElement,bubble=node?.closest(".user-bubble");
+      return !node||node===document.body?"nothing":node.dataset.testid||node.textContent.trim().slice(0,60)+(bubble?" of '"+bubble.querySelector("p").textContent+"'":"");
+    });
+    const on=question=>"Edit from here of '"+question+"'",scrollTop=()=>scroller.evaluate(node=>Math.round(node.scrollTop));
+    await expect(replies).toHaveCount(QUESTIONS.length);await expect(cited).toHaveText(paragraphs(1));
+    // The second reply in the middle of the view, the thread going on below it, and its middle paragraph selected, Cite above it.
+    const select=async()=>{
+      await replies.nth(1).evaluate(node=>node.scrollIntoView({block:"center"}));await frames(page);
+      expect(await scroller.evaluate(node=>node.scrollHeight-node.clientHeight-node.scrollTop),"how far the thread goes on below the view").toBeGreaterThan(300);
+      for(const question of QUESTIONS.slice(1,3))await expect(editFromHere(question)).toBeInViewport({ratio:1});
+      await cited.nth(1).click({clickCount:3});await expect(cite).toBeVisible();
+      await expect.poll(()=>page.evaluate(()=>String(getSelection()).trim())).toBe(paragraphs(1)[1]);await frames(page);
+    };
+    for(const [mode,width] of [["dark",1280],["light",900]]){
+      await switchMode(page,mode);await page.setViewportSize({width,height:800});
+      for(const [key,next] of [["Tab",QUESTIONS[2]],["Shift+Tab",QUESTIONS[1]]]){
+        await select();const before=await scrollTop();
+        await page.keyboard.press(key);await expect.poll(keyboardOn,{message:"where "+key+" from the selection puts the keyboard"}).toBe("assistant-selection-cite");
+        await page.keyboard.press(key);await expect.soft.poll(keyboardOn,{message:"where "+key+" from Cite puts the keyboard, at "+mode+" "+width}).toBe(on(next));
+        await frames(page);
+        expect.soft(await scrollTop(),"where the view is after "+key+" from Cite, at "+mode+" "+width).toBe(before);
+        await expect.soft(cite,"Cite still above the selection after "+key+" from Cite, at "+mode+" "+width).toBeVisible();
+        await page.screenshot({animations:"disabled",path:auditDir+"cite-"+key.toLowerCase().replace("+","-")+"-from-cite-"+mode+"-"+width+"x800.png"});
+      }
+    }
+    await switchMode(page,"dark");await page.setViewportSize({width:1280,height:800});
+    // Tab from the last question's Edit from here, with Cite above the selection in the earlier reply, goes on below the conversation,
+    // not to that Cite: from it, Tab would go back up to the next question's Edit from here.
+    await select();
+    await editFromHere(QUESTIONS[4]).evaluate(node=>node.focus({preventScroll:true}));await expect(cite).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect.soft.poll(keyboardOn,{message:"where Tab from the last question's Edit from here puts the keyboard"}).not.toMatch(/^(assistant-selection-cite|nothing|Edit from here of .*)$/);
+    await expect(page.locator(".user-bubble > p")).toHaveText(QUESTIONS);
+    expect(sentTexts(harness),"the messages the thread has").toEqual(QUESTIONS);
+  }finally{await harness.close()}
+});
+
+// Re-pinned: Cite now takes up to 6,000 characters (ReplyCiteButton.jsx CITE_SELECTION_LIMIT; it took 8,000). The long paragraph
+// here has 9,114.
+// Text longer than Cite takes (6,000 characters) keeps the button above it, turned off, saying it is too long and how much Cite
+// takes; a shorter selection in the same reply gets Cite back.
+test("a selection longer than Cite takes shows Cite off, saying it is too long and how much it takes",async({page})=>{
+  test.setTimeout(90_000);
+  const LONG="Long paragraph "+"about the build cache and its keys ".repeat(260).trim(),SHORT="A short closing line.";
+  const harness=await openComposerApp(page,{turns:[{user:"Explain the cache",items:[replyItem("cite-long-reply",LONG+"\n\n"+SHORT)]}]});
+  try{
+    const cite=page.getByTestId("assistant-selection-cite"),paragraphs=page.locator(".assistant-message-text").first().locator("p");
+    await expect(paragraphs).toHaveCount(2);
+    await paragraphs.nth(0).click({clickCount:3});
+    await expect(cite).toBeVisible();await expect(cite).toBeDisabled();
+    await expect(cite).toHaveText("Too long");
+    await expect(cite).toHaveAttribute("title","Cite takes up to 6,000 characters");
+    await expect(cite).toHaveAttribute("aria-label","Too much selected to cite");
+    await paragraphs.nth(1).click({clickCount:3});
+    await expect(cite).toBeEnabled();await expect(cite).toHaveText("Cite");
+    await expect(cite).toHaveAttribute("title","Cite selected assistant text");
+  }finally{await harness.close()}
+});

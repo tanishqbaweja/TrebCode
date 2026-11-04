@@ -1,0 +1,118 @@
+name: Desktop release
+
+on:
+  push:
+    tags: [desktop]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the checked packages to the unnumbered desktop release
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and check ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            id: windows-x64
+            arguments: --win nsis --x64
+            executable: desktop-dist/win-unpacked/Trebell Code.exe
+          - name: Linux x64
+            os: ubuntu-22.04
+            id: linux-x64
+            arguments: --linux AppImage deb --x64
+            executable: desktop-dist/linux-unpacked/trebell-code
+          - name: macOS Apple Silicon
+            os: macos-15
+            id: mac-arm64
+            arguments: --mac dmg zip --arm64
+            executable: desktop-dist/mac-arm64/Trebell Code.app/Contents/MacOS/Trebell Code
+          - name: macOS Intel
+            os: macos-15-intel
+            id: mac-x64
+            arguments: --mac dmg zip --x64
+            executable: desktop-dist/mac/Trebell Code.app/Contents/MacOS/Trebell Code
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies on the target platform
+        run: npm ci --no-audit --no-fund
+      - name: Check desktop resources and packaging configuration
+        run: node --test tests/branding.test.mjs tests/desktop-packaging.test.mjs
+      - name: Build application and installers
+        run: npm run prepare:icon && npm run ui:build && npx --no-install electron-builder ${{ matrix.arguments }} --publish never
+      - name: Smoke-test the actual packaged application
+        shell: bash
+        env:
+          TREBELL_SMOKE_EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a node scripts/desktop-smoke.mjs
+          else
+            node scripts/desktop-smoke.mjs
+          fi
+      - name: Save installers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.id }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            desktop-dist/*.exe
+            desktop-dist/*.AppImage
+            desktop-dist/*.deb
+            desktop-dist/*.dmg
+            desktop-dist/*.zip
+      - name: Save packaged-app check evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: check-${{ matrix.id }}
+          if-no-files-found: ignore
+          path: |
+            .release-smoke/screenshots/*.png
+            .release-smoke/result.json
+
+  publish:
+    name: Publish checked desktop packages
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish release and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/publish-desktop-release.mjs

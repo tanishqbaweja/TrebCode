@@ -1,0 +1,524 @@
+import React,{useEffect,useMemo,useRef,useState} from "react";
+import { GitBranch, GitCommit, GitPullRequest, RefreshCw, Upload, Download, Plus, WandSparkles, ExternalLink, MessageSquare, Eye, EyeOff, Pencil, ShieldCheck, Layers3, LoaderCircle } from "lucide-react";
+import { api } from "../api.js";
+import { openWebLink } from "../web-link.js";
+import { actionError, actionErrorUnlessNamed, distinctPathParts, distinctTextParts, gitStatusBadge, gitStatusPath, gitUpstreamSync, pullRequestChecks, workspaceChanged } from "../inspector-labels.js";
+import { SOURCE_CONTROL_PAGE_SIZE, sourceControlWindow } from "../source-control-window.js";
+import { DEFAULT_MODEL_PROVIDER, modelProviderLabel } from "../provider-labels.js";
+import { createGitTextRequests, sourceControlContext, sourceControlContextCurrent, sourceControlErrorAfterContextChange } from "../source-control-context.js";
+import PullRequestFeedback from "./PullRequestFeedback.jsx";
+import { askChoice, askConfirm, askText } from "../ask-dialog.js";
+
+// Errors that already say what failed: a harness writer names the Git text it could not write, and opening a linked thread can fail
+// with "Could not restore archived thread: …", "Could not load linked thread: …" or "Linked thread was not found."; a commit with
+// nothing to commit says so in full ("Nothing to commit: …"); anything else gets the action first.
+const NAMES_GIT_TEXT=/\bGit text\b/i,NAMES_LINKED_THREAD=/\b(?:linked|archived) thread\b/i,NAMES_NOTHING_TO_COMMIT=/^Nothing to commit\b/;
+// A worktree folder or branch that starts like a sibling's, in two parts: the shared start gives way to an ellipsis before the part
+// that tells it apart does (`keep` characters of it; see distinctTextParts and inspector.css).
+function DistinctText({lead,tail,keep}){return <>{lead&&<span className="worktree-lead" style={{"--keep":String(keep)}}>{lead}</span>}<span className="worktree-tail">{tail}</span></>}
+// A worktree's path and branch are drawn in parts (the folder even before its parent), which the browser would copy onto separate
+// lines without the hidden separator. Each is selected whole (inspector.css), and a selection of nothing but a row's branch and/or
+// path copies them as written. The browser may start that selection at the end of the text before the path, so the row listens.
+// A selection holding more (the Open button, other rows) is left to the browser.
+function copyAsWritten(event){
+  const selection=window.getSelection(),range=selection?.rangeCount?selection.getRangeAt(0):null;
+  if(!range||range.collapsed)return;
+  const parts=[...event.currentTarget.querySelectorAll(".worktree-branch,code")].map(part=>{
+    const inside=document.createRange();inside.selectNodeContents(part);
+    if(range.compareBoundaryPoints(Range.START_TO_START,inside)>0)inside.setStart(range.startContainer,range.startOffset);
+    if(range.compareBoundaryPoints(Range.END_TO_END,inside)<0)inside.setEnd(range.endContainer,range.endOffset);
+    return inside.toString();
+  }).filter(Boolean);
+  if(!parts.length||parts.join("")!==range.toString())return;
+  event.clipboardData.setData("text/plain",parts.join(" "));event.preventDefault();
+}
+
+export default function SourceControlPanel({projectPath,environmentId=null,remote=false,environmentName="Local machine",model,provider=DEFAULT_MODEL_PROVIDER,agentRuntime="native",agentRuntimeInstanceId=null,agentRuntimeLabel="",threadId=null,sourceControlSettings={},onProjectChange,onAttachPr,onLinkPr,onLinkPrUrl,onOpenLinkedThread,onSelectedPrChange,onLinkedPullRequestsChanged,onGitInfo,gitInfo=null,linkedPullRequests=[]}){
+  const [info,setInfo]=useState(null);
+  const [diagnostics,setDiagnostics]=useState(null);
+  const [sourceProvider,setSourceProvider]=useState("");
+  const [capabilities,setCapabilities]=useState({create:true,comment:true,review:true,merge:true,updateBranch:true});
+  const [prs,setPrs]=useState([]);
+  const [selectedPr,setSelectedPr]=useState(null);
+  const [commitMessage,setCommitMessage]=useState("");
+  const defaultMergeMethod=["squash","merge","rebase"].includes(sourceControlSettings?.sourceControlMergeMethod)?sourceControlSettings.sourceControlMergeMethod:"squash";
+  const [stackMergeMethod,setStackMergeMethod]=useState(defaultMergeMethod);
+  const [linkedThreads,setLinkedThreads]=useState([]);
+  const [linkedThreadsKey,setLinkedThreadsKey]=useState(null);
+  const [viewed,setViewed]=useState({prNumber:null,store:null,files:[],loading:false});
+  const [busy,setBusy]=useState("");
+  // An error carries the scope it describes (repository, writer or thread); see source-control-context.js. A notice (tone "notice")
+  // says an action worked, in the same place, and goes as the next action starts.
+  const [errorState,setErrorState]=useState(null);
+  const error=errorState?.tone?"":errorState?.message||"",notice=errorState?.tone==="notice"?errorState.message:"";
+  // What each read last said for the repository on screen: null until it answers, then {ok:true} or {error}. A part whose read has
+  // not answered says it is loading rather than drawing an empty answer ("Changes 0", "Git: not found", "No pull requests found"),
+  // and a part that could not be read says so. A later refresh keeps the last answer on screen until its own lands.
+  // {skipped:true} is a part never read because the repository could not be: the banner names that failure, not this part's.
+  // A failure the banner reports keeps the banner's text (`banner`), so the part does not repeat the reason while the banner shows it.
+  const [reads,setReads]=useState({info:null,diagnostics:null,prs:null});
+  const infoRef=useRef(info);infoRef.current=info;
+  // Reads of the repository are numbered, and an answer lands unless a later one has already landed, so a read an agent's file change
+  // started (refreshChanges) never brings an older Changes list back; an action's answer counts as landed for every read before it.
+  const infoReadsRef=useRef({started:0,landed:0});
+  function infoRead(){const read=++infoReadsRef.current.started;return ()=>{if(read<=infoReadsRef.current.landed)return false;infoReadsRef.current.landed=read;return true}}
+  const [statusLimit,setStatusLimit]=useState(SOURCE_CONTROL_PAGE_SIZE);
+  const [prLimit,setPrLimit]=useState(SOURCE_CONTROL_PAGE_SIZE);
+  const [fileLimit,setFileLimit]=useState(SOURCE_CONTROL_PAGE_SIZE);
+  const prDetailRef=useRef(null),openPrRequestRef=useRef(null);
+  // What the last refresh could not load: "info" (the repository itself) or "prs" (only the pull-request list, after the
+  // repository view was refreshed), so a successful action reports the part that actually failed.
+  const refreshFailureRef=useRef(null);
+  // The context on screen. A request remembers the context it was made in, and its result or error only lands while that is still shown.
+  const context=sourceControlContext({projectPath,environmentId,agentRuntime,agentRuntimeInstanceId,provider,threadId});
+  const contextRef=useRef(context);contextRef.current=context;
+  const shownContextRef=useRef(context);
+  // Commit text ("generate") and PR text ("generate-pr") in flight, one of each kind; see createGitTextRequests.
+  const [textRequests]=useState(createGitTextRequests);
+  function setError(message,scope="repository"){const text=String(message||"");setErrorState(text?{message:text,scope}:null)}
+  function stillShown(started,scope="repository"){return sourceControlContextCurrent(started,contextRef.current,scope)}
+  function reportError(started,message,scope="repository"){if(stillShown(started,scope))setError(message,scope)}
+  function startTextRequest(kind){const request=textRequests.start(kind);setBusy(kind);return request}
+  // Cancelled when the writer or the repository changes: Generate is free at once, and nothing a cancelled request produces lands.
+  function cancelTextRequests(){
+    const kinds=textRequests.cancelAll();
+    if(kinds.length)setBusy(current=>kinds.includes(current)?"":current);
+  }
+  useEffect(()=>{
+    const previous=shownContextRef.current;shownContextRef.current=context;
+    if(previous.repository===context.repository&&previous.writer===context.writer&&previous.thread===context.thread)return;
+    // Text the old writer was writing, or text about the old repository, is cancelled; Generate is free for the new context.
+    if(!sourceControlContextCurrent(previous,context,"writer"))cancelTextRequests();
+    if(previous.repository!==context.repository)setCommitMessage("");
+    setErrorState(current=>sourceControlErrorAfterContextChange(current,previous,context));
+  },[context.repository,context.writer,context.thread]);
+  useEffect(()=>()=>{textRequests.cancelAll()},[]);
+  function query(values={}){
+    const params=new URLSearchParams(values);params.set("environmentId",environmentId||"");return params.toString();
+  }
+  function environmentBody(values={}){return {...values,environmentId:environmentId||null}}
+
+  // A refresh answered after the repository changed describes the old one: it is dropped, data and errors alike.
+  async function refresh(providerOverride=sourceProvider,{reportErrors=false}={}){
+    if(!projectPath)return;
+    const started=contextRef.current;
+    if(reportErrors)setError("");
+    refreshFailureRef.current=null;
+    const reason=error=>String(error?.message??error??"").trim()||"No reason was given.";
+    const settle=(part,outcome)=>{if(stillShown(started))setReads(current=>({...current,[part]:outcome}))};
+    const lands=infoRead();
+    let i;
+    try{i=await api("/api/git/info?"+query({path:projectPath}))}
+    catch(error){
+      refreshFailureRef.current={stage:"info"};
+      if(stillShown(started)&&(reportErrors||!infoRef.current))setError(actionError("Could not refresh repository information",error));
+      // Nothing else is read without the repository, so a part that never answered is not read either.
+      if(stillShown(started))setReads(current=>({info:{error:reason(error)},diagnostics:current.diagnostics||{skipped:true},prs:current.prs||{skipped:true}}));
+      return false;
+    }
+    if(!stillShown(started))return false;
+    // The repository shows as soon as it answers; Git and the code host are checked after it. The header shows it too, so a branch
+    // made or switched here (Initialize Git, a switch) is named there at once instead of at the header's next read.
+    if(lands()){setInfo(i);settle("info",{ok:true});onGitInfo?.(i)}
+    // The pull requests are read alongside the diagnostics and show as they answer: the diagnostics ask every code host's CLI how it
+    // is (the Azure CLI alone can take seconds), while the list needs only the host chosen or, with none chosen, the one the remote
+    // names, which the server reads from the remote as the diagnostics do.
+    const listed=api("/api/source-control/prs?"+query({path:projectPath,...(providerOverride?{provider:providerOverride}:{})})).then(p=>{
+      if(!stillShown(started))return null;
+      setPrs(p.items||[]);if(p.capabilities)setCapabilities(p.capabilities);
+      // A host whose client could not list them answers ok:false with its reason: that is a failure, not an empty list.
+      settle("prs",p.ok===false?{error:reason(p.error)}:{ok:true});
+      return p;
+    },error=>{
+      refreshFailureRef.current={stage:"prs",message:error.message||String(error)||"Could not refresh pull requests."};
+      const banner=stillShown(started)&&(reportErrors||i?.remotes?.length)?actionError("Could not refresh pull requests",error):"";
+      if(banner)setError(banner);
+      settle("prs",{error:reason(error),banner});
+      return null;
+    });
+    let d=null;
+    try{d=await api("/api/source-control/diagnostics?"+query({path:projectPath,...(providerOverride?{provider:providerOverride}:{})}))}
+    catch(error){
+      if(reportErrors)reportError(started,actionError("Could not refresh source-control diagnostics",error));
+      settle("diagnostics",{error:reason(error)});
+    }
+    if(!stillShown(started))return false;
+    if(d){setDiagnostics(d);settle("diagnostics",{ok:true})}
+    const chosen=providerOverride||d?.selectedProvider||(d?.detectedProvider&&d.detectedProvider!=="unknown"?d.detectedProvider:"");
+    // Nothing chosen yet takes the detected host. The choice is read as it is now: a project switch clears it just before this
+    // refresh, while this render's value still names the last project's host (which left every other project on Auto detect).
+    if(chosen)setSourceProvider(current=>current||chosen);
+    const p=await listed;
+    if(!p||!stillShown(started))return false;
+    // A list that came without the host's capabilities takes them from the diagnostics.
+    if(!p.capabilities&&chosen&&d?.capabilities?.[chosen])setCapabilities(d.capabilities[chosen]);
+    return true;
+  }
+  // An agent's file change in the thread open, or the end of its turn, reads the repository again as the Files and Diff tabs read
+  // theirs: one git status while its parts are unchanged, and the pull requests and the code host are left as they are. A read that
+  // fails keeps the last view; the next change or refresh reads again.
+  async function refreshChanges({toHeader=true}={}){
+    if(!projectPath)return;
+    const started=contextRef.current,lands=infoRead();
+    try{const i=await api("/api/git/info?"+query({path:projectPath}));if(stillShown(started)&&lands()){setInfo(i);setReads(current=>({...current,info:{ok:true}}));if(toHeader)onGitInfo?.(i)}}catch{}
+  }
+  useEffect(()=>{
+    let timer=null;
+    const changed=event=>{if(!workspaceChanged(event.detail,threadId))return;clearTimeout(timer);timer=setTimeout(refreshChanges,120)};
+    window.addEventListener("trebell:rpc-notification",changed);
+    return()=>{clearTimeout(timer);window.removeEventListener("trebell:rpc-notification",changed)};
+  },[threadId,projectPath,environmentId]);
+  // A change made outside the open thread's notifications (an editor's save, a terminal, another thread's turn) reaches the header's
+  // poll of the same repository (App.jsx: every 3.5 s while the window has focus). When what it read differs from what the panel
+  // shows, the panel reads again itself, as for a notification: its own reads are numbered, so a poll that answered late never puts
+  // an older list back, and a change costs one read. That read is not handed to the header, which has just read the repository
+  // itself: a header that reads it otherwise than the panel does (its environment left to the server's choice) then keeps its own
+  // answer, which starts no other read, instead of taking the panel's until its next poll and the panel reading again after each.
+  useEffect(()=>{
+    const shown=infoRef.current;
+    if(!gitInfo||!shown||gitInfo.cwd!==shown.cwd||(gitInfo.environmentId||null)!==(shown.environmentId||null))return;
+    if(JSON.stringify(gitInfo)!==JSON.stringify(shown))refreshChanges({toHeader:false});
+  },[gitInfo]);
+  // An action that worked fully says nothing, unless what it did is news to the person (`notice`, as for a merge).
+  function partialSuccess(label,issues=[],started=contextRef.current,notice=false){
+    const details=(Array.isArray(issues)?issues:[]).map(item=>String(item||"").trim()).filter(Boolean);
+    if(details.length)reportError(started,label+", but "+details.join(" "));
+    else if(notice&&stillShown(started))setErrorState({message:label+".",scope:"repository",tone:"notice"});
+  }
+  async function refreshAfterSuccess(label,providerOverride=sourceProvider,started=contextRef.current){
+    const refreshed=await refresh(providerOverride);
+    const failure=refreshFailureRef.current;
+    if(!refreshed)partialSuccess(label,[failure?.stage==="prs"?"pull requests could not be listed: "+failure.message:"the latest source-control state could not be refreshed. The last valid view is still shown."],started);
+    return refreshed;
+  }
+  function gitActionSuccessLabel(action){
+    return ({init:"Git repository was initialized","branch-create":"Branch was created","branch-switch":"Branch was switched",commit:"Commit was created",fetch:"Fetch completed",pull:"Pull completed",push:"Push completed","worktree-create":"Worktree was created"}[action]||"Git action completed");
+  }
+  // A failure names the action before the server's reason, so a bare git or host error never arrives without context.
+  function gitActionFailureLabel(action){
+    return ({init:"Could not initialize the Git repository","branch-create":"Could not create the branch","branch-switch":"Could not switch the branch",commit:"Could not commit",fetch:"Could not fetch",pull:"Could not pull",push:"Could not push","worktree-create":"Could not create the worktree"}[action]||"Git action "+action+" failed");
+  }
+  // A failure names its pull request, since it can answer after the person opened another one.
+  function prActionFailureLabel(action,extra={},number){
+    const pr="pull request #"+number;
+    if(action==="merge"&&extra.auto)return "Could not ask the host to merge "+pr+" once its checks pass";
+    return ({edit:"Could not edit "+pr,checkout:"Could not check out "+pr,"request-reviewer":"Could not request the reviewer for "+pr,"approve-workflows":"Could not approve the workflows of "+pr,revert:"Could not revert "+pr,merge:"Could not merge "+pr,comment:"Could not add the comment to "+pr,review:"Could not submit the review of "+pr,"edit-comment":"Could not edit the comment on "+pr}[action]||"Pull request action "+action+" on #"+number+" failed");
+  }
+  // Another repository starts unread: what the last one answered does not describe it.
+  useEffect(()=>{infoRef.current=null;setInfo(null);setDiagnostics(null);setPrs([]);setReads({info:null,diagnostics:null,prs:null});setSourceProvider("");setSelectedPr(null);onSelectedPrChange?.(null);setViewed({prNumber:null,store:null,files:[],loading:false});setLinkedThreads([]);setLinkedThreadsKey(null);refresh("")},[projectPath,environmentId]);
+  useEffect(()=>{setStackMergeMethod(defaultMergeMethod)},[defaultMergeMethod]);
+  useEffect(()=>{setStatusLimit(SOURCE_CONTROL_PAGE_SIZE);setPrLimit(SOURCE_CONTROL_PAGE_SIZE)},[projectPath,environmentId,sourceProvider]);
+  useEffect(()=>{setFileLimit(SOURCE_CONTROL_PAGE_SIZE)},[selectedPr?.number]);
+
+  async function action(action,extra={}){
+    const started=contextRef.current;
+    setBusy(action);setError("");
+    try{
+      const data=await api("/api/git/action",{method:"POST",body:environmentBody({action,cwd:projectPath,...extra})});
+      if(!stillShown(started))return null;
+      infoReadsRef.current.landed=infoReadsRef.current.started;
+      setInfo(data.result?.info||data.result||info);await refreshAfterSuccess(gitActionSuccessLabel(action),sourceProvider,started);return data;
+    }catch(e){
+      // A refused action can find the repository changed under it (a pull refused over a local edit, a commit with nothing left to
+      // commit), so the view is read again first; the banner then says why the action was refused, even when that read could not
+      // list the pull requests (the pull-request card says so itself).
+      if(stillShown(started))await refresh();
+      reportError(started,actionErrorUnlessNamed(gitActionFailureLabel(action),e,NAMES_NOTHING_TO_COMMIT));
+      return null;
+    }finally{setBusy("")}
+  }
+  // The text is written by the writer on screen when Generate was pressed. A switch of harness, profile or repository cancels it,
+  // so neither its text nor its error ever shows under the next one; Generate clears the last error before it starts.
+  async function generate(){
+    const request=startTextRequest("generate");setError("");
+    try{
+      const d=await api("/api/git/commit-message",{method:"POST",body:environmentBody({cwd:projectPath,model}),signal:request.controller.signal});
+      if(textRequests.current(request))setCommitMessage(d.message||"");
+    }catch(e){if(textRequests.current(request))setError(actionErrorUnlessNamed("Could not generate the commit message",e,NAMES_GIT_TEXT),"writer")}
+    finally{if(textRequests.finish(request))setBusy("")}
+  }
+  async function createReview({generateText=false}={}){
+    const started=contextRef.current,text=generateText?startTextRequest("generate-pr"):null;
+    if(!text)setBusy("create-pr");
+    setError("");
+    let ownsBusy=true;
+    try{
+      let suggested={title:commitMessage||"Trebell Code changes",body:""};
+      if(text){
+        try{suggested=await api("/api/git/review-text",{method:"POST",body:environmentBody({cwd:projectPath,model}),signal:text.controller.signal})}
+        catch(e){if(!textRequests.finish(text)){ownsBusy=false;return}setError(actionErrorUnlessNamed("Could not generate the pull request text",e,NAMES_GIT_TEXT),"writer");return}
+        if(!textRequests.finish(text)){ownsBusy=false;return}
+      }
+      const title=(await askText("PR title",suggested.title||commitMessage||"Trebell Code changes"))?.trim();if(!title)return;
+      const body=await askText("PR description",suggested.body||"",{multiline:true});if(body==null)return;
+      const d=await api("/api/source-control/pr",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider||null,title,body})});
+      const issues=[];
+      if(d.url){
+        if(threadId)try{await onLinkPrUrl?.(d.url,"created")}catch(error){issues.push("it could not be linked to this thread: "+(error.message||String(error))+".")}
+        try{if(!openWebLink(d.url))issues.push("its browser tab was not opened, because its link is not a web address.")}catch(error){issues.push("its browser tab could not be opened: "+(error.message||String(error))+".")}
+      }
+      const refreshed=await refresh();if(!refreshed)issues.push("the latest source-control state could not be refreshed. The last valid view is still shown.");
+      partialSuccess("Pull request was created",issues,started);
+    }catch(e){reportError(started,actionError("Could not create the pull request",e))}finally{if(ownsBusy)setBusy("")}
+  }
+  // Only the pull request opened last is shown: a detail that answers after another one was opened is dropped. Each open is its own
+  // request, which names the pull request it opens.
+  async function openPr(pr){
+    const started=contextRef.current,request=openPrRequestRef.current={number:pr.number},current=()=>stillShown(started)&&request===openPrRequestRef.current;
+    setError("");
+    let d=null;
+    // The banner names what could not load; a caller that reports the failure in its own sentence gets the bare reason.
+    let nextError="",nextReason="";
+    const failed=(label,error)=>{nextError=actionError(label,error);nextReason=String(error?.message??error??"").trim()||nextError};
+    try{d=await api("/api/source-control/pr-detail?"+query({path:projectPath,number:String(pr.number),...(sourceProvider?{provider:sourceProvider}:{})}))}
+    catch(error){failed("Could not load pull request details",error)}
+    if(!current())return "";
+    const item=d?.item||pr;setSelectedPr(item);onSelectedPrChange?.(item);setTimeout(()=>prDetailRef.current?.scrollIntoView({block:"start",behavior:"auto"}),0);
+    const viewedError=await loadViewed(item,d?.provider||sourceProvider||item.provider);if(viewedError)failed("Could not load viewed files",viewedError);
+    if(!current())return "";
+    if(item?.identity){
+      const params=new URLSearchParams({provider:item.identity.provider||"",host:item.identity.host||"",repository:item.identity.repository||"",number:String(item.identity.number||item.number)});
+      const linkKey=params.toString();
+      try{const reverse=await api("/api/source-control/thread-link?"+params);if(current()){setLinkedThreads(reverse.threads||[]);setLinkedThreadsKey(linkKey)}}
+      catch(error){if(current()&&linkedThreadsKey!==linkKey){setLinkedThreads([]);setLinkedThreadsKey(linkKey)}failed("Could not read the threads of this pull request",error)}
+    }else{setLinkedThreads([]);setLinkedThreadsKey(null)}
+    if(!current())return "";
+    // Opening cleared the last error; one that landed while the detail loaded (a late action's) stays unless this one has its own.
+    if(nextError)setError(nextError);return nextReason;
+  }
+  // A thread's pull requests belong to the thread that was open when the sync started. Its links are always reported (the callback
+  // of that render names that thread, and App shows them only while it is still open); its error only while it is still shown.
+  async function syncLinkedPullRequests(reportErrors=false){
+    if(!threadId)return;
+    const started=contextRef.current;
+    if(reportErrors){setBusy("sync-links");setError("")}
+    try{
+      const result=await api("/api/source-control/thread-link",{method:"POST",body:{action:"sync",threadId}});
+      if(result?.links)onLinkedPullRequestsChanged?.(result.links);
+    }catch(error){
+      if(reportErrors||linkedPullRequests.length)reportError(started,"Could not sync linked pull requests: "+(error.message||String(error)||"Unknown error"),"thread");
+    }finally{
+      if(reportErrors)setBusy("");
+    }
+  }
+  useEffect(()=>{if(threadId&&linkedPullRequests.length)syncLinkedPullRequests(false)},[threadId,projectPath,environmentId]);
+  async function loadViewed(pr,providerOverride=sourceProvider){
+    if(!pr?.number){setViewed({prNumber:null,store:null,files:[],loading:false});return ""}
+    const prNumber=pr.number;
+    setViewed(current=>String(current.prNumber)===String(prNumber)?{...current,loading:true}:{prNumber,store:null,files:[],loading:true});
+    const params={path:projectPath,number:String(pr.number)};if(providerOverride)params.provider=providerOverride;
+    try{const result=await api("/api/source-control/pr-viewed?"+query(params));setViewed({prNumber,store:result.store||null,files:result.files||[],loading:false});return ""}
+    catch(error){setViewed(current=>String(current.prNumber)===String(prNumber)?{...current,loading:false}:{prNumber,store:null,files:[],loading:false});return error||new Error("")}
+  }
+  async function setFileViewed(file,value){
+    if(!selectedPr?.number)return;const started=contextRef.current;setBusy("viewed:"+file.path);setError("");
+    try{const result=await api("/api/source-control/pr-viewed",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider||selectedPr.provider||null,number:selectedPr.number,files:[{path:file.path,viewed:value}]})});if(stillShown(started))setViewed({prNumber:selectedPr.number,store:result.store||viewed.store,files:result.files||[],loading:false})}
+    catch(error){reportError(started,actionError("Could not mark "+file.path+(value?" viewed":" unviewed"),error))}finally{setBusy("")}
+  }
+  // An action belongs to the pull request it was started on: its detail is read again while that is the one opened last, so one
+  // opened again during the action shows what the action did, and another one opened since stays.
+  async function prAction(actionName,extra={},{done=""}={}){
+    const started=contextRef.current,pr=selectedPr;
+    setBusy(actionName);setError("");
+    try{
+      const result=await api("/api/source-control/pr-action",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider||null,number:pr.number,action:actionName,...extra})});
+      if(!stillShown(started))return result;
+      const issues=[];if(openPrRequestRef.current?.number===pr.number){const detailError=await openPr(pr);if(detailError)issues.push("the pull-request detail could not refresh: "+detailError+".")}
+      const refreshed=await refresh();if(!refreshed)issues.push("the latest source-control state could not be refreshed. The last valid view is still shown.");
+      partialSuccess(done||"Pull request action "+actionName+" on #"+pr.number+" succeeded",issues,started,Boolean(done));
+      return result;
+    }catch(e){reportError(started,actionError(prActionFailureLabel(actionName,extra,pr.number),e));return null}finally{setBusy("")}
+  }
+  // Merging, or turning on auto-merge, asks first: the question names the pull request, where it goes, the merge method and the
+  // checks that failed or are still pending, and its button is red while a check has failed.
+  async function mergePr(auto){
+    const pr=selectedPr,checks=pullRequestChecks(pr.statusCheckRollup);
+    const listed=(state,one,many)=>{const names=checks.filter(check=>check.state===state).map(check=>check.name);return names.length?(names.length===1?one:names.length+" "+many)+": "+names.join(", ")+".":""};
+    const failed=listed("failed","1 check failed","checks failed"),pending=listed("pending","1 check has not finished","checks have not finished");
+    const method={squash:"squash",merge:"a merge commit",rebase:"rebase"}[defaultMergeMethod]||defaultMergeMethod,target="#"+pr.number+" “"+pr.title+"”"+(pr.baseRefName?" into "+pr.baseRefName:"")+" using "+method+"?";
+    const question=(auto?"Turn on auto-merge for "+target+" The host merges it once its required checks pass.":"Merge "+target)+(failed||pending?"\n\n"+[failed,pending].filter(Boolean).join("\n"):"");
+    if(await askChoice(question,{choices:[{value:true,label:auto?"Turn on auto-merge":"Merge",tone:failed?"danger":"primary"}]})!==true)return;
+    prAction("merge",{method:defaultMergeMethod,...(auto?{auto:true}:{})},{done:auto?"":"Pull request #"+pr.number+" was merged"});
+  }
+  async function openProjectPath(path){
+    if(!path||!onProjectChange)return false;
+    setBusy("open-project");setError("");
+    try{await Promise.resolve(onProjectChange(path,environmentId||null));return true}
+    catch(error){setError(actionError("Could not open the worktree",error));return false}
+    finally{setBusy("")}
+  }
+  // A branch name of spaces is no name, as an empty one is, and the spaces typed around a name are not part of it.
+  async function addWorktree(){
+    const branch=(await askText("New worktree branch"))?.trim();if(!branch)return;
+    let path="";
+    try{
+      path=remote
+        ?await askText("Remote worktree path",(String(projectPath).replace(/[\/]?$/,"")+"-"+branch.replace(/[^a-zA-Z0-9._-]+/g,"-")))
+        :await window.trebellDesktop?.pickDirectory?.();
+    }catch(error){setError(actionError("Could not choose a worktree folder",error));return}
+    if(!path)return;
+    const created=await action("worktree-create",{branch,path,baseBranch:info?.branch});
+    if(created)await openProjectPath(path);
+  }
+  // Attaching or linking a pull request acts on the open thread, so its error belongs to that thread.
+  async function runCallback(label,callback){
+    if(!callback||busy)return false;
+    const started=contextRef.current;
+    setBusy(label);setError("");
+    try{await Promise.resolve(callback());return true}
+    catch(error){reportError(started,actionError(({"attach-pr":"Could not attach the pull request","link-pr":"Could not add the pull request to this thread","unlink-pr":"Could not take the pull request off this thread"})[label]||"Could not update the pull request",error),"thread");return false}
+    finally{setBusy("")}
+  }
+
+  function stackFor(pr){
+    return Array.isArray(pr?.stack?.layers)?pr.stack.layers:[];
+  }
+  // The open layers a Merge through merges: the selected one and those below it. With none, as with no open layer for Rebase stack,
+  // the button is not offered.
+  function mergeScopeFor(pr){
+    const stack=stackFor(pr),position=Number(pr?.stack?.position)||stack.find(layer=>layer.number===pr?.number)?.position||stack.length;
+    return stack.filter(layer=>layer.state==="OPEN"&&Number(layer.position)<=position);
+  }
+
+  async function stackAction(kind){
+    const stack=stackFor(selectedPr);
+    if(stack.length<1||!selectedPr?.stack)return;
+    const mergeScope=mergeScopeFor(selectedPr);
+    const label=stack.map(pr=>"#"+pr.number).join(" → "),through=mergeScope.map(pr=>"#"+pr.number).join(" → ");
+    const promptText=kind==="merge"
+      ?"Merge "+through+" using "+stackMergeMethod+" as one GitHub stack operation? GitHub will enforce branch rules and merge queues."
+      :"Rebase stack "+label+"? This rewrites the remote stack branches bottom-to-top with force-with-lease and restarts checks. Your current checkout is not changed.";
+    // A merge goes as one stack's single merge does (mergePr); a rebase rewrites the remote branches, so its button is red.
+    if(!await askConfirm(promptText,kind==="merge"?{confirm:"Merge through #"+selectedPr.number,tone:"primary"}:{confirm:"Rebase stack"}))return;
+    const started=contextRef.current,number=selectedPr.number;
+    setBusy(kind+"-stack");setError("");
+    try{
+      const result=kind==="merge"
+        ?await api("/api/source-control/pr-action",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider||null,number,action:"merge",method:stackMergeMethod})})
+        :await api("/api/source-control/pr-action",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider||null,number,action:"rebase-stack"})});
+      if(!stillShown(started))return;
+      const issues=[];const refreshed=await refresh();if(!refreshed)issues.push("the latest source-control state could not be refreshed. The last valid view is still shown.");
+      if(selectedPr&&openPrRequestRef.current?.number===selectedPr.number){const detailError=await openPr(selectedPr);if(detailError)issues.push("the pull-request detail could not refresh: "+detailError+".")}
+      // Either says what the host did, as a merged pull request does, naming the layers as its question did. The server rebases only
+      // the layers still open (`updated`, none when none is), and merges the stack as one, which GitHub finishes after it answers,
+      // only when it could read the stack (`stack`); otherwise it merged the pull request alone.
+      const rebased=(Array.isArray(result?.updated)?result.updated:[]).map(layer=>"#"+layer.number);
+      const done=kind==="merge"?(result?.stack?"GitHub is merging "+through:"Pull request #"+number+" was merged")
+        :!rebased.length?"Nothing was rebased: no layer of stack "+label+" is open"
+        :stack.every(layer=>rebased.includes("#"+layer.number))?"Stack "+label+" was rebased"
+        :rebased.join(" → ")+(rebased.length===1?" was":" were")+" rebased; the rest of stack "+label+" is merged or closed";
+      partialSuccess(done,issues,started,true);
+    }catch(e){reportError(started,actionError(kind==="merge"?"Merging the stack failed":"Rebasing the stack failed",e))}
+    finally{setBusy("")}
+  }
+  async function publishRepository(){
+    const localName=String(info?.root||projectPath).split(/[\\/]/).filter(Boolean).pop()||"repository";
+    const labels={gitlab:"Repository path (group/project or project)",forgejo:"Repository path (owner/repository or repository)",bitbucket:"Repository path (workspace/repository)","azure-devops":"Repository path (project/repository)"};
+    const defaults={bitbucket:"workspace/"+localName,"azure-devops":"project/"+localName};
+    const name=(await askText(labels[sourceProvider]||"Repository name",defaults[sourceProvider]||localName))?.trim();if(!name)return;
+    // Each answer is its own button, so Cancel and Escape publish nothing (OK and Cancel once meant public and private).
+    const visibility=sourceProvider==="azure-devops"?"private":await askChoice("Publish "+name+" on "+(diagnostics?.providers?.[sourceProvider]?.label||sourceProvider)+"?\n\nAnyone can see a public repository; a private one only you and the people you add can see.",{choices:[{value:"private",label:"Private"},{value:"public",label:"Public"}]});
+    if(!visibility)return;
+    const started=contextRef.current;
+    setBusy("publish");setError("");
+    try{
+      const result=await api("/api/source-control/publish",{method:"POST",body:environmentBody({cwd:projectPath,provider:sourceProvider,name,visibility})});
+      const issues=[];
+      if(result.url)try{if(!openWebLink(result.url))issues.push("its browser tab was not opened, because its link is not a web address.")}catch(error){issues.push("its browser tab could not be opened: "+(error.message||String(error))+".")}
+      if(!stillShown(started))return;
+      const refreshed=await refresh();if(!refreshed)issues.push("the latest source-control state could not be refreshed. The last valid view is still shown.");
+      if(!result.pushed)issues.push("no commit was pushed yet; make the first commit, then push it to origin.");
+      partialSuccess(result.pushed?"Repository was published":"Repository was created",issues,started);
+    }catch(e){reportError(started,"Could not publish repository: "+(e.message||String(e)))}finally{setBusy("")}
+  }
+  const linkedGroups=(()=>{
+    const groups=[];const byKey=new Map();
+    for(const link of linkedPullRequests||[]){
+      const key=link.stack?.kind==="native"&&link.stack?.number?"stack:"+link.identity?.host+":"+link.identity?.repository+":"+link.stack.number:"pr:"+pullLinkKey(link);
+      if(!byKey.has(key)){const group={key,stack:link.stack||null,links:[]};byKey.set(key,group);groups.push(group)}
+      byKey.get(key).links.push(link);
+    }
+    for(const group of groups)group.links.sort((a,b)=>{
+      if(group.stack?.layers){const pos=new Map(group.stack.layers.map((layer,index)=>[Number(layer.number),index]));return (pos.get(Number(a.number))??999)-(pos.get(Number(b.number))??999)}
+      return Number(a.number)-Number(b.number);
+    });
+    return groups;
+  })();
+  function pullLinkKey(link){const identity=link?.identity;return identity?.host&&identity?.repository&&identity?.number?[identity.host,String(identity.repository).toLowerCase(),identity.number].join("|"):String(link?.url||link?.number||"")}
+  const branchPr=info?.branch?prs.find(pr=>pr.state==="OPEN"&&pr.headRefName===info.branch)||null:null;
+  const branchPrLinked=branchPr?linkedPullRequests.some(link=>pullLinkKey(link)===pullLinkKey(branchPr)):false;
+  const statusWindow=useMemo(()=>sourceControlWindow(info?.status||[],{limit:statusLimit,keyOf:item=>item?.path}),[info?.status,statusLimit]);
+  const prWindow=useMemo(()=>sourceControlWindow(prs,{limit:prLimit,activeKey:selectedPr?.number,keyOf:item=>item?.number}),[prs,prLimit,selectedPr?.number]);
+  const fileWindow=useMemo(()=>sourceControlWindow(selectedPr?.files||[],{limit:fileLimit,keyOf:item=>item?.path}),[selectedPr?.files,fileLimit]);
+  // Worktrees often share one long parent folder, so each row leads with the part of its path that tells it apart, and folder and
+  // branch names that start alike ("<repo>-<branch>" folders) keep the end where they differ in view.
+  const worktreeRows=useMemo(()=>{
+    const worktrees=info?.worktrees||[],paths=distinctPathParts(worktrees.map(w=>w.path));
+    const names=distinctTextParts(paths.map(path=>path.name)),branches=distinctTextParts(worktrees.map(w=>w.branch||"detached"));
+    return worktrees.map((worktree,index)=>({worktree,path:paths[index],name:names[index],branch:branches[index]}));
+  },[info?.worktrees]);
+  // Commit and PR text comes from the active harness; only Trebell Native calls the model provider directly.
+  const textGeneratorLabel=agentRuntime&&agentRuntime!=="native"?(agentRuntimeLabel||agentRuntime):modelProviderLabel(provider);
+  // Trebell Native writes it with the Git text model set in Settings, else the composer's model: with neither (a provider that
+  // names no default, before a model is picked) Generate and Generate PR wait for a pick and say so, as the server would.
+  const textModelNeeded=(!agentRuntime||agentRuntime==="native")&&!model&&!sourceControlSettings?.sourceControlTextModel;
+  const textModelNote=textModelNeeded?"Choose a model in the composer first, or set a Git text model in Settings.":undefined;
+  // Until a read answers its parts say so; a failed one leaves them unknown (the banner, or the title, names the failure).
+  const infoLoading=!info&&!reads.info?.error,infoPending=infoLoading?"checking…":"unknown";
+  const diagnosticsLoading=!diagnostics&&!reads.diagnostics;
+  // A detached HEAD has no branch to select, so the branch list leads with it ("detached", as the header chip and the worktree rows
+  // say) rather than showing the first branch as checked out; its title names the commit.
+  const detachedAt=info&&!info.branch?(info.worktrees||[]).find(worktree=>worktree.path===info.root)?.head||"":"";
+  // How far the branch is from its upstream, as the last status read found it (a Fetch reads it again).
+  const upstreamSync=info?.upstream?gitUpstreamSync(info.statusHeader):null;
+  // A new repository's branch has no commit yet, so git lists no branch ref for it; the list leads with it all the same.
+  const unborn=Boolean(info?.branch)&&!(info.branches||[]).includes(info.branch);
+  const branchTitle=unborn?info.branch+" · no commits yet":info?.branch?info.branch+" · switch branch":info?"detached"+(detachedAt?" at "+detachedAt.slice(0,8):"")+" · switch branch":"Switch branch";
+  const gitVersion=diagnostics?diagnostics.git?.version||"not found":diagnosticsLoading?"checking…":"unknown";
+
+  if(!projectPath)return <div className="empty-state">Open a project to use source control.</div>;
+  // A folder that is not a repository yet still shows why Initialize Git failed.
+  if(info&&!info.isGit)return <div className="source-control">{error&&<div className="inline-error source-control-error" role="alert">{error}</div>}<div className="empty-state"><GitBranch size={28}/><strong>Not a Git repository</strong><span>{projectPath}</span><button onClick={()=>action("init")} disabled={!!busy}><Plus size={13}/> Initialize Git</button></div></div>;
+
+  return <div className="source-control">
+    <div className="sc-toolbar">
+      <div className="sc-branch"><GitBranch size={16}/><select aria-label="Current branch" title={branchTitle} value={info?.branch||""} disabled={!info} aria-busy={infoLoading||undefined} onChange={e=>action("branch-switch",{name:e.target.value})}>{!info&&<option value="">{infoLoading?"Loading branches…":"Branches unavailable"}</option>}{info&&!info.branch&&<option value="" disabled>detached</option>}{unborn&&<option value={info.branch}>{info.branch}</option>}{(info?.branches||[]).map(b=><option key={b}>{b}</option>)}</select><button aria-label="Create branch" title="Create branch" onClick={async()=>{const n=(await askText("New branch name"))?.trim();if(n)action("branch-create",{name:n})}}><Plus size={13}/></button></div>
+      <div><button onClick={()=>action("fetch")} disabled={!!busy}><RefreshCw size={13}/> Fetch</button><button onClick={()=>action("pull")} disabled={!!busy}><Download size={13}/> Pull</button><button onClick={()=>action("push",{setUpstream:!info?.upstream})} disabled={!!busy}><Upload size={13}/> Push</button></div>
+    </div>
+    {error&&<div className="inline-error source-control-error" role="alert">{error}</div>}{notice&&<div className="source-control-notice" role="status">{notice}</div>}
+    {branchPr&&<div className="branch-pr-badge"><GitPullRequest size={13}/><span><strong>Branch PR #{branchPr.number}</strong><small>{branchPr.title}</small></span><button onClick={()=>openPr(branchPr)}>Review</button>{threadId&&!branchPrLinked&&<button onClick={()=>runCallback("link-pr",()=>onLinkPr?.(branchPr))} disabled={!!busy}>Link this PR</button>}{threadId&&branchPrLinked&&<em>Linked</em>}</div>}
+    <div className="sc-grid">
+      <section className="sc-card"><h3>Changes {info&&<span>{info.status?.length||0}</span>}</h3><div className="status-list" aria-busy={infoLoading||undefined}>{statusWindow.visible.map(s=>{const badge=gitStatusBadge(s.code),path=gitStatusPath(s.path);return <div key={s.path} title={path}><code data-state={badge.kind} title={badge.title}>{badge.label}</code><span>{path}</span></div>})}{!info?(infoLoading?<p className="sc-loading">Loading changes…</p>:<p className="sc-unavailable">Changes unavailable.</p>):!info.status?.length&&<p className="sc-clean">Working tree clean.</p>}</div>
+        {statusWindow.hasMore&&<div className="source-window-footer"><button onClick={()=>setStatusLimit(limit=>limit+SOURCE_CONTROL_PAGE_SIZE)}>Show {statusWindow.nextCount} more changes</button><span>{statusWindow.shown} of {statusWindow.total} shown</span></div>}
+        <div className="commit-box"><textarea value={commitMessage} onChange={e=>setCommitMessage(e.target.value)} placeholder="Commit message"/><button onClick={generate} disabled={busy==="generate"||textModelNeeded} title={textModelNote}><WandSparkles size={13}/> Generate with {textGeneratorLabel}</button><button className="primary" onClick={async()=>{const message=commitMessage;if(await action("commit",{message}))setCommitMessage(current=>current===message?"":current)}} disabled={!commitMessage.trim()||!!busy}><GitCommit size={13}/> Commit</button></div>
+      </section>
+      <section className="sc-card"><h3>Repository</h3><p>Root: {info?<code>{info.root||"—"}</code>:infoPending}</p><p>Upstream: {info?<code>{info.upstream||"none"}</code>:infoPending}{upstreamSync&&<> <span className="sc-sync" data-state={upstreamSync.behind?"behind":upstreamSync.ahead?"ahead":upstreamSync.gone?"gone":"even"}>{upstreamSync.label}</span></>}</p><p title={!diagnostics&&reads.diagnostics?.error?"Could not check Git: "+reads.diagnostics.error:undefined}>Git: {gitVersion}</p><label className="source-provider-field"><span>Code host</span><select value={sourceProvider} onChange={e=>{setSourceProvider(e.target.value);setSelectedPr(null);onSelectedPrChange?.(null);setViewed({prNumber:null,store:null,files:[],loading:false});refresh(e.target.value,{reportErrors:true})}}><option value="">Auto detect</option><option value="github">GitHub</option><option value="gitlab">GitLab</option><option value="forgejo">Forgejo / Gitea</option><option value="bitbucket">Bitbucket</option><option value="azure-devops">Azure DevOps</option></select></label><p>{sourceProvider?(diagnostics?.providers?.[sourceProvider]?.label||sourceProvider)+" · "+(diagnostics?(diagnostics.providers?.[sourceProvider]?.authenticated?"authenticated":diagnostics.providers?.[sourceProvider]?.installed?"needs authentication":"client/credentials missing"):diagnosticsLoading?"checking…":"status unknown"):diagnosticsLoading?"Detecting the code host…":"Detected: "+(diagnostics?.detectedProvider||"unknown")+" · choose a provider if auto-detection is ambiguous"}</p>
+        {!info?.remotes?.some(remote=>remote.name==="origin")&&sourceProvider&&diagnostics?.capabilities?.[sourceProvider]?.publish&&<button onClick={publishRepository} disabled={!!busy||!diagnostics?.providers?.[sourceProvider]?.authenticated}><Upload size={13}/> Publish repository</button>}
+        {info&&<h4>Worktrees</h4>}{worktreeRows.map(({worktree:w,path,name,branch})=><div className="worktree-row" key={w.path} title={w.path} onCopy={copyAsWritten}><span className="worktree-branch" title={w.branch||undefined}><DistinctText {...branch}/></span><code><bdi className="worktree-dir">{path.dir}</bdi><span className="worktree-sep">{path.sep}</span><bdi className="worktree-name"><DistinctText {...name}/></bdi></code>{w.path!==info?.root&&<button onClick={()=>openProjectPath(w.path)} disabled={busy==="open-project"}>Open</button>}</div>)}
+        {(remote||window.trebellDesktop?.pickDirectory)&&<button onClick={addWorktree} disabled={!!busy}><Plus size={13}/> Add worktree</button>}
+      </section>
+    </div>
+    {threadId&&<section className="sc-card linked-pr-panel"><div className="linked-pr-panel-head"><h3>Pull requests on this thread <span>{linkedPullRequests.length}</span></h3><button onClick={()=>syncLinkedPullRequests(true)} disabled={!!busy}><RefreshCw size={12}/> Sync</button></div>{linkedGroups.length?linkedGroups.map(group=><div className="linked-pr-group" key={group.key}>{group.stack&&<div className="linked-pr-group-title"><Layers3 size={12}/><strong>Stack #{group.stack.number}</strong><span>{group.links.length} linked layer{group.links.length===1?"":"s"}</span></div>}<div>{group.links.map(link=><div className="linked-pr-row" key={pullLinkKey(link)}><button className="linked-pr-open" onClick={()=>openWebLink(link.url)}><GitPullRequest size={12}/><span><strong>#{link.number} {link.snapshot?.title||link.title||"Pull request"}</strong><small>{link.identity?.repository||""} · {link.snapshot?.state||link.state||"unknown"}</small></span></button><button className="linked-pr-unlink" onClick={()=>runCallback("unlink-pr",()=>onLinkPr?.(link))} disabled={!!busy}>Unlink</button></div>)}</div></div>):<p>No pull request is on this thread yet.</p>}</section>}
+    <section className="pr-card"><div className="pr-head"><h3>Pull requests</h3><button aria-label="Refresh pull requests" onClick={()=>refresh(sourceProvider,{reportErrors:true})}><RefreshCw size={13}/></button><button onClick={()=>createReview({generateText:true})} disabled={!!busy||textModelNeeded} title={textModelNote||"Generate the pull request text with "+textGeneratorLabel}><WandSparkles size={13}/> Generate PR</button><button onClick={()=>createReview()} disabled={!!busy}><Plus size={13}/> Create PR</button></div>
+      {prs.length?<div className="pr-layout"><div className="pr-list">{prWindow.visible.map(pr=><button key={pr.number} onClick={()=>openPr(pr)} className={selectedPr?.number===pr.number?"active":""}><GitPullRequest size={14}/><div><strong>#{pr.number} {pr.title}</strong><span>{pr.headRefName} → {pr.baseRefName}{pr.stack?.position&&pr.stack?.size?" · stack "+pr.stack.position+"/"+pr.stack.size:""}</span></div><em data-state={String(pr.state||"").toLowerCase()}>{pr.state}</em></button>)}{prWindow.hasMore&&<div className="source-window-footer"><button onClick={()=>setPrLimit(limit=>limit+SOURCE_CONTROL_PAGE_SIZE)}>Show {prWindow.nextCount} more PRs</button><span>{prWindow.shown} of {prWindow.total} shown</span></div>}</div>
+      <div className="pr-detail" ref={prDetailRef}>{selectedPr?<>
+        <h3>#{selectedPr.number} {selectedPr.title}</h3>{linkedThreads.length>0&&<div className="pr-linked-threads"><span>On threads</span>{linkedThreads.map(thread=><button key={thread.threadId} title={thread.threadId} onClick={()=>Promise.resolve(onOpenLinkedThread?.(thread)).catch(error=>setError(actionErrorUnlessNamed("Could not open the linked thread",error,NAMES_LINKED_THREAD)))}>{thread.title||thread.threadId.slice(0,8)}{thread.archived?" · archived":""}</button>)}</div>}<p>{selectedPr.body||"No description."}</p>{selectedPr.autoMergeRequest&&!selectedPr.mergedAt&&<p className="pr-auto-merge">Auto-merge is on ({({SQUASH:"squash",MERGE:"merge commit",REBASE:"rebase"})[String(selectedPr.autoMergeRequest.mergeMethod||"").toUpperCase()]||"the host's default method"}){selectedPr.autoMergeRequest.enabledBy?.login?", turned on by "+selectedPr.autoMergeRequest.enabledBy.login:""}. It merges once its required checks pass.</p>}
+        {selectedPr.stack&&<div className="pr-stack"><div className="pr-stack-head"><strong><Layers3 size={12}/> GitHub stack #{selectedPr.stack.number}</strong><span>Layer {selectedPr.stack.position||stackFor(selectedPr).find(layer=>layer.number===selectedPr.number)?.position||"?"} of {selectedPr.stack.size||stackFor(selectedPr).length||"?"} · base {selectedPr.stack.baseRefName||"unknown"}</span></div>{stackFor(selectedPr).length>0&&<><div className="pr-stack-layers">{stackFor(selectedPr).map(layer=><button key={layer.number} className={layer.number===selectedPr.number?"active":""} onClick={()=>layer.number===selectedPr.number?null:openPr({...layer,provider:"github"})}><span>{layer.position}</span><strong>#{layer.number} {layer.title||layer.headRefName}</strong><em>{layer.state}{layer.isDraft?" · draft":""}</em></button>)}</div><div className="pr-stack-actions"><button onClick={()=>stackAction("rebase")} disabled={!!busy||!stackFor(selectedPr).some(layer=>layer.state==="OPEN")}>Rebase stack</button><select aria-label="Stack merge method" value={stackMergeMethod} onChange={event=>setStackMergeMethod(event.target.value)}><option value="squash">Squash</option><option value="merge">Merge commit</option><option value="rebase">Rebase merge</option></select><button onClick={()=>stackAction("merge")} disabled={!!busy||selectedPr.mergedAt||!mergeScopeFor(selectedPr).length}>Merge through #{selectedPr.number}</button></div></>}</div>}
+        {/* A merged pull request offers only what its host still does with one: no Checkout and no reviewer to ask (it can no longer
+            be reviewed), and Edit only where the host edits a merged one's title and description; comments stay. */}
+        <div className="pr-actions"><button onClick={()=>openWebLink(selectedPr.url)}><ExternalLink size={12}/> Open</button><button onClick={()=>runCallback("attach-pr",()=>onAttachPr?.(selectedPr))} disabled={!!busy}><MessageSquare size={12}/> Attach</button><button className={linkedPullRequests.some(x=>x.number===selectedPr.number&&x.url===selectedPr.url)?"linked":""} onClick={()=>runCallback(linkedPullRequests.some(x=>x.number===selectedPr.number&&x.url===selectedPr.url)?"unlink-pr":"link-pr",()=>onLinkPr?.(selectedPr))} disabled={!!busy}><GitPullRequest size={12}/> {linkedPullRequests.some(x=>x.number===selectedPr.number&&x.url===selectedPr.url)?"Linked":"Link to thread"}</button>{capabilities.edit&&(!selectedPr.mergedAt||capabilities.editMerged)&&<button onClick={async()=>{const title=await askText("PR title",selectedPr.title||"");if(title==null||!title.trim())return;const body=await askText("PR description",selectedPr.body||"",{multiline:true});if(body==null)return;const changes={...(title.trim()!==(selectedPr.title||"")?{title:title.trim()}:{}),...(body!==(selectedPr.body||"")?{body}:{})};if(Object.keys(changes).length)prAction("edit",changes)}} disabled={!!busy}><Pencil size={12}/> Edit</button>}{capabilities.checkout&&!selectedPr.mergedAt&&<button onClick={()=>prAction("checkout")} disabled={!!busy}><Download size={12}/> Checkout</button>}{capabilities.reviewers&&!selectedPr.mergedAt&&<button onClick={async()=>{const reviewer=await askText("Reviewer username");if(reviewer?.trim())prAction("request-reviewer",{reviewer:reviewer.trim()})}} disabled={!!busy}>Request reviewer</button>}{capabilities.approveWorkflows&&selectedPr.awaitingWorkflowApproval?.length>0&&<button onClick={()=>prAction("approve-workflows")} disabled={!!busy}><ShieldCheck size={12}/> Approve workflows ({selectedPr.awaitingWorkflowApproval.length})</button>}{capabilities.revert&&selectedPr.mergedAt&&selectedPr.mergeCommitSha&&<button onClick={async()=>{if(!await askConfirm("Open a new pull request that reverts #"+selectedPr.number+"?",{confirm:"Open revert pull request",tone:"primary"}))return;const result=await prAction("revert");if(result?.url)openWebLink(result.url)}} disabled={!!busy}><GitPullRequest size={12}/> Revert PR</button>}{capabilities.autoMerge&&!selectedPr.mergedAt&&!selectedPr.stack&&!selectedPr.autoMergeRequest&&<button onClick={()=>mergePr(true)} disabled={!!busy}>Auto-merge</button>}{capabilities.merge&&!selectedPr.mergedAt&&!selectedPr.stack&&<button onClick={()=>mergePr(false)} disabled={!!busy}>Merge</button>}</div>
+        {(capabilities.comment||(capabilities.review&&!selectedPr.mergedAt))&&<PullRequestFeedback key={(sourceProvider||selectedPr.provider||"host")+":"+selectedPr.number} canComment={Boolean(capabilities.comment)} canReview={Boolean(capabilities.review&&!selectedPr.mergedAt)} canRequestChanges={Boolean(capabilities.requestChanges)} busy={!!busy} onComment={async body=>Boolean(await prAction("comment",{body}))} onReview={async({event,body})=>Boolean(await prAction("review",{event,body}))}/>}
+        {(selectedPr.files||[]).length>0&&(()=>{const currentViewed=String(viewed.prNumber)===String(selectedPr.number)?viewed:{prNumber:selectedPr.number,store:null,files:[],loading:viewed.loading};return <><div className="pr-files-head"><h4>Files</h4><span>{currentViewed.files.filter(item=>item.state==="viewed").length} / {selectedPr.files.length} {currentViewed.store==="environment"?"viewed in Trebell Code":"viewed"}</span></div><div className="pr-files">{fileWindow.visible.map(file=>{const state=currentViewed.files.find(item=>item.path===file.path)?.state||"unviewed";const isViewed=state==="viewed",stale=state==="dismissed";return <details key={file.path} className={"pr-file "+state}><summary><button type="button" className="pr-file-viewed" disabled={currentViewed.loading||busy==="viewed:"+file.path} onClick={event=>{event.preventDefault();event.stopPropagation();setFileViewed(file,!isViewed)}} aria-label={(isViewed?"Mark unviewed ":"Mark viewed ")+file.path}>{isViewed?<Eye size={12}/>:<EyeOff size={12}/>}</button><strong>{file.path}</strong><span>{stale?"changed since viewed":`${Number(file.additions||0)}+ ${Number(file.deletions||0)}−`}</span></summary>{stale&&<p>This file changed after you marked it viewed.</p>}{file.patch&&<pre>{file.patch}</pre>}</details>})}</div>{fileWindow.hasMore&&<div className="source-window-footer"><button onClick={()=>setFileLimit(limit=>limit+SOURCE_CONTROL_PAGE_SIZE)}>Show {fileWindow.nextCount} more files</button><span>{fileWindow.shown} of {fileWindow.total} shown</span></div>}</>})()}
+        <h4>Conversation</h4><div className="review-list">{(selectedPr.comments||[]).length?(selectedPr.comments||[]).map((entry,i)=><div key={entry.id||i}><strong>{entry.author?.login||entry.author?.name||"Commenter"}</strong><span>{entry.canEdit?"yours":"comment"}</span><p>{entry.body||""}</p>{capabilities.editComments&&entry.canEdit&&<button className="pr-comment-edit" onClick={async()=>{const body=await askText("Edit comment",entry.body||"",{multiline:true});if(body!=null&&body!==(entry.body||""))prAction("edit-comment",{commentId:entry.id,body})}} disabled={!!busy}><Pencil size={11}/> Edit comment</button>}</div>):<p>Nobody has commented.</p>}</div>
+        <h4>Reviews</h4>{(()=>{const requested=(selectedPr.reviewRequests||[]).map(reviewer=>reviewer?.login||reviewer?.name||reviewer?.slug).filter(Boolean);return <div className="review-list">{(selectedPr.reviews||[]).length||requested.length?<>{(selectedPr.reviews||[]).map((review,i)=><div key={review.id||i}><strong>{review.author?.login||review.author?.name||"Reviewer"}</strong><span>{review.state||"reviewed"}</span><p>{review.body||""}</p></div>)}{requested.map(name=><div key={"requested:"+name}><strong>{name}</strong><span>requested</span></div>)}</>:<p>Nobody has reviewed it.</p>}</div>})()}
+        <h4>Checks</h4>{(()=>{const checks=pullRequestChecks(selectedPr.statusCheckRollup);return checks.length?<ul className="pr-checks">{checks.map((check,i)=><li key={i}><strong title={check.name}>{check.name}</strong><em data-state={check.state} title={check.detail||undefined}>{check.state}</em></li>)}</ul>:<p className="pr-checks-none">This pull request has no checks.</p>})()}
+      </>:<p>Select a pull request to inspect it.</p>}</div></div>
+        :!reads.prs?<div className="pr-loading" role="status" aria-busy="true"><LoaderCircle size={18} aria-hidden="true"/><strong>Reading pull requests…</strong></div>
+        :info?.isGit&&!info.remotes?.some(remote=>remote.kind==="fetch")?<div className="pr-empty-state"><GitPullRequest size={20}/><strong>No remote yet</strong><span>Pull requests are listed once this repository has a remote on a code host.</span></div>
+        :reads.prs.skipped?<div className="pr-empty-state"><GitPullRequest size={20}/><strong>Pull requests are not listed</strong><span>They are listed once the repository can be read.</span></div>
+        :reads.prs.error&&reads.prs.banner&&error===reads.prs.banner?<div className="pr-empty-state"><GitPullRequest size={20}/><strong>Pull requests are not listed</strong><span>The list could not be read; the message above says why.</span></div>
+        :reads.prs.error?<div className="pr-empty-state error"><GitPullRequest size={20}/><strong>Could not list pull requests</strong><span>{reads.prs.error}</span></div>
+        :<div className="pr-empty-state"><GitPullRequest size={20}/><strong>No pull requests found</strong><span>Create a pull request or refresh after one is opened on the remote.</span></div>}
+    </section>
+  </div>;
+}

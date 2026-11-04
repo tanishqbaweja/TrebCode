@@ -1,0 +1,553 @@
+# Trebell Code — Remaining Manual Validation
+
+This file tracks the gap between **implemented + automated-tested** and **proven on real machines/accounts/services**.
+
+
+Current automated regression baseline on **2026-10-28**:
+
+- npm test: **1,313 passed, 0 failed**.
+- Full Playwright UI suite in **headless Google Chrome**: **202 passed, 0 failed**.
+- Production UI build succeeds.
+- Packaged Windows validation passed bundled Codex relay/desktop smoke plus a real Trebell Native model using packaged browser, computer and filesystem capabilities.
+
+## How to record results
+
+For every test, mark **Pass / Fail / Blocked** and capture:
+
+- Operating system and runtime details;
+- runtime + provider + model;
+- project/environment used;
+- screenshot or short recording where useful;
+- relevant Trebell logs/event trace on failure;
+- exact expected vs actual behavior.
+
+---
+
+## 1. Fresh Windows installer
+
+- [ ] Uninstall an older Trebell build if present.
+- [ ] Run **Trebell-Code-Setup.exe**.
+- [ ] Choose a non-default install directory.
+- [ ] Confirm Start Menu shortcut.
+- [ ] Launch Trebell from the installed shortcut.
+- [ ] Open Settings → Agents & models.
+- [ ] Confirm bundled Codex shows its real readiness state.
+- [ ] Open a local Git repository.
+- [ ] Start a simple coding thread.
+- [ ] Close and reopen Trebell.
+- [ ] Confirm project/thread persistence.
+- [ ] Uninstall Trebell and confirm user repositories remain untouched.
+
+---
+
+## 2. API keys through Settings
+
+Goal: prove normal users never need a repository .env file.
+
+For every provider you can test:
+
+- [ ] Add the API key in Settings.
+- [ ] Save and restart Trebell.
+- [ ] Confirm provider remains usable.
+- [ ] Start a thread and send a basic prompt.
+- [ ] Send a prompt requiring a tool call.
+- [ ] Replace/remove the key and confirm the old credential is no longer used.
+
+Providers:
+
+- [ ] OpenAI API
+- [ ] Anthropic API
+- [ ] Google Gemini API
+- [ ] xAI API (a Grok model with a Thinking level from its list; a turn that needs several tool calls, so its encrypted reasoning goes back each call)
+- [ ] Meta Model API (Muse Spark 1.3 at Max and Muse Wonder; a long turn, to see whether its unstreamed request outlasts Meta's server-side time limit)
+- [ ] AgentRouter
+- [ ] JustWorker.icu
+- [ ] HCNSec.cn
+- [ ] VyceAi
+
+Live provider transport smoke on **2026-10-27** (npm run test:providers:live):
+
+- **JustWorker.icu + claude-opus-4-8:** Pass — real model response returned through the configured provider path.
+- **HCNSec.cn + glm-5.3:** Pass — real model response returned; observed latency was about 160 s, so short smoke timeouts can misclassify this provider as broken.
+- **VyceAi + deepseek-v4-flash:** Pass — real model response returned.
+- **AgentRouter + gpt-6-astra:** Blocked by upstream account state — HTTP 402 reported that the configured budget pool quota was exhausted.
+- This transport smoke does **not** replace the Settings persistence/remove-key checks above.
+
+Failure checks:
+
+- [ ] Invalid key produces an explicit error.
+- [ ] On a fresh profile with no key, Trebell Native shows that an API key is required and its **Configure** action opens **Settings → Agents & models** instead of starting a turn.
+- [ ] Provider refresh failure does not erase the last valid config.
+- [ ] No raw key appears in visible diagnostics/log output.
+
+Harnesses on their API key (each official harness but Cursor, which signs in only):
+
+- [ ] For Claude Code, Codex, Grok Build, OpenCode, Muse Code and Antigravity: set it to **API key** on its row, add its vendor's key there, and check that a chat runs on that key (the vendor's console shows the use on that key) and that the Model provider card lists the same key as saved.
+- [ ] Set it back to **Sign in** and check that the next chat runs on its own login, with no key: for Codex, `codex login status` in `<Trebell home>/codex-api-key-homes/<profile>` says it is not logged in.
+- [ ] Remove the key on the harness's row (or the Model provider card) and check that the row says the key is missing, no chat starts on it, and the Model provider card has no key for that provider either.
+- [ ] With Trebell Native active on Anthropic, remove the Anthropic key on Claude Code's row and check that the composer says Setup required at once, with no reload; save a key there again and check that Native's models come back and a chat runs.
+- [ ] Remove a Claude Code profile on its API key while one of its chats is open, then remove the Anthropic key: check that the chat's next message does not run on the removed key (the chat stopped with its profile).
+- [ ] In a WSL or SSH environment, check that a harness on its API key says it runs on an API key only on this machine.
+- [ ] OpenCode 1.x on **API key** with a provider also signed in with `opencode auth login`: check that only the saved keys' providers are listed and serve a chat (Trebell starts it with `OPENCODE_AUTH_CONTENT={}` in place of its stored logins), and that its own login serves again on **Sign in**. 1.x's `auth set` and `auth remove` write what `OPENCODE_AUTH_CONTENT` holds back into its `auth.json`: check that no credential is written while it is on **API key** (its `auth.json` is unchanged after a chat and a Git text), as that would replace the person's stored logins.
+- [ ] OpenCode 2.x on **API key** with a login made with `opencode auth login` for a provider whose key is also saved (Anthropic OAuth, say) and one for a provider with no key (GitHub Copilot, OpenCode Zen): check that its status and model list name only the saved keys' providers, that a chat runs on the saved key (the provider's console shows it), not on the login, that `<Trebell home>/opencode-api-key-homes/<profile>/opencode.db` is the database it runs on, and that on **Sign in** its logins serve again, a thread started on the key continuing in a new session with its earlier messages.
+- [ ] Muse Code on **API key** while `muse login` is also signed in: check that a chat runs on the Meta Model API key (Meta's console shows it), as Muse's docs do not say whether `META_API_KEY` or its login wins.
+- [ ] Grok Build on **API key** while `grok login` is also signed in: check that a chat and a commit message (Git text) both run on the xAI key.
+
+---
+
+## 3. Trebell Native with a real provider
+
+Use the provider-wide live smoke instead of keeping provider-specific one-off scripts:
+
+```bash
+npm run test:providers:live
+```
+
+For public harness quality/cost evidence, see **[../../BENCHMARKS.md](../../BENCHMARKS.md)**. Internal benchmark operations and the complete attempt ledger are intentionally kept out of the product-facing repository.
+
+The checklist below is still required for broader real-world confidence:
+
+- [ ] Select Trebell Native.
+- [ ] Select a real provider/model.
+- [ ] Ask it to inspect a medium/large repository.
+- [ ] Ask for a small code change.
+- [ ] Confirm file edits happen through Trebell tools.
+- [ ] Ask it to run tests.
+- [ ] Force one test failure and ask it to repair it.
+- [ ] Confirm repair continues in the same thread.
+- [ ] Start a long-running background process/server.
+- [ ] Continue chatting while it runs.
+- [ ] Stop/clean the process.
+- [ ] Restart Trebell and confirm no orphan process remains.
+
+Budget test:
+
+- [ ] Set a deliberately tiny turn/tool/time budget.
+- [ ] Trigger a task that exceeds it.
+- [ ] Confirm Trebell stops with a clear budget error.
+
+Efficiency observation to revisit manually on larger tasks:
+
+- [ ] Record model turns/tool calls/input-token usage for representative tasks and compare against Codex/Claude/OpenCode on the same task.
+- [ ] Repeat the benchmark across other providers/models and compare cache hits, latency and task success.
+- [ ] Exercise a real task that requires an advanced repository capability and confirm the model uses `trebell_repo/discover` then `trebell_repo/invoke` without changing the provider-visible manifest.
+- [ ] Exercise a real task that requires an MCP tool and confirm discovery/call remains cache-stable and uses the target tool's real policy.
+
+---
+
+## 4. Codex runtime
+
+- [ ] Select Codex.
+- [ ] Confirm runtime readiness is truthful.
+- [ ] Start a project thread.
+- [ ] Edit a file.
+- [ ] Run a terminal command.
+- [ ] Trigger an approval-requiring operation.
+- [ ] Exercise fork/rewind if exposed.
+- [ ] Open Harness Tools and inspect Skills/Plugins/Apps/config.
+- [ ] Switch Trebell-managed inference provider.
+- [ ] Confirm the existing thread remains present.
+
+---
+
+## 5. Claude Code
+
+- [ ] Install/authenticate Claude Code normally.
+- [ ] Select Claude Code in Trebell.
+- [ ] Confirm runtime/profile discovery.
+- [ ] Start a local project thread.
+- [ ] Make a file edit.
+- [ ] Run a command.
+- [ ] Change runtime profile where exposed.
+- [ ] Restart Trebell and resume.
+- [ ] Confirm Codex-only controls are not shown as usable.
+
+---
+
+## 6. OpenCode
+
+Live adapter smoke on **2026-10-27** (npm run test:external-harnesses:live):
+
+- Pass with OpenCode **1.18.32** and opencode/muse-spark-1.3-contributor-free.
+- Trebell opened a real OpenCode session, the model used coding tools to create a proof file, and Trebell independently verified the file contents.
+- The previously preferred Hugging Face route was also detected correctly but was blocked by depleted monthly inference credits; the smoke now prefers Muse Spark 1.3 so provider quota does not masquerade as an OpenCode harness failure.
+
+- [ ] Install/authenticate OpenCode.
+- [ ] Select OpenCode.
+- [ ] Start a project thread.
+- [ ] Inspect/edit/run commands.
+- [ ] Exercise Trebell delegation.
+- [ ] Confirm runtime capability matrix matches reality.
+- [ ] Restart and resume.
+
+---
+
+## 7. Cursor
+
+- [ ] Connect/install the supported Cursor runtime path.
+- [ ] Start a project thread.
+- [ ] Confirm file/terminal context reaches the runtime.
+- [ ] Confirm unsupported controls are hidden/disabled honestly.
+- [ ] Restart and resume if supported.
+
+---
+
+## 8. Grok Build
+
+Live adapter smoke on **2026-10-27**:
+
+- Pass with Grok CLI **1.0.41 (4220f3b224a6)** and grok-4.7.
+- Trebell opened a real ACP session, the model used coding tools to create a proof file, and Trebell independently verified the file contents.
+
+- [ ] Connect/install Grok Build.
+- [ ] Start a project thread.
+- [ ] Perform a small repository change.
+- [ ] Verify terminal/tool behavior.
+- [ ] Verify capability matrix.
+- [ ] Restart and resume if supported.
+
+---
+
+## 9. Antigravity
+
+Live adapter smoke on **2026-10-27**:
+
+- Pass with managed Antigravity ACP **1.2.1** and gemini-3.8-flash-high.
+- Trebell detected the installed runtime, opened a real authenticated ACP session, the model used coding tools to create a proof file, and Trebell independently verified the file contents.
+
+- [ ] Connect/install Antigravity.
+- [ ] Sign in with Antigravity's own sign-in from its row (it opens Google's page); then set it to API key with a Google Gemini key and check that a chat runs on the key.
+- [ ] Start a text-only coding task.
+- [ ] Perform a repository change.
+- [ ] Attempt to attach a video.
+- [ ] Confirm Trebell blocks video with a clear unsupported message.
+- [ ] Verify normal supported attachments.
+
+---
+
+## 10. WSL
+
+Test at least Ubuntu WSL2.
+
+- [ ] Trebell discovers the distro.
+- [ ] Create/select a WSL environment.
+- [ ] Open a Git project inside WSL.
+- [ ] Browse files.
+- [ ] Run terminal commands.
+- [ ] Check Git status/diff.
+- [ ] Create a worktree.
+- [ ] Run a coding task.
+- [ ] Run verification.
+- [ ] Restart and confirm environment/project persistence.
+
+Edge cases:
+
+- [ ] WSL distro stopped before Trebell starts.
+- [ ] Invalid WSL project path.
+- [ ] Git unavailable in the distro.
+
+---
+
+## 11. SSH
+
+Use a real Linux SSH host.
+
+- [ ] Add host/user/port/key settings.
+- [ ] Connect.
+- [ ] Open a remote Git repository.
+- [ ] Browse files.
+- [ ] Run terminal commands.
+- [ ] Check Git status/diff.
+- [ ] Create a delegated worktree.
+- [ ] Confirm it is created on the remote host.
+- [ ] Run verification remotely.
+- [ ] Disconnect network mid-command and confirm a real failure.
+- [ ] Reconnect and continue.
+- [ ] Restart and confirm environment persistence.
+
+---
+
+## 12. GitHub source control
+
+- [ ] Provider auto-detection.
+- [ ] Load pull-request state.
+- [ ] Create/open PR through supported controls.
+- [ ] Refresh review/check status.
+- [ ] Exercise configured merge method.
+- [ ] Break credentials and confirm explicit failure replaces stale success.
+
+---
+
+## 13. GitLab
+
+Test gitlab.com and, if available, self-hosted.
+
+- [ ] Auto-detection for gitlab.com.
+- [ ] Explicit provider selection for ambiguous self-hosted host.
+- [ ] Merge-request listing/state.
+- [ ] Create/open MR where supported.
+- [ ] Review/check status.
+- [ ] Merge where supported.
+- [ ] Authentication failure behavior.
+
+---
+
+## 14. Forgejo / Gitea
+
+- [ ] Add a self-hosted remote.
+- [ ] Confirm Trebell does not blindly guess an unknown host.
+- [ ] Select provider explicitly.
+- [ ] Load PR state.
+- [ ] Exercise supported PR operations.
+- [ ] Confirm unsupported operations are explicit.
+
+---
+
+## 15. Bitbucket
+
+- [ ] Configure provider.
+- [ ] Load PR information.
+- [ ] Exercise every operation marked supported.
+- [ ] Confirm unsupported operations are explicit.
+
+---
+
+## 16. Azure DevOps
+
+- [ ] Configure remote/project.
+- [ ] Load PR state.
+- [ ] Exercise supported operations.
+- [ ] Verify authentication-expiry behavior.
+- [ ] Verify unsupported operations remain visible.
+
+---
+
+## 17. Custom MCP servers
+
+Ideally test:
+
+1. local stdio MCP;
+2. authenticated HTTP MCP;
+3. MCP with resources/elicitation.
+
+Checklist:
+
+- [ ] Add server.
+- [ ] Confirm connection state.
+- [ ] Ask an unrelated task and confirm full schemas are not dumped into the turn.
+- [ ] Ask a relevant task and confirm matching tools expand.
+- [ ] Invoke a read-only tool.
+- [ ] Invoke a mutating/high-risk tool and verify policy/confirmation.
+- [ ] Return a known fake secret and verify redaction.
+- [ ] Restart Trebell and verify config persists.
+- [ ] Break the server and verify visible failure.
+
+---
+
+## 18. Browser verification
+
+- [ ] Start a localhost web app.
+- [ ] Ask agent to discover/open it.
+- [ ] Navigate.
+- [ ] Click/type.
+- [ ] Capture screenshot evidence.
+- [ ] Switch responsive viewport.
+- [ ] Verify a deliberately broken UI.
+- [ ] Repair it.
+- [ ] Re-run verification.
+- [ ] Confirm final verification record.
+
+---
+
+## 19. Windows desktop control
+
+- [ ] Confirm desktop control appears on Windows.
+- [ ] Capture desktop screenshot.
+- [ ] Exercise a harmless mouse/keyboard action.
+- [ ] Verify permission/full-access gating.
+- [ ] Verify lower permission mode rejects unsafe control.
+
+Use a disposable app/document for this test.
+
+---
+
+## 20. Checkpoints, rewind and recovery
+
+Use a disposable Git repo.
+
+- [ ] Make agent edit.
+- [ ] Confirm checkpoint.
+- [ ] Make another edit.
+- [ ] Rewind/recover.
+- [ ] Confirm repo matches selected checkpoint.
+- [ ] Force checkpoint creation failure.
+- [ ] Confirm Trebell warns and does not fabricate success.
+- [ ] Restart during/after a turn.
+- [ ] Confirm uncertain side effects are not blindly replayed.
+
+---
+
+## 21. Delegation/worktree isolation
+
+- [ ] Start parent task.
+- [ ] Delegate coding subtask with auto isolation.
+- [ ] Confirm separate worktree.
+- [ ] Confirm parent working tree remains isolated.
+- [ ] Exceed child-agent budget and confirm next delegation is blocked.
+- [ ] Give child zero child-agent allowance and confirm no grandchildren.
+- [ ] Force worktree setup failure and confirm cleanup.
+- [ ] Repeat on SSH.
+
+---
+
+## 22. Long conversation / large repository
+
+Use a genuinely large repository and long-lived thread.
+
+- [ ] 500+ loaded history entries.
+- [ ] Very long assistant streaming response.
+- [ ] Large command output.
+- [ ] Large diff.
+- [ ] Repeated source-control refresh.
+- [ ] Search older history.
+- [ ] Rapidly scroll a long conversation.
+
+Watch:
+
+- responsiveness;
+- RAM growth;
+- CPU while hidden;
+- row virtualization;
+- streaming smoothness;
+- hidden-panel polling.
+
+Record Task Manager metrics before and after 30+ minutes.
+
+---
+
+## 23. Background mode
+
+Windows:
+
+- [ ] Enable Background mode.
+- [ ] Close main window.
+- [ ] Confirm tray process remains.
+- [ ] Reopen from tray.
+- [ ] Restart/sign in to Windows.
+- [ ] Confirm startup behavior.
+- [ ] Disable and verify login startup removal.
+
+macOS/Linux:
+
+- [ ] Repeat equivalent tray/login behavior on real hardware.
+- [ ] Confirm wording remains platform-neutral.
+
+---
+
+## 24. In-app updater
+
+Requires two real published versions.
+
+- [ ] Install older release.
+- [ ] Publish newer release with latest.yml + blockmap.
+- [ ] Check for update.
+- [ ] Download update.
+- [ ] Install/restart.
+- [ ] Confirm new version.
+- [ ] Simulate network failure during check/download.
+- [ ] Confirm Trebell reports failure and remains usable.
+
+---
+
+## 25. macOS package
+
+On real Intel/Apple Silicon hardware as available:
+
+- [ ] Build DMG/ZIP.
+- [ ] Install/open.
+- [ ] Confirm native dependencies resolve.
+- [ ] Create project.
+- [ ] Start thread.
+- [ ] Terminal.
+- [ ] Git.
+- [ ] Browser verification.
+- [ ] Background mode.
+- [ ] Restart persistence.
+
+Record Gatekeeper/signing/notarization problems separately from Trebell bugs.
+
+---
+
+## 26. Linux package
+
+Test at least Ubuntu/Debian.
+
+- [ ] Build/install deb.
+- [ ] Run AppImage.
+- [ ] Open project.
+- [ ] Terminal.
+- [ ] Git.
+- [ ] Browser verification.
+- [ ] Background/tray behavior.
+- [ ] Restart persistence.
+
+If possible test AppImage on one non-Debian distro too.
+
+---
+
+## 27. Secrets and diagnostics
+
+Use fake disposable keys.
+
+- [ ] Enter fake provider secret.
+- [ ] Trigger provider error.
+- [ ] Trigger MCP output containing the same secret.
+- [ ] Trigger terminal output containing it.
+- [ ] Inspect visible logs.
+- [ ] Inspect exported replay/event bundle.
+- [ ] Search Trebell state files for the raw fake secret.
+
+Expected:
+
+- raw secret is redacted where policy applies;
+- provider secrets are separate from normal UI state.
+
+---
+
+## 28. Persistence and restart
+
+- [ ] Create multiple projects.
+- [ ] Create multiple threads.
+- [ ] Add project-scoped settings.
+- [ ] Add repository knowledge.
+- [ ] Create verification history.
+- [ ] Close normally.
+- [ ] Restart.
+- [ ] Hard-kill once and restart.
+- [ ] Confirm durable state survives appropriately.
+- [ ] Confirm SQLite remains authoritative.
+- [ ] Confirm JSONL event mirror stays bounded.
+- [ ] Confirm pruned old events do not resurrect.
+
+---
+
+## 30. Final acceptance story
+
+Before calling a release manually production-validated:
+
+1. [ ] Fresh install.
+2. [ ] Add API key in Settings.
+3. [ ] Open a real repository.
+4. [ ] Ask Trebell Native for a small frontend change.
+5. [ ] Run tests.
+6. [ ] Launch the app/site.
+7. [ ] Browser-verify the change.
+8. [ ] Delegate one follow-up in a worktree.
+9. [ ] Inspect diff.
+10. [ ] Create/open a PR.
+11. [ ] Close Trebell.
+12. [ ] Reopen and resume the same thread.
+13. [ ] Check for updates.
+14. [ ] Confirm no raw API key appears in diagnostics.
+
+If this story works on an installed build, Trebell has crossed the most important gap between **excellent automated coverage** and **real daily-driver validation**.

@@ -1,0 +1,40 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { nextSnoozeWakeAt } from "../ui/src/thread-snooze.js";
+import { localDateTimeValue, snoozeUntilFromDuration, timestampFromLocalDateTime } from "../ui/src/snooze-until.js";
+
+test("snooze duration supports minutes, hours and 24-hour days",()=>{
+  const now=1_700_000_000_000;
+  assert.equal(snoozeUntilFromDuration(30,"minutes",now),now+30*60_000);
+  assert.equal(snoozeUntilFromDuration(2,"hours",now),now+2*3_600_000);
+  assert.equal(snoozeUntilFromDuration(3,"days",now),now+3*24*3_600_000);
+  assert.equal(snoozeUntilFromDuration(0,"hours",now),null);
+  assert.equal(snoozeUntilFromDuration(1,"weeks",now),null);
+});
+
+test("local date-time values round-trip in the host timezone",()=>{
+  const source=new Date(2026,8,22,18,35,0,0).getTime();
+  const value=localDateTimeValue(source);
+  assert.equal(value,"2026-09-22T18:35");
+  assert.equal(timestampFromLocalDateTime(value),source);
+  assert.equal(timestampFromLocalDateTime(""),null);
+});
+
+test("next snooze wake schedules only the earliest real deadline",()=>{
+  const now=1_700_000_000_000;
+  const threads=[
+    {id:"active"},
+    {id:"later",section:{name:"Snoozed"}},
+    {id:"earlier",section:{name:"Snoozed"}},
+    {id:"invalid",section:{name:"Snoozed"}},
+  ];
+  const meta={
+    active:{snoozedUntil:now-1000},
+    later:{snoozedUntil:now+60_000},
+    earlier:{snoozedUntil:now+10_000},
+    invalid:{snoozedUntil:"not-a-date"},
+  };
+  assert.equal(nextSnoozeWakeAt(threads,meta,now),now+10_000);
+  assert.equal(nextSnoozeWakeAt([{id:"due",section:{name:"Snoozed"}}],{due:{snoozedUntil:now-1}},now),now);
+  assert.equal(nextSnoozeWakeAt([{id:"plain"}],{plain:{snoozedUntil:now+1000}},now),null);
+});

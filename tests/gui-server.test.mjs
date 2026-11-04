@@ -1,0 +1,1678 @@
+import nodeTest from "node:test";
+import assert from "node:assert/strict";
+import { chmod, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:http";
+import { connect } from "node:net";
+import { EventEmitter } from "node:events";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+import { WebSocket } from "ws";
+import { codexHistoryImportStatus, createGuiServer, offlineE2eFetch, requestAbortController } from "../src/gui-server.mjs";
+import { AgentRuntimeManager } from "../src/agent-runtime-manager.mjs";
+import { remoteCodexHomeSetup } from "../src/environment-app-server.mjs";
+import { EnvironmentManager } from "../src/environment-manager.mjs";
+import { ProviderManager } from "../src/provider-manager.mjs";
+import { git } from "../src/git-service.mjs";
+import { TerminalManager } from "../src/terminal-manager.mjs";
+import { TrebellStateStore } from "../src/trebell-state.mjs";
+
+const packageVersion=JSON.parse(await readFile(new URL("../package.json",import.meta.url),"utf8")).version;
+// The Muse Code installed where the tests run never starts here: each harness listing would run its `muse --version` and a 400 MB
+// read-only `muse serve` in the everyday home of the person running them. While each test of this file runs, a Muse Code profile
+// answers as not installed (tests/muse-runtime.test.mjs drives a stand-in Muse Code through the same paths), and the probe is put
+// back as the test ends: `npm run test:fast` runs every file's tests in this one process.
+const probeHarness=AgentRuntimeManager.prototype.probe;
+async function probeWithoutMuse(instanceOrKind,options){
+  const kind=String((typeof instanceOrKind==="string"?instanceOrKind:instanceOrKind?.kind)||"").trim().toLowerCase();
+  if(kind!=="muse")return probeHarness.call(this,instanceOrKind,options);
+  return {id:typeof instanceOrKind==="string"?"muse-default":instanceOrKind.id,kind:"muse",name:"Muse Code",protocol:"msp",managed:false,binary:null,available:false,installed:false,authenticated:null,account:null,version:null,message:"Muse Code (muse) was not found."};
+}
+function test(name,options,fn){
+  if(typeof options==="function")[fn,options]=[options,{}];
+  return nodeTest(name,options,async(...args)=>{
+    AgentRuntimeManager.prototype.probe=probeWithoutMuse;
+    try{return await fn(...args)}finally{AgentRuntimeManager.prototype.probe=probeHarness}
+  });
+}
+nodeTest("outside this file's own tests the harness probe is Trebell's own, Muse Code's included",async()=>{
+  assert.equal(AgentRuntimeManager.prototype.probe,probeHarness);
+});
+test("while a test of this file runs, a Muse Code profile answers as not installed and nothing is started",async()=>{
+  const answer=await new AgentRuntimeManager({env:{},runFn:async()=>{throw new Error("a probe of Muse Code ran a command")}}).probe("muse");
+  assert.deepEqual([answer.installed,answer.available,answer.message],[false,false,"Muse Code (muse) was not found."]);
+});
+async function freePort(){const server=createServer();await new Promise((resolve,reject)=>server.listen(0,"127.0.0.1",resolve).once("error",reject));const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port}
+// Waits for a condition that a host benchmarks load can take seconds to reach (a Codex app-server process starting and recording its
+// start), checking it every 50 ms, for a generous bound that still ends a wait for one that never comes.
+const UNDER_LOAD_MS=60_000;
+async function until(condition,what,timeoutMs=UNDER_LOAD_MS){
+  for(const deadline=Date.now()+timeoutMs;!await condition();){
+    if(Date.now()>deadline)throw new Error("Timed out waiting until "+what);
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+}
+
+test("request cancellation follows client disconnects but ignores a completed response",()=>{
+  const request=new EventEmitter(),response=new EventEmitter();response.writableEnded=false;
+  const cancelled=requestAbortController(request,response);request.emit("aborted");
+  assert.equal(cancelled.signal.aborted,true);assert.equal(cancelled.signal.reason?.name,"AbortError");cancelled.dispose();
+
+  const completedRequest=new EventEmitter(),completedResponse=new EventEmitter();completedResponse.writableEnded=true;
+  const completed=requestAbortController(completedRequest,completedResponse);completedResponse.emit("close");
+  assert.equal(completed.signal.aborted,false);completed.dispose();
+});
+
+test("Codex history import availability names the harness, environment or missing local app-server that blocks it",()=>{
+  const local={targetUrl:"ws://127.0.0.1:4500",environment:null};
+  assert.deepEqual(codexHistoryImportStatus({runtime:"codex",activeEnvironmentId:null,appServer:local}),{available:true,reason:null,message:null});
+  const harness=codexHistoryImportStatus({runtime:"native",appServer:local}),environment=codexHistoryImportStatus({runtime:"codex",activeEnvironmentId:"ssh-test",appServer:local});
+  assert.equal(harness.available,false);assert.equal(harness.reason,"harness");assert.equal(environment.available,false);assert.equal(environment.reason,"environment");
+  for(const status of [harness,environment])assert.equal(status.message,"Codex imports need the Codex harness on Local machine.");
+  // Codex on Local machine is already chosen here, so the message names the missing app-server instead of that choice.
+  for(const appServer of [{targetUrl:null,environment:null},{targetUrl:"ws://127.0.0.1:4500",environment:{id:"ssh-test",type:"ssh"}},null]){
+    const status=codexHistoryImportStatus({runtime:"codex",activeEnvironmentId:null,appServer});
+    assert.equal(status.available,false);assert.equal(status.reason,"app-server");assert.match(status.message,/local Codex app-server/);assert.doesNotMatch(status.message,/harness|Local machine/);
+  }
+});
+
+test("offline browser E2E fetch allows loopback only",async()=>{
+  const requested=[];
+  const guarded=offlineE2eFetch(async(input)=>{
+    requested.push(input instanceof URL?input.href:String(input?.url||input));
+    return new Response("ok",{status:200});
+  });
+  for(const url of ["http://127.0.0.1:3210/health","http://localhost:23333/state","http://[::1]:8080/"]){
+    const response=await guarded(url);
+    assert.equal(response.status,200);
+  }
+  await assert.rejects(()=>guarded("https://api.openai.com/v1/models"),/blocked external network request/);
+  await assert.rejects(()=>guarded("https://api.github.com/repos/tanishqbaweja/trebellcode"),/blocked external network request/);
+  await assert.rejects(()=>guarded("https://example.com/"),/blocked external network request/);
+  assert.equal(requested.length,3);
+});
+
+test("offline browser E2E refuses to start a real provider or Codex app-server",async()=>{
+  await assert.rejects(
+    ()=>createGuiServer({mock:false,env:{...process.env,TREBELL_E2E_OFFLINE:"1"}}),
+    /Offline browser E2E forbids starting a real Trebell provider or Codex app-server/,
+  );
+  const previous=process.env.TREBELL_E2E_OFFLINE;
+  process.env.TREBELL_E2E_OFFLINE="1";
+  try{
+    await assert.rejects(
+      ()=>createGuiServer({mock:false,env:{TREBELL_HOME:process.env.TREBELL_HOME||""}}),
+      /Offline browser E2E forbids starting a real Trebell provider or Codex app-server/,
+    );
+  }finally{
+    if(previous==null)delete process.env.TREBELL_E2E_OFFLINE;
+    else process.env.TREBELL_E2E_OFFLINE=previous;
+  }
+});
+
+test("runtime install endpoint bundles refresh state only for the active harness",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-install-refresh-test-"));
+  const originalInstall=AgentRuntimeManager.prototype.install;
+  const originalProbe=AgentRuntimeManager.prototype.probe;
+  const installs=[];
+  AgentRuntimeManager.prototype.install=async function(runtime,{environmentId=undefined}={}){
+    installs.push({runtime,environmentId:environmentId??null});
+    return {ok:true,runtime,status:{id:`${runtime}-default`,kind:runtime,name:runtime,available:true,installed:true,authenticated:true,version:"fixture"}};
+  };
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"
+      ?this.instances().find(item=>item.id===instanceOrKind||item.kind===instanceOrKind)
+      :instanceOrKind;
+    const kind=instance?.kind||String(instanceOrKind||"codex");
+    return {id:instance?.id||`${kind}-default`,kind,name:kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    const inactive=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"install",runtime:"claude",environmentId:null})}).then(r=>r.json());
+    assert.equal(inactive.selectedRuntime,"codex");
+    assert.equal(Object.prototype.hasOwnProperty.call(inactive,"bootstrap"),false);
+    assert.equal(Object.prototype.hasOwnProperty.call(inactive,"catalog"),false);
+
+    const selected=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"claude",instanceId:"claude-default"})}).then(r=>r.json());
+    assert.equal(selected.selectedRuntime,"claude");
+    assert.ok(selected.bootstrap);
+    assert.ok(selected.catalog);
+
+    const active=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"install",runtime:"claude",environmentId:null})}).then(r=>r.json());
+    assert.equal(active.selectedRuntime,"claude");
+    assert.equal(active.installed.runtime,"claude");
+    assert.ok(active.bootstrap);
+    assert.ok(active.catalog);
+    assert.deepEqual(installs,[{runtime:"claude",environmentId:null},{runtime:"claude",environmentId:null}]);
+  }finally{
+    if(gui)await gui.close();
+    AgentRuntimeManager.prototype.install=originalInstall;
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+// A window that did not start an install (another tab, or one reloaded while it ran) reads it in the harness list and waits for its
+// answer (install-wait), which is the install's own once it ends; a press refused as it runs names it (code, installId).
+test("runtime install endpoint names the installs on their way, answers a wait with the install's answer, and names the one a refusal waits on",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-install-wait-test-"));
+  const original={install:AgentRuntimeManager.prototype.install,probe:AgentRuntimeManager.prototype.probe,installs:AgentRuntimeManager.prototype.installs,waitForInstall:AgentRuntimeManager.prototype.waitForInstall};
+  let finish=null,fail=null,running=null;const asked=[];
+  AgentRuntimeManager.prototype.install=async function(runtime,{id=null}={}){
+    asked.push({runtime,id});
+    if(running){const error=new Error("OpenCode is already being installed or updated. Wait for it to finish first.");error.code="install-running";error.installId=running.id;throw error}
+    running={runtime,id,done:new Promise((resolve,reject)=>{finish=resolve;fail=reject})};
+    try{return await running.done}finally{running=null}
+  };
+  AgentRuntimeManager.prototype.installs=function(){return {running:running?[{runtime:running.runtime,id:running.id,startedAt:1}]:[],ended:[]}};
+  AgentRuntimeManager.prototype.waitForInstall=function(runtime){return running?.runtime===runtime?running.done:null};
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.id===instanceOrKind||item.kind===instanceOrKind):instanceOrKind;
+    const kind=instance?.kind||String(instanceOrKind||"codex");
+    return {id:instance?.id||`${kind}-default`,kind,name:kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const post=body=>fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(async response=>({status:response.status,body:await response.json()}));
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    assert.deepEqual((await post({action:"install-wait",runtime:"opencode"})).body.waited,false,"none to wait for");
+    const pressed=post({action:"install",runtime:"opencode",environmentId:null,id:"window-one"});
+    while(!running)await new Promise(resolve=>setTimeout(resolve,10));
+    assert.deepEqual(asked,[{runtime:"opencode",id:"window-one"}],"the install takes the id its window gave");
+    assert.deepEqual((await fetch(gui.url+"/api/agent-runtimes").then(r=>r.json())).installs.running,[{runtime:"opencode",id:"window-one",startedAt:1}]);
+    const refused=await post({action:"install",runtime:"opencode",environmentId:null,id:"window-two"});
+    assert.equal(refused.status,400);assert.equal(refused.body.code,"install-running");assert.equal(refused.body.installId,"window-one");
+    const waited=post({action:"install-wait",runtime:"opencode"});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    finish({ok:true,runtime:"opencode",status:{id:"opencode-default",kind:"opencode",name:"opencode",available:true,installed:true,authenticated:true,version:"fixture"}});
+    const [own,other]=await Promise.all([pressed,waited]);
+    assert.equal(own.status,200);assert.equal(other.status,200);
+    assert.deepEqual(other.body.installed,own.body.installed,"the wait answers with the install's own answer");
+    assert.equal(other.body.selectedRuntime,own.body.selectedRuntime);
+    // A failed install's wait says why.
+    const second=post({action:"install",runtime:"opencode",environmentId:null,id:"window-three"});
+    while(!running)await new Promise(resolve=>setTimeout(resolve,10));
+    const failedWait=post({action:"install-wait",runtime:"opencode"});
+    await new Promise(resolve=>setTimeout(resolve,100));
+    fail(new Error("npm ERR! code E404"));
+    const [secondAnswer,failedAnswer]=await Promise.all([second,failedWait]);
+    assert.equal(secondAnswer.status,400);assert.deepEqual(failedAnswer,{status:400,body:{error:"npm ERR! code E404"}});
+  }finally{
+    if(gui)await gui.close();
+    Object.assign(AgentRuntimeManager.prototype,original);
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+test("the runtime status poll probes only the active harness",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-runtime-poll-probe-test-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"claude",agentRuntimeInstanceId:"claude-default",onboardingComplete:true}}));
+  const originalProbe=AgentRuntimeManager.prototype.probe;
+  const probes=[];
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.id===instanceOrKind||item.kind===instanceOrKind):instanceOrKind;
+    probes.push(instance?.id||String(instanceOrKind));
+    return {id:instance?.id,kind:instance?.kind,name:instance?.kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    probes.length=0;
+    const runtime=await fetch(gui.url+"/api/runtime").then(r=>r.json());
+    assert.equal(runtime.agentRuntime,"claude");assert.equal(runtime.agentRuntimeInstanceId,"claude-default");
+    assert.equal(runtime.agentRuntimeStatus?.id,"claude-default");assert.equal(runtime.agentRuntimeStatus?.available,true);
+    assert.deepEqual(probes,["claude-default"],"a status poll must not start every installed harness CLI");
+  }finally{
+    if(gui)await gui.close();
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:100});
+  }
+});
+
+test("saving a Native provider key does not refetch the live model catalog during the immediate UI refresh",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-provider-refresh-"));
+  const env={...process.env,TREBELL_HOME:home,OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const state=new TrebellStateStore(env);
+  state.updateSettings({agentRuntime:"native",agentRuntimeInstanceId:"native-default",modelProvider:"openai",onboardingComplete:true});
+  state.close?.();
+  let modelFetches=0;
+  const fetchFn=async input=>{
+    const url=String(input instanceof URL?input.href:input?.url||input);
+    if(url.endsWith("/models")){
+      modelFetches++;
+      return new Response(JSON.stringify({data:[{id:"gpt-provider-fixture",created:1}]}),{status:200,headers:{"content-type":"application/json"}});
+    }
+    throw new Error("Unexpected external request: "+url);
+  };
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env,fetchFn});
+  try{
+    const saved=await fetch(gui.url+"/api/providers",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({provider:"openai",apiKey:"sk-provider-fixture"})}).then(r=>r.json());
+    assert.equal(saved.ready,true);assert.deepEqual(saved.models,["gpt-provider-fixture"]);assert.equal(saved.defaultModel,"gpt-provider-fixture");
+    assert.equal(modelFetches,1);
+    const catalog=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(catalog.provider,"openai");assert.deepEqual(catalog.models,["gpt-provider-fixture"]);assert.equal(catalog.defaultModel,"gpt-provider-fixture");
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+test("a refused provider key reads as the provider's message and stays readable from the provider status",async()=>{
+  // Live: VyceAi answered a typed key with HTTP 402 and Settings showed the raw JSON body; leaving Settings lost the reason.
+  const home=await mkdtemp(join(tmpdir(),"trebell-provider-key-check-"));
+  const env={...process.env,TREBELL_HOME:home,VYCEAI_API_KEY:"",VYCE_API_KEY:""};
+  const state=new TrebellStateStore(env);
+  state.updateSettings({agentRuntime:"native",agentRuntimeInstanceId:"native-default",modelProvider:"vyceai",onboardingComplete:true});
+  state.close?.();
+  const refusal=JSON.stringify({error:{message:"Insufficient balance. Please top up your account.",type:"insufficient_quota",param:null,code:"insufficient_balance"},request_id:"req_fixture_402"});
+  const fetchFn=async input=>{
+    const url=String(input instanceof URL?input.href:input?.url||input);
+    if(url.endsWith("/models"))return new Response(refusal,{status:402,headers:{"content-type":"application/json"}});
+    throw new Error("Unexpected external request: "+url);
+  };
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env,fetchFn});
+  try{
+    const typed="vy-typed-key-fixture-1234567890";
+    const response=await fetch(gui.url+"/api/providers",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({provider:"vyceai",apiKey:typed})});
+    assert.equal(response.status,400);
+    assert.equal((await response.json()).error,"VyceAi API key check failed: HTTP 402: Insufficient balance. Please top up your account. The key was not saved.");
+    const providers=await fetch(gui.url+"/api/providers").then(r=>r.json());
+    assert.equal(providers.status.hasKey,false);
+    assert.equal(providers.status.keyCheck?.status,402);
+    assert.equal(providers.status.keyCheck?.message,"HTTP 402: Insufficient balance. Please top up your account. The key was not saved.");
+    assert.deepEqual(providers.providers.find(item=>item.id==="vyceai").keyCheck,providers.status.keyCheck);
+    assert.doesNotMatch(JSON.stringify(providers),/vy-typed-key|request_id|insufficient_quota|\{"error/);
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:20,retryDelay:250});
+  }
+});
+
+test("direct chat never sends another harness's prompt to the Native provider",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-direct-chat-harness-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"claude",agentRuntimeInstanceId:"claude-default",modelProvider:"openai",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"sk-direct-chat-fixture",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const requests=[];
+  const fetchFn=async input=>{requests.push(String(input instanceof URL?input.href:input?.url||input));throw new Error("No model provider request is expected")};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env,fetchFn});
+  try{
+    const response=await fetch(gui.url+"/api/chat/direct",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt:"A prompt meant for Claude Code",model:"sonnet"})});
+    assert.equal(response.status,409);
+    assert.equal((await response.json()).error,"Direct chat is only available when Trebell Native is the active harness.");
+    assert.deepEqual(requests,[],"the prompt never reaches a model provider");
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("Git commit and review text use the active harness and never the Native provider",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-harness-git-text-"));
+  const repo=join(home,"repo");await mkdir(repo,{recursive:true});
+  await git(repo,["init"]);await git(repo,["config","user.email","git-text@example.test"]);await git(repo,["config","user.name","Git Text"]);
+  await writeFile(join(repo,"notes.txt"),"before\n");await git(repo,["add","notes.txt"]);await git(repo,["commit","-m","Initial notes"]);
+  await writeFile(join(repo,"notes.txt"),"after: harness-diff-marker\n");
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"claude",agentRuntimeInstanceId:"claude-default",modelProvider:"openai",onboardingComplete:true}}));
+  // The boot-time Codex app-server gets its own empty home, so the test never touches the user's Codex state.
+  await mkdir(join(home,"codex"),{recursive:true});
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:join(home,"codex"),TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"sk-git-text-fixture",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const providerRequests=[],directChats=[],harnessCalls=[];
+  const fetchFn=async input=>{providerRequests.push(String(input instanceof URL?input.href:input?.url||input));throw new Error("No model provider request is expected")};
+  const originalDirectChat=ProviderManager.prototype.directChat;
+  ProviderManager.prototype.directChat=async function(providerId,{model,prompt}){directChats.push({providerId,model,prompt});return {text:"chore: native provider subject",model,provider:providerId}};
+  let failNext=null;
+  const harnessTextGenerator=async options=>{
+    harnessCalls.push(options);
+    if(failNext){const error=failNext;failNext=null;throw error}
+    return {text:/pull request/.test(options.prompt)?"```json\n{\"title\":\"Harness review\",\"body\":\"Written by the harness.\"}\n```":"\n\"feat: harness subject\"\n",model:"sonnet",runtime:options.instance.kind,name:"Claude Code"};
+  };
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env,fetchFn,harnessTextGenerator});
+  const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  try{
+    const commitResponse=await post("/api/git/commit-message",{cwd:repo,environmentId:null,model:"sonnet"});
+    assert.equal(commitResponse.status,200);
+    assert.deepEqual(await commitResponse.json(),{message:"feat: harness subject",style:"repository",model:"sonnet",runtime:"claude",generatedWith:"Claude Code"});
+    const commitCall=harnessCalls[0];
+    assert.equal(commitCall.instance.id,"claude-default");assert.equal(commitCall.instance.kind,"claude");assert.equal(commitCall.cwd,repo);assert.equal(commitCall.environmentId,null);
+    assert.ok(commitCall.timeoutMs>0&&commitCall.timeoutMs<=90_000,"the harness request is bounded by 90 seconds");
+    assert.deepEqual(commitCall.models,["sonnet"]);assert.equal(typeof commitCall.codexAppServer,"function");assert.ok(commitCall.signal);
+    assert.match(commitCall.prompt,/Write one Git commit subject/);assert.match(commitCall.prompt,/harness-diff-marker/);
+    const reviewResponse=await post("/api/git/review-text",{cwd:repo,environmentId:null,model:"sonnet"});
+    assert.equal(reviewResponse.status,200);
+    assert.deepEqual(await reviewResponse.json(),{title:"Harness review",body:"Written by the harness.",style:"repository",model:"sonnet",runtime:"claude",generatedWith:"Claude Code"});
+    assert.match(harnessCalls[1].prompt,/Generate a pull request title and description/);
+    failNext=Object.assign(new Error("Claude Code did not return the Git text within 90 seconds. Try again, or choose a faster Claude Code model."),{code:"HARNESS_TEXT_TIMEOUT"});
+    const timedOut=await post("/api/git/commit-message",{cwd:home,environmentId:null,model:"sonnet"});
+    assert.equal(timedOut.status,504);assert.match((await timedOut.json()).error,/did not return the Git text within 90 seconds/);
+    failNext=new Error("Claude Code is installed but not authenticated");
+    const unavailable=await post("/api/git/review-text",{cwd:home,environmentId:null});
+    assert.equal(unavailable.status,400);assert.equal((await unavailable.json()).error,"Claude Code is installed but not authenticated");
+    assert.equal(harnessCalls.length,4);
+    assert.deepEqual(directChats,[],"a non-Native harness never sends Git text to the Native provider, even when it fails");
+    assert.deepEqual(providerRequests,[]);
+
+    const native=await post("/api/settings",{agentRuntime:"native",agentRuntimeInstanceId:"native-default"});
+    assert.equal(native.status,200);
+    const nativeCommit=await post("/api/git/commit-message",{cwd:repo,environmentId:null,model:"gpt-native-fixture"}).then(r=>r.json());
+    assert.deepEqual(nativeCommit,{message:"chore: native provider subject",style:"repository",model:"gpt-native-fixture",runtime:"native",generatedWith:"OpenAI API"});
+    assert.equal(directChats.length,1);assert.equal(directChats[0].providerId,"openai");assert.match(directChats[0].prompt,/harness-diff-marker/);
+    assert.equal(harnessCalls.length,4,"Trebell Native keeps the provider path");
+    // With no model chosen in the composer and no Git text model set (a provider that names no default), Native says what to do,
+    // and nothing reaches the provider, which would only say "Provider turn requires a model.".
+    for(const path of ["/api/git/commit-message","/api/git/review-text"]){
+      const noModel=await post(path,{cwd:repo,environmentId:null,model:""});
+      assert.equal(noModel.status,400);assert.equal((await noModel.json()).error,"Choose a model in the composer first, or set a Git text model in Settings.");
+    }
+    assert.equal(directChats.length,1,"no Git text request goes to the provider without a model");
+  }finally{
+    ProviderManager.prototype.directChat=originalDirectChat;
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A stand-in for `codex app-server --listen ws://127.0.0.1:PORT`: it answers the readiness probe and records each start.
+const FAKE_CODEX_APP_SERVER=String.raw`
+import { createServer } from "node:http";
+import { appendFileSync } from "node:fs";
+const [record,...args]=process.argv.slice(2);const listen=args[args.indexOf("--listen")+1]||"";
+if(args[0]!=="app-server"||!listen){process.stdout.write("codex-cli 0.155.1-fixture\n");process.exit(0)}
+const port=Number(new URL(listen).port);
+const server=createServer((req,res)=>{res.writeHead(req.url==="/readyz"||req.url==="/healthz"?200:404);res.end("ok")});
+server.on("upgrade",(_req,socket)=>socket.destroy());
+server.listen(port,"127.0.0.1",()=>appendFileSync(record,JSON.stringify({port,pid:process.pid})+"\n"));
+`;
+
+test("a profile or environment restart leaves an in-flight Codex Git text app-server running",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-git-text-restart-"));
+  const repo=join(home,"repo");await mkdir(repo,{recursive:true});
+  await git(repo,["init"]);await git(repo,["config","user.email","git-text@example.test"]);await git(repo,["config","user.name","Git Text"]);
+  await writeFile(join(repo,"notes.txt"),"before\n");await git(repo,["add","notes.txt"]);await git(repo,["commit","-m","Initial notes"]);
+  await writeFile(join(repo,"notes.txt"),"after\n");
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"codex",agentRuntimeInstanceId:"codex-default",onboardingComplete:true}}));
+  await mkdir(join(home,"codex"),{recursive:true});
+  const fixture=join(home,"fake-codex.mjs"),record=join(home,"codex-starts.jsonl"),launcher=join(home,process.platform==="win32"?"codex.cmd":"codex");
+  await writeFile(fixture,FAKE_CODEX_APP_SERVER,"utf8");
+  if(process.platform==="win32")await writeFile(launcher,["@echo off",`"${process.execPath}" "${fixture}" "${record}" %*`,""].join("\r\n"),"utf8");
+  else{await writeFile(launcher,`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "${record}" "$@"\n`,"utf8");await chmod(launcher,0o755)}
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:join(home,"codex"),TREBELL_CODEX_BIN:launcher,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const originalProbe=AgentRuntimeManager.prototype.probe;
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.kind===instanceOrKind):instanceOrKind;
+    return {id:instance?.id,kind:instance?.kind,name:instance?.kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  const readyz=url=>fetch(String(url).replace(/^ws:/,"http:")+"/readyz",{signal:AbortSignal.timeout(2000)}).then(response=>response.ok,()=>false);
+  let serverReady=null,proceed=null,aliveAfterRestart=null;
+  const dedicated=new Promise(resolve=>{serverReady=resolve}),restarted=new Promise(resolve=>{proceed=resolve});
+  const harnessTextGenerator=async options=>{
+    const server=await options.codexAppServer();serverReady(server);await restarted;
+    aliveAfterRestart=await readyz(server.url);await server.release();
+    return {text:"fix: keep Git text through restarts",model:null,runtime:"codex",name:"Codex"};
+  };
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:false,env,harnessTextGenerator});
+    const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    const pending=post("/api/git/commit-message",{cwd:repo,environmentId:null});
+    const server=await dedicated;
+    assert.equal(await readyz(server.url),true);
+    // Activating an environment restarts every pooled Codex app-server except the one an in-flight Git text request is using.
+    const activated=await post("/api/environment/activate",{id:null});assert.equal(activated.status,200);
+    const starts=(await readFile(record,"utf8")).trim().split(/\r?\n/).map(line=>JSON.parse(line));
+    assert.equal(starts.length,3,"boot catalog, Git text and restarted catalog app-servers");
+    proceed();
+    const response=await pending;assert.equal(response.status,200);
+    assert.equal((await response.json()).message,"fix: keep Git text through restarts");
+    assert.equal(aliveAfterRestart,true,"the dedicated Git text app-server outlived the restart");
+    assert.equal(await readyz(server.url),false,"the request stops its own app-server afterwards");
+  }finally{
+    proceed?.();AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// Use for agent on a host that answers but where the harness cannot run (here Codex over SSH cannot be reached) fails with an error
+// status and changes nothing: Local machine stays the agent environment, on the server and after a restart, and its Codex
+// app-server runs again.
+test("an environment its runtime cannot run in is not made active, and the one that was active runs again",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-activate-rollback-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"codex",agentRuntimeInstanceId:"codex-default",onboardingComplete:true}}));
+  await mkdir(join(home,"codex"),{recursive:true});
+  const fixture=join(home,"fake-codex.mjs"),record=join(home,"codex-starts.jsonl"),launcher=join(home,process.platform==="win32"?"codex.cmd":"codex");
+  await writeFile(fixture,FAKE_CODEX_APP_SERVER,"utf8");
+  if(process.platform==="win32")await writeFile(launcher,["@echo off",`"${process.execPath}" "${fixture}" "${record}" %*`,""].join("\r\n"),"utf8");
+  else{await writeFile(launcher,`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "${record}" "$@"\n`,"utf8");await chmod(launcher,0o755)}
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:join(home,"codex"),TREBELL_CODEX_BIN:launcher,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  // Nothing listens on the dead host's port; the probe answers as Codex over SSH does there.
+  const deadPort=await freePort(),refused=`ssh: connect to host 127.0.0.1 port ${deadPort}: Connection refused`;
+  const originalProbe=AgentRuntimeManager.prototype.probe,originalEnvironmentProbe=EnvironmentManager.prototype.probe;
+  EnvironmentManager.prototype.probe=async function(id){return {exitCode:0,stdout:"trebell-environment-ok",stderr:"",timedOut:false,ok:true,profile:{id}}};
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind,{environmentId}={}){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.kind===instanceOrKind):instanceOrKind,dead=environmentId==="dead-host";
+    return {id:instance?.id,kind:instance?.kind,name:"Codex",available:!dead,installed:!dead,authenticated:!dead,protocol:"codex",version:dead?null:"fixture",message:dead?refused:"Ready"};
+  };
+  const localStarts=async()=>(await readFile(record,"utf8").catch(()=>"")).trim().split(/\r?\n/).filter(Boolean).length;
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:false,env});
+    const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    // The local Codex app-server starts at boot without the server waiting for it, which takes seconds on a loaded host: the switch
+    // is made once it runs, as a person makes it, rather than stopping it before it has started.
+    await until(async()=>await localStarts()>=1,"the local Codex app-server has started at boot");
+    assert.equal((await post("/api/environments",{id:"dead-host",type:"ssh",name:"Dead host",host:"127.0.0.1",port:deadPort})).status,200);
+    const activated=await post("/api/environment/activate",{id:"dead-host"}),answer=await activated.json();
+    assert.equal(activated.status,503,"a failed switch answers with an error status");
+    assert.ok(answer.error,"and says why");
+    const environments=await fetch(gui.url+"/api/environments").then(r=>r.json());
+    assert.equal(environments.activeEnvironmentId,null);assert.equal(environments.activeEnvironment,null);
+    await until(async()=>await localStarts()>=2,"the local Codex app-server has started again");
+    assert.equal(await localStarts(),2,"the local Codex app-server started at boot and again after the failed switch");
+    await until(async()=>(await fetch(gui.url+"/api/bootstrap").then(r=>r.json())).appServerReady===true,"the local Codex app-server is ready again");
+    await gui.close();gui=null;
+    assert.equal(new TrebellStateStore(env).settings().activeEnvironmentId??null,null,"the next start uses Local machine too");
+  }finally{
+    AgentRuntimeManager.prototype.probe=originalProbe;EnvironmentManager.prototype.probe=originalEnvironmentProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A host where nothing answers is refused before anything stops, whatever the harness: Trebell Native checks nothing on the host
+// when it starts, so the environment's own reachability check (its Test button) is what keeps the dead host from becoming active.
+test("a host that does not answer is never made the agent environment, with Trebell Native too",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-activate-unreachable-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"native",agentRuntimeInstanceId:"native-default",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const [port,appPort,deadPort]=await Promise.all([freePort(),freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    assert.equal((await post("/api/environments",{id:"dead-host",type:"ssh",name:"Dead host",host:"127.0.0.1",port:deadPort})).status,200);
+    const activated=await post("/api/environment/activate",{id:"dead-host"}),answer=await activated.json();
+    assert.equal(activated.status,503);
+    assert.ok(answer.error);
+    // Whichever OpenSSH client is first on PATH (Windows' own words a refusal "banner exchange: Connection to UNKNOWN port -1: ..."),
+    // the refusal is said one way, with the host and port.
+    if(/refused/i.test(answer.error))assert.equal(answer.error,`ssh could not connect to 127.0.0.1 port ${deadPort}: Connection refused.`);
+    assert.equal((await fetch(gui.url+"/api/environments").then(r=>r.json())).activeEnvironmentId,null);
+  }finally{
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// The build box was used for agents while it answered (Codex is installed only there), then it went down. Use for agent on Local
+// machine gets the person off it: Local is kept although its Codex is not ready, and the host that no longer answers is not made
+// the agent environment again.
+test("leaving a host that stopped answering for Local machine is kept, with Local's harness not ready",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-activate-leave-dead-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"codex",agentRuntimeInstanceId:"codex-default",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  let hostUp=true;const refused="ssh: connect to host 127.0.0.1 port 9: Connection refused";
+  const originalProbe=AgentRuntimeManager.prototype.probe,originalEnvironmentProbe=EnvironmentManager.prototype.probe;
+  EnvironmentManager.prototype.probe=async function(id){return hostUp?{exitCode:0,stdout:"trebell-environment-ok",stderr:"",timedOut:false,ok:true,profile:{id}}:{exitCode:255,stdout:"",stderr:refused,timedOut:false,ok:false,profile:{id}}};
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind,{environmentId}={}){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.kind===instanceOrKind):instanceOrKind,available=environmentId==="build-box"&&hostUp;
+    return {id:instance?.id,kind:instance?.kind,name:"Codex",available,installed:available,authenticated:available,protocol:"codex",version:available?"fixture":null,message:available?"Ready":environmentId==="build-box"?refused:"Codex is not installed on this machine"};
+  };
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+    const active=async()=>(await fetch(gui.url+"/api/environments").then(r=>r.json())).activeEnvironmentId;
+    assert.equal((await post("/api/environments",{id:"build-box",type:"ssh",name:"Build box",host:"127.0.0.1",port:9})).status,200);
+    const used=await post("/api/environment/activate",{id:"build-box"});
+    assert.equal(used.status,200,"the build box answered and became the agent environment");
+    // A switch that answers 200 has gone through and carries no error: every failure answers with an error status, which the
+    // client's api() throws, so the client never has an error to read from a successful answer.
+    assert.equal(Object.hasOwn(await used.json(),"error"),false);
+    assert.equal(await active(),"build-box");
+    hostUp=false;
+    const back=await post("/api/environment/activate",{id:null}),answer=await back.json();
+    assert.equal(back.status,200,JSON.stringify(answer));
+    assert.equal(Object.hasOwn(answer,"error"),false,"a kept switch whose harness is not ready says so in agentRuntimeStatus, not as an error");
+    assert.equal(answer.activeEnvironmentId,null);
+    assert.equal(answer.agentRuntimeStatus.available,false,"the answer says Local's Codex is not ready");
+    assert.equal(await active(),null,"Local machine is the agent environment");
+    await gui.close();gui=null;
+    assert.equal(new TrebellStateStore(env).settings().activeEnvironmentId??null,null,"the next start uses Local machine too");
+  }finally{
+    AgentRuntimeManager.prototype.probe=originalProbe;EnvironmentManager.prototype.probe=originalEnvironmentProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// Settings' Sign in for a WSL or SSH Codex profile with a home of its own (CODEX_HOME in Settings) opens a terminal that sets that
+// home up on the host and exports it before `codex login` runs (environment-app-server remoteCodexHomeSetup), so the sign-in writes
+// auth.json where the profile's sessions run. The setup goes to the terminal only: the answer is the sign-in command as before. A
+// profile with no home of its own signs in in the host's default home. The terminal's creation is recorded instead of run, and
+// nothing else runs on the host.
+test("a WSL or SSH Codex profile's Sign in opens its terminal in the profile's own home, and the answer does not carry the home setup",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-remote-codex-sign-in-"));
+  const own={id:"codex-own",kind:"codex",displayName:"Own home",homePath:"~/.codex-own"},plain={id:"codex-plain",kind:"codex",displayName:"Default home"};
+  // WSL profiles run on Windows only (terminalArgvSpec refuses them elsewhere).
+  const profiles=[
+    {id:"ssh-codex",type:"ssh",name:"Build box",host:"build.example.test",user:"dev",port:22,cwd:"/srv/app",enabled:true},
+    ...(process.platform==="win32"?[{id:"wsl-codex",type:"wsl",name:"Ubuntu",distro:"Ubuntu",cwd:"/srv/app",enabled:true}]:[]),
+  ];
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"native",agentRuntimeInstanceId:"native-default",onboardingComplete:true,agentRuntimeInstances:[own,plain]},environments:profiles}));
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:join(home,"codex"),CLAUDE_CONFIG_DIR:join(home,"claude"),TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const created=[],hostRuns=[];
+  const originalCreate=TerminalManager.prototype.create,hostMethods=["spawnSession","execute","executeArgv"],originalHost=Object.fromEntries(hostMethods.map(name=>[name,EnvironmentManager.prototype[name]]));
+  TerminalManager.prototype.create=async function(options){
+    created.push(options);
+    return {id:"sign-in-"+created.length,name:options.name,cwd:options.displayCwd||options.cwd,environmentId:options.environmentId,environmentName:options.environmentName,environmentType:options.environmentType,running:true};
+  };
+  for(const name of hostMethods)EnvironmentManager.prototype[name]=function(...args){hostRuns.push(name);throw new Error("nothing runs on the host in this test")};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:false,env});
+    for(const profile of profiles)for(const instance of [own,plain]){
+      const label=profile.type+" "+instance.id;
+      const answer=await fetch(gui.url+"/api/agent-runtime-auth",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"login",instanceId:instance.id,environmentId:profile.id})}).then(r=>r.json());
+      assert.equal(answer.ok,true,label+": "+answer.error);
+      assert.deepEqual(answer.auth,{runtime:"codex",instanceId:instance.id,name:"Codex",command:"codex",args:["login"]},label+": the answer is the sign-in command, without the home setup");
+      const launch=created.at(-1);
+      assert.equal(launch.shell,profile.type==="wsl"?"wsl.exe":process.platform==="win32"?"ssh.exe":"ssh",label);
+      assert.equal(launch.environmentId,profile.id,label);assert.equal(answer.session.environmentId,profile.id,label);
+      // The command the host runs: its tool PATH, then the profile's home setup, then the sign-in in the profile's folder.
+      const command=String(launch.args.at(-1)),signIn="cd '/srv/app' && exec 'codex' 'login'";
+      if(instance===own){
+        assert.match(command,/^export CODEX_HOME="\$trebell_codex_effective"$/m,label);
+        assert.ok(command.endsWith("\n"+remoteCodexHomeSetup(own)+"\n"+signIn),label+": the home is set up before the sign-in\n"+command);
+      }else{
+        assert.doesNotMatch(command,/CODEX_HOME|trebell_codex/,label);
+        assert.ok(command.endsWith("\nexport PATH\n"+signIn),label+": the sign-in runs in the host's default home\n"+command);
+      }
+    }
+    assert.equal(created.length,profiles.length*2);
+    assert.deepEqual(hostRuns,[]);
+  }finally{
+    TerminalManager.prototype.create=originalCreate;
+    for(const name of hostMethods)EnvironmentManager.prototype[name]=originalHost[name];
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A "Run when a worktree is created" action runs in the new worktree's setup terminal exactly as written, as a card or header run of
+// the same action does: a command with double quotes reaches the shell as typed (on Windows cmd.exe gets the command line whole).
+test("a worktree's setup action runs as written, in a terminal named for it",{timeout:60_000},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-worktree-setup-"));
+  const repo=join(home,"lima-app");await mkdir(repo,{recursive:true});
+  await git(repo,["init"]);await git(repo,["config","user.email","setup@example.test"]);await git(repo,["config","user.name","Setup"]);
+  await writeFile(join(repo,"README.md"),"# lima\n");await git(repo,["add","README.md"]);await git(repo,["commit","-m","init"]);
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"native",agentRuntimeInstanceId:"native-default",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:false,env});
+    const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
+    await post("/api/projects",{path:repo,scripts:[{id:"install",name:"Install deps",command:`node -e "console.log('setup ran in ' + process.cwd())"`,runOnWorktreeCreate:true,waitForSetup:false}]});
+    const made=await post("/api/git/action",{action:"worktree-create",cwd:repo,branch:"trebell/setup",path:join(home,"lima-app-setup")});
+    assert.equal(made.ok,true,made.error);
+    const setup=made.result.setup.session;
+    assert.equal(setup.name,"Install deps · setup");
+    let session=setup;
+    for(const started=Date.now();session?.running&&Date.now()-started<30_000;){
+      await new Promise(resolve=>setTimeout(resolve,200));
+      session=(await fetch(gui.url+"/api/terminal/sessions").then(r=>r.json())).sessions.find(item=>item.id===setup.id);
+    }
+    // The terminal's text without its control sequences and line wraps.
+    const output=String(session.buffer||"").replace(/\x1b\][^\x07]*\x07/g,"").replace(/\x1b\[[0-9;?]*[A-Za-z]/g,"").replace(/\s+/g,"");
+    assert.equal(session.exitCode,0,output);
+    assert.ok(output.includes("setupranin"+made.result.worktree.replace(/\s+/g,"")),output);
+  }finally{
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// The same stand-in answering the Codex protocol on its socket (initialize names the process), and saying why when it cannot listen,
+// as codex does. Like Codex, it knows only the threads resumed on its own process: a turn for any other is refused "thread not found".
+const FAKE_CODEX_WS_APP_SERVER=String.raw`
+import { createServer } from "node:http";
+import { appendFileSync } from "node:fs";
+import { WebSocketServer } from ${JSON.stringify(new URL("../node_modules/ws/wrapper.mjs",import.meta.url).href)};
+const [record,...args]=process.argv.slice(2);const listen=args[args.indexOf("--listen")+1]||"";
+if(args[0]!=="app-server"||!listen){process.stdout.write("codex-cli 0.155.1-fixture\n");process.exit(0)}
+const port=Number(new URL(listen).port);
+const server=createServer((req,res)=>{res.writeHead(req.url==="/readyz"||req.url==="/healthz"?200:404);res.end("ok")}),wss=new WebSocketServer({server});
+const loaded=new Set();
+wss.on("connection",ws=>ws.on("message",raw=>{
+  const message=JSON.parse(String(raw));if(message.id==null||!message.method)return;const threadId=message.params?.threadId;
+  if(message.method==="thread/resume")loaded.add(threadId);
+  if(["turn/start","turn/interrupt"].includes(message.method)&&!loaded.has(threadId)){ws.send(JSON.stringify({id:message.id,error:{code:-32600,message:"thread not found: "+threadId}}));return}
+  ws.send(JSON.stringify({id:message.id,result:message.method==="initialize"?{userAgent:"fake-codex/"+process.pid}:message.method==="thread/resume"?{thread:{id:threadId,status:{type:"idle"},turns:[]}}:message.method==="turn/start"?{turn:{id:"turn-"+process.pid,status:"inProgress",items:[]}}:{data:[],nextCursor:null}}));
+}));
+server.on("error",error=>{process.stderr.write("Error: "+error.message+"\n");process.exit(1)});
+server.listen(port,"127.0.0.1",()=>appendFileSync(record,JSON.stringify({port,pid:process.pid})+"\n"));
+`;
+async function fakeCodexHome(prefix,{script=FAKE_CODEX_WS_APP_SERVER}={}){
+  const home=await mkdtemp(join(tmpdir(),prefix));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"codex",agentRuntimeInstanceId:"codex-default",onboardingComplete:true}}));
+  await mkdir(join(home,"codex"),{recursive:true});
+  const fixture=join(home,"fake-codex.mjs"),record=join(home,"codex-starts.jsonl"),launcher=join(home,process.platform==="win32"?"codex.cmd":"codex");
+  await writeFile(fixture,script,"utf8");
+  if(process.platform==="win32")await writeFile(launcher,["@echo off",`"${process.execPath}" "${fixture}" "${record}" %*`,""].join("\r\n"),"utf8");
+  else{await writeFile(launcher,`#!/bin/sh\nexec "${process.execPath}" "${fixture}" "${record}" "$@"\n`,"utf8");await chmod(launcher,0o755)}
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:join(home,"codex"),TREBELL_CODEX_BIN:launcher,TREBELL_HISTORY_DISABLE_CLAUDE:"1",TREBELL_APP_SERVER_PORT:"",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const starts=async()=>(await readFile(record,"utf8").catch(()=>"")).trim().split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
+  return {home,env,starts};
+}
+// The app's Codex socket as the browser opens it: initialize, and the answer or the error to it.
+async function codexInitialize(gui){
+  const ws=new WebSocket(gui.url.replace(/^http/,"ws")+"/api/codex/ws");
+  await new Promise((resolve,reject)=>{ws.once("open",resolve);ws.once("error",reject)});
+  const answered=new Promise(resolve=>ws.once("message",raw=>resolve(JSON.parse(String(raw)))));
+  ws.send(JSON.stringify({id:1,method:"initialize",params:{clientInfo:{name:"test",version:"0"}}}));
+  return {ws,answer:await answered};
+}
+const availableProbe=async function(instanceOrKind){
+  const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.kind===instanceOrKind):instanceOrKind;
+  return {id:instance?.id,kind:instance?.kind,name:instance?.kind,available:true,installed:true,authenticated:true,version:"fixture"};
+};
+
+test("the catalog Codex app-server takes a free port, so a program on the old fixed one leaves Codex working, and it starts again once it has exited",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-port-");
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  // Another program on 23456 that answers like a Codex app-server (another Trebell's, or one a crash left behind).
+  const holder=createServer((req,res)=>{res.writeHead(req.url==="/readyz"?200:404);res.end("ok")});
+  await new Promise(resolve=>holder.once("error",resolve).listen(23456,"127.0.0.1",resolve));
+  let gui=null,first=null,second=null;
+  try{
+    gui=await createGuiServer({port:await freePort(),mock:false,env});
+    first=await codexInitialize(gui);
+    assert.match(String(first.answer.result?.userAgent),/^fake-codex\//,"the app reaches its own Codex app-server");
+    const [boot]=await starts();assert.notEqual(boot.port,23456);
+    // The app-server exits: the app's socket closes, and the app connects again, as it does after a close, which starts it again.
+    const closed=new Promise(resolve=>first.ws.once("close",resolve));process.kill(boot.pid);await closed;
+    for(const deadline=Date.now()+UNDER_LOAD_MS;Date.now()<deadline;){
+      second=await codexInitialize(gui);if(second.answer.result)break;
+      second.ws.terminate();await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    assert.match(String(second.answer.result?.userAgent),/^fake-codex\//);
+    const all=await starts();assert.equal(all.length,2);assert.notEqual(String(second.answer.result.userAgent),"fake-codex/"+boot.pid);
+  }finally{
+    for(const socket of [first?.ws,second?.ws])try{socket?.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await new Promise(resolve=>holder.close(()=>resolve()));
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("a configured Codex app-server port another program holds is refused with why, on the app's socket",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-port-held-");
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  const holder=createServer((_req,res)=>{res.writeHead(404);res.end()});await new Promise(resolve=>holder.listen(0,"127.0.0.1",resolve));
+  const held=holder.address().port;let gui=null,socket=null;
+  try{
+    gui=await createGuiServer({port:await freePort(),appPort:held,mock:false,env});
+    const {ws,answer}=await codexInitialize(gui);socket=ws;
+    assert.match(String(answer.error?.message),new RegExp(`port ${held} \\(TREBELL_APP_SERVER_PORT or --app-port\\) is in use by another program`));
+    assert.deepEqual(await starts(),[],"no app-server is started on a port it cannot have");
+  }finally{
+    try{socket?.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await new Promise(resolve=>holder.close(()=>resolve()));
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+const waitFor=async(check,timeoutMs)=>{for(const deadline=Date.now()+timeoutMs;!check()&&Date.now()<deadline;)await new Promise(resolve=>setTimeout(resolve,25));return check()};
+
+// The stand-in for the first start only leaves its port to the test: it connects to the port named in codex-control and stays up, and
+// the test answers on its port for it, until a while after that process has ended, as codex under its shell wrapper can hold its port
+// on Windows. A later start listens itself.
+const FAKE_CODEX_LINGERING_APP_SERVER=String.raw`
+import { createServer } from "node:http";
+import { connect } from "node:net";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const [record,...args]=process.argv.slice(2);const listen=args[args.indexOf("--listen")+1]||"";
+if(args[0]!=="app-server"||!listen){process.stdout.write("codex-cli 0.155.1-fixture\n");process.exit(0)}
+const port=Number(new URL(listen).port),first=!existsSync(record);
+if(first){appendFileSync(record,JSON.stringify({port,pid:process.pid})+"\n");connect(Number(readFileSync(join(dirname(record),"codex-control"),"utf8")),"127.0.0.1");setInterval(()=>{},1000)}
+else{
+  const server=createServer((req,res)=>{res.writeHead(req.url==="/readyz"||req.url==="/healthz"?200:404);res.end("ok")});
+  server.on("error",error=>{process.stderr.write("Error: "+error.message+"\n");process.exit(1)});
+  server.listen(port,"127.0.0.1",()=>appendFileSync(record,JSON.stringify({port,pid:process.pid})+"\n"));
+}
+`;
+
+// A restart on the configured port (here the switch to Local machine restarts Codex) stops the app-server there and starts one again:
+// the start waits for the stopped one's port instead of refusing it as held by another program.
+test("a restart on the configured Codex app-server port waits for the stopped app-server's port to be free",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-port-lingering-",{script:FAKE_CODEX_LINGERING_APP_SERVER});
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  const appPort=await freePort();let released=false;
+  // The first app-server's port, held by the test from that app-server's start until 700 ms after its process has ended.
+  const standIn=createServer((req,res)=>{res.writeHead(req.url==="/readyz"?200:404);res.end("ok")}),control=createServer();
+  standIn.on("error",()=>{});
+  control.on("connection",socket=>{
+    standIn.listen(appPort,"127.0.0.1");socket.on("error",()=>{});
+    socket.on("close",()=>setTimeout(()=>{released=true;standIn.close();standIn.closeAllConnections()},700));
+  });
+  await new Promise(resolve=>control.listen(0,"127.0.0.1",resolve));await writeFile(join(home,"codex-control"),String(control.address().port));
+  let gui=null;
+  try{
+    gui=await createGuiServer({port:await freePort(),appPort,mock:false,env});
+    const ready=async()=>(await fetch(gui.url+"/api/bootstrap").then(response=>response.json())).appServerReady;
+    for(const deadline=Date.now()+UNDER_LOAD_MS;!await ready()&&Date.now()<deadline;)await new Promise(resolve=>setTimeout(resolve,100));
+    assert.equal(standIn.listening,true,"the first app-server is up on the configured port");
+    const activated=await fetch(gui.url+"/api/environment/activate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:null})});
+    assert.equal(activated.status,200);
+    assert.equal(released,true,"the restart waited for the stopped app-server's port");
+    assert.deepEqual((await starts()).map(start=>start.port),[appPort,appPort],"and started the app-server again on it");
+    assert.equal(await ready(),true);
+  }finally{
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    if(standIn.listening){standIn.close();standIn.closeAllConnections()}
+    control.closeAllConnections();await new Promise(resolve=>control.close(()=>resolve()));
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A crash by SIGSEGV or SIGABRT, or the OOM killer, on macOS and Linux leaves the child with exitCode null and signalCode set; such a
+// catalog app-server is started again by the next connection, not reused. The state is made as there: the launcher is killed by a
+// signal through its ChildProcess (Windows records the signal the same way), and the app-server it started is ended.
+test("a catalog Codex app-server that died by a signal is started again by the next connection",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-signal-death-");
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  const childProcess=createRequire(import.meta.url)("node:child_process"),realSpawn=childProcess.spawn,launches=[];
+  childProcess.spawn=function(...args){const child=realSpawn.apply(this,args);launches.push({args,child});return child};syncBuiltinESMExports();
+  let gui=null,first=null,second=null;
+  try{
+    gui=await createGuiServer({port:await freePort(),mock:false,env});
+    first=await codexInitialize(gui);assert.match(String(first.answer.result?.userAgent),/^fake-codex\//);
+    const [boot]=await starts(),launcher=launches.find(entry=>(entry.args[1]||[]).includes("app-server"))?.child;assert.ok(launcher,"the app-server launch was seen");
+    launcher.kill("SIGKILL");
+    assert.ok(await waitFor(()=>launcher.signalCode!==null,UNDER_LOAD_MS));assert.equal(launcher.exitCode,null);
+    const closed=new Promise(resolve=>first.ws.once("close",resolve));try{process.kill(boot.pid)}catch{}await closed;
+    for(const deadline=Date.now()+UNDER_LOAD_MS;Date.now()<deadline;){
+      second=await codexInitialize(gui);if(second.answer.result)break;
+      second.ws.terminate();await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    assert.match(String(second.answer.result?.userAgent),/^fake-codex\//,"the next connection reaches a Codex app-server started again: "+JSON.stringify(second.answer));
+    assert.equal((await starts()).length,2);
+  }finally{
+    childProcess.spawn=realSpawn;syncBuiltinESMExports();
+    for(const socket of [first?.ws,second?.ws])try{socket?.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// The app's Codex socket as the browser keeps it: every message it is sent, whether it closed, and requests by id.
+async function codexSocket(gui){
+  const ws=new WebSocket(gui.url.replace(/^http/,"ws")+"/api/codex/ws"),seen=[];let closed=null,nextId=1;
+  ws.on("message",raw=>seen.push(JSON.parse(String(raw))));ws.on("close",code=>{closed={code}});
+  await new Promise((resolve,reject)=>{ws.once("open",resolve);ws.once("error",reject)});
+  const ask=async(method,params,timeoutMs=UNDER_LOAD_MS)=>{
+    const id=nextId++;ws.send(JSON.stringify({id,method,params}));
+    for(const deadline=Date.now()+timeoutMs;Date.now()<deadline;await new Promise(resolve=>setTimeout(resolve,25))){const answer=seen.find(message=>message.id===id&&!message.method);if(answer)return answer;if(closed)throw new Error("socket closed before the answer to "+method)}
+    throw new Error(method+" not answered");
+  };
+  const connect=async()=>{await ask("initialize",{clientInfo:{name:"test",version:"0"}});ws.send(JSON.stringify({method:"initialized",params:{}}))};
+  return {ws,ask,connect,closed:()=>closed};
+}
+
+// Each thread runs on an app-server of its own. One that dies is told to the browser at once, as the catalog's death is: the app connects
+// again and resumes the thread shown, which reaches a new app-server with the thread loaded, so its next turn starts instead of being
+// refused "thread not found". One released when the browser leaves its thread closes nothing.
+test("a thread's own Codex app-server that dies closes the app's socket at once, and the thread resumed again takes its next turn",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-thread-death-");
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  let gui=null,first=null,second=null;
+  try{
+    gui=await createGuiServer({port:await freePort(),mock:false,env});
+    first=await codexSocket(gui);await first.connect();
+    assert.ok(!(await first.ask("thread/resume",{threadId:"thread-died"})).error);
+    assert.ok(!(await first.ask("turn/start",{threadId:"thread-died",input:[{type:"text",text:"one"}]})).error);
+    const [,threadServer]=await starts();assert.ok(threadServer,"the thread runs on an app-server of its own");
+    process.kill(threadServer.pid);
+    assert.ok(await waitFor(()=>first.closed(),UNDER_LOAD_MS),"the app's socket closes when the thread's app-server dies");
+    assert.equal(first.closed().code,1011);
+    second=await codexSocket(gui);await second.connect();
+    assert.ok(!(await second.ask("thread/resume",{threadId:"thread-died"})).error);
+    const next=await second.ask("turn/start",{threadId:"thread-died",input:[{type:"text",text:"two"}]});
+    assert.ok(!next.error,"the next turn reaches the thread: "+JSON.stringify(next.error));
+    assert.equal((await starts()).length,3,"the thread's app-server was started again");
+    // Leaving the thread releases its app-server: that one is stopped on purpose, and the app's socket stays open.
+    assert.ok(!(await second.ask("thread/unsubscribe",{threadId:"thread-died"})).error);
+    const [,,restarted]=await starts();
+    assert.ok(await waitFor(()=>{try{process.kill(restarted.pid,0);return false}catch{return true}},UNDER_LOAD_MS),"the released app-server is stopped");
+    await new Promise(resolve=>setTimeout(resolve,500));
+    assert.equal(second.closed(),null,"a released thread app-server does not close the app's socket");
+  }finally{
+    for(const socket of [first,second])try{socket?.ws.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// After a thread's own app-server dies, the thread's next resume says what happened (trebellAppServerExit: the exit code or signal, and
+// whether a turn ran on it), and each resume until the thread's next turn says the same one, so a window that reconnects again names
+// it once. The next turn ends it.
+test("a thread's own Codex app-server that dies is named, with its exit, on the thread's resumes until its next turn",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-thread-exit-");
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  let gui=null;const sockets=[];
+  const socket=async()=>{const opened=await codexSocket(gui);sockets.push(opened);await opened.connect();return opened};
+  try{
+    gui=await createGuiServer({port:await freePort(),mock:false,env});
+    const first=await socket();
+    assert.equal((await first.ask("thread/resume",{threadId:"thread-exit"})).result.trebellAppServerExit,undefined,"nothing to say before a death");
+    assert.ok(!(await first.ask("turn/start",{threadId:"thread-exit",input:[{type:"text",text:"one"}]})).error);
+    const [,threadServer]=await starts();assert.ok(threadServer,"the thread runs on an app-server of its own");
+    process.kill(threadServer.pid);
+    assert.ok(await waitFor(()=>first.closed(),3000),"the app's socket closes when the thread's app-server dies");
+    const second=await socket();
+    const notice=(await second.ask("thread/resume",{threadId:"thread-exit"})).result.trebellAppServerExit;
+    assert.ok(notice?.id,"the resume after the death names it: "+JSON.stringify(notice));
+    assert.ok(notice.signal||Number.isInteger(notice.code),"with the exit code or the signal: "+JSON.stringify(notice));
+    assert.equal(notice.turnRunning,true,"and that the turn it ran ended with it");
+    const third=await socket();
+    assert.deepEqual((await third.ask("thread/resume",{threadId:"thread-exit"})).result.trebellAppServerExit,notice,"a reconnect reads the same notice, not another");
+    assert.ok(!(await third.ask("turn/start",{threadId:"thread-exit",input:[{type:"text",text:"two"}]})).error);
+    assert.equal((await third.ask("thread/resume",{threadId:"thread-exit"})).result.trebellAppServerExit,undefined,"the next turn ends the notice");
+    // A thread app-server released on purpose (its thread left) is no death: nothing is named for it.
+    assert.ok(!(await third.ask("thread/resume",{threadId:"thread-left"})).error);
+    assert.ok(!(await third.ask("thread/unsubscribe",{threadId:"thread-left"})).error);
+    await new Promise(resolve=>setTimeout(resolve,1500));
+    assert.equal((await third.ask("thread/resume",{threadId:"thread-left"})).result.trebellAppServerExit,undefined);
+  }finally{
+    for(const opened of sockets)try{opened.ws.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// The stand-in above, once the file "broken" exists beside its record: a start records itself and exits with why, as a codex that
+// cannot start does (removed, upgraded half-way, crashing on start).
+const FAKE_CODEX_BREAKABLE_APP_SERVER=FAKE_CODEX_WS_APP_SERVER
+  .replace('import { appendFileSync } from "node:fs";',String.raw`import { appendFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";`)
+  .replace("const port=Number(new URL(listen).port);",String.raw`const port=Number(new URL(listen).port);
+if(existsSync(join(dirname(record),"broken"))){appendFileSync(record,JSON.stringify({port,pid:process.pid,broken:true})+"\n");process.stderr.write("Error: the codex binary could not start\n");process.exit(1)}`);
+
+// A thread's own app-server that dies and cannot start again: the app's socket closes with 1011, and the app connects again and
+// reopens the thread shown, each time with several requests about it, and again at every failed reopen. Codex is launched again once
+// for all of them; the others are answered with that start's failure, so a codex that cannot start is not launched over and over.
+test("a thread's own Codex app-server that dies and cannot start again is launched again once across the app's reconnects",{skip:/\s/.test(tmpdir())&&"the Codex launcher path is passed through a shell"},async()=>{
+  const {home,env,starts}=await fakeCodexHome("trebell-codex-thread-broken-",{script:FAKE_CODEX_BREAKABLE_APP_SERVER});
+  const originalProbe=AgentRuntimeManager.prototype.probe;AgentRuntimeManager.prototype.probe=availableProbe;
+  let gui=null;const sockets=[];
+  try{
+    gui=await createGuiServer({port:await freePort(),mock:false,env});
+    const first=await codexSocket(gui);sockets.push(first);await first.connect();
+    assert.ok(!(await first.ask("thread/resume",{threadId:"thread-broken"})).error);
+    assert.ok(!(await first.ask("turn/start",{threadId:"thread-broken",input:[{type:"text",text:"one"}]})).error);
+    const [,threadServer]=await starts();assert.ok(threadServer,"the thread runs on an app-server of its own");
+    await writeFile(join(home,"broken"),"1");process.kill(threadServer.pid);
+    assert.ok(await waitFor(()=>first.closed(),UNDER_LOAD_MS),"the app's socket closes when the thread's app-server dies");
+    assert.equal(first.closed().code,1011);
+    const before=(await starts()).length,answers=[];
+    // The app's reconnects (0.5 s, 1 s and 2 s apart): each connects and reopens the thread shown.
+    for(const pause of [500,1000,2000]){
+      await new Promise(resolve=>setTimeout(resolve,pause));
+      const next=await codexSocket(gui);sockets.push(next);await next.connect();
+      answers.push((await next.ask("thread/resume",{threadId:"thread-broken"})).error?.message||"resumed");
+      answers.push((await next.ask("thread/goal/get",{threadId:"thread-broken"})).error?.message||"answered");
+      next.ws.close();
+    }
+    const relaunched=(await starts()).slice(before);
+    assert.equal(relaunched.length,1,"codex is launched again once, not at every request: "+JSON.stringify(relaunched));
+    assert.ok(answers.filter((_answer,index)=>index%2===0).every(answer=>/exited before it was ready/.test(answer)),"each reopen is told why: "+JSON.stringify(answers));
+  }finally{
+    for(const socket of sockets)try{socket.ws.terminate()}catch{}
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    if(gui)await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("linking a URL that is not a pull request is refused plainly",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-not-a-pr-"));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const gui=await createGuiServer({port:await freePort(),mock:true,env});
+  try{
+    for(const url of ["not a url","https://example.com/docs/page"]){
+      const response=await fetch(gui.url+"/api/source-control/thread-link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"resolve",url,cwd:home})});
+      assert.equal(response.status,400);assert.deepEqual(await response.json(),{ok:false,error:"Not a pull request URL"});
+    }
+  }finally{await gui.close();await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100})}
+});
+
+test("a visualization whose file is missing is named by its file name alone, and HEAD checks one without reading it",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-visualization-"));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  await writeFile(join(home,"chart.html"),"<h1>Chart</h1>");
+  const gui=await createGuiServer({port:await freePort(),mock:true,env});
+  const at=path=>gui.url+"/api/visualization?"+new URLSearchParams({root:home,path});
+  try{
+    const head=await fetch(at("chart.html"),{method:"HEAD"});assert.equal(head.status,200);assert.equal(await head.text(),"");
+    assert.equal((await fetch(at("missing.html"),{method:"HEAD"})).status,404);
+    const missing=await fetch(at("missing.html"));assert.equal(missing.status,404);
+    assert.match(await missing.text(),/<p>Visualization not found: missing\.html<\/p><script>parent\.postMessage\(\{trebellVisualization:"missing"\},"\*"\)<\/script>$/);
+    assert.equal(await (await fetch(at("chart.html"))).text(),"<h1>Chart</h1>");
+    // A file name is said as text, never as markup of the page.
+    const named=await (await fetch(at("<img src=x onerror=alert(1)>.html"))).text();
+    assert.doesNotMatch(named,/<img/);assert.match(named,/&#60;img src=x onerror=alert\(1\)&#62;\.html<\/p>/);
+  }finally{await gui.close();await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100})}
+});
+
+// A visualization the card's HEAD found whose read then fails (a file the agent still holds open, which a read refuses on Windows,
+// EBUSY, while a stat still finds it; one of no permissions elsewhere) answers the card's frame by its file name alone, with a page
+// that tells the card, instead of Node's error with the file's full local path.
+test("a visualization whose read fails once HEAD found it is said by its file name alone, on a page that tells the card",{skip:process.platform!=="win32"&&process.getuid?.()===0},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-visualization-busy-"));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const chart=join(home,"busy.html");await writeFile(chart,"<h1>Chart</h1>");
+  const gui=await createGuiServer({port:await freePort(),mock:true,env});
+  const at=path=>gui.url+"/api/visualization?"+new URLSearchParams({root:home,path});
+  // Held open with no sharing (libuv's UV_FS_O_EXLOCK) on Windows, as the agent holds a file it still writes; elsewhere unreadable.
+  let held=null;
+  try{
+    if(process.platform==="win32")held=await open(chart,constants.O_RDONLY|0x10000000);else await chmod(chart,0);
+    assert.equal((await fetch(at("busy.html"),{method:"HEAD"})).status,200);
+    const busy=await fetch(at("busy.html")),body=await busy.text();
+    assert.equal(busy.status,400);
+    assert.doesNotMatch(body,/EBUSY|EACCES|resource busy|permission denied/i);assert.equal(body.includes(home.split(/[\\/]/).pop()),false,"no local path");
+    assert.match(body,/<p>Could not show visualization busy\.html<\/p><script>parent\.postMessage\(\{trebellVisualization:"failed"\},"\*"\)<\/script>$/);
+    assert.match(busy.headers.get("content-type")||"",/^text\/html/);assert.match(busy.headers.get("content-security-policy")||"",/connect-src 'none'/);
+  }finally{await held?.close();await chmod(chart,0o644).catch(()=>{});await gui.close();await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100})}
+});
+
+test("mock GUI server serves the default Native provider catalog and direct replies without provider requests",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-mock-provider-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"native",agentRuntimeInstanceId:"native-default",modelProvider:"retired-provider-fixture",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const requests=[];
+  const fetchFn=async input=>{requests.push(String(input instanceof URL?input.href:input?.url||input));throw new Error("Mock mode must not contact a model provider")};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:true,env,fetchFn});
+  try{
+    assert.equal(JSON.parse(await readFile(join(home,"ui-state.json"),"utf8")).settings.modelProvider,"openai","an unknown stored provider must boot and persist as the default provider");
+    const boot=await fetch(gui.url+"/api/bootstrap").then(r=>r.json());
+    assert.equal(boot.mock,true);assert.equal(boot.agentRuntime,"native");assert.equal(boot.provider,"openai");assert.equal(boot.providerReady,true);
+    assert.deepEqual(Object.keys(boot).filter(key=>/bridge|logged/i.test(key)),[],"the bootstrap payload carries no provider bridge or account sign-in state");
+    const runtime=await fetch(gui.url+"/api/runtime").then(r=>r.json());
+    assert.equal(runtime.provider,"openai");assert.equal(runtime.providerReady,true);assert.deepEqual(Object.keys(runtime).filter(key=>/bridge/i.test(key)),[]);
+    const diagnostics=await fetch(gui.url+"/api/diagnostics?"+new URLSearchParams({path:home})).then(r=>r.json());
+    assert.equal(diagnostics.runtime.provider,"openai");assert.equal(diagnostics.runtime.providerReady,true);assert.deepEqual(Object.keys(diagnostics.runtime).filter(key=>/bridge/i.test(key)),[]);
+    const models=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(models.provider,"openai");assert.equal(models.agentRuntime,"native");assert.equal(models.ready,true);
+    assert.deepEqual(models.models,["test/coding-fast","test/coding-large"]);assert.equal(models.defaultModel,"test/coding-fast");
+    assert.deepEqual(models.metadata.models.map(row=>[row.id,row.provider]),[["test/coding-fast","openai"],["test/coding-large","openai"]]);
+    const anthropic=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({modelProvider:"anthropic"})}).then(r=>r.json());
+    assert.equal(anthropic.modelProvider,"anthropic");
+    const anthropicModels=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(anthropicModels.provider,"anthropic");assert.deepEqual(anthropicModels.models,["test/coding-fast","test/coding-large"]);assert.equal(anthropicModels.defaultModel,"test/coding-fast");
+    const unknownProvider=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({modelProvider:"unknown-provider-fixture"})}).then(r=>r.json());
+    assert.equal(unknownProvider.modelProvider,"openai");
+    const providerStatus=await fetch(gui.url+"/api/providers").then(r=>r.json());
+    assert.equal(providerStatus.selected,"openai");assert.equal(providerStatus.ready,true);
+    assert.deepEqual(providerStatus.providers.map(item=>item.id),["openai","anthropic","gemini","xai","meta","agentrouter","justworker","hcnsec","vyceai"]);
+    const directResponse=await fetch(gui.url+"/api/chat/direct",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({prompt:"Summarize the release notes",model:"test/coding-large"})});
+    assert.equal(directResponse.status,200);
+    const direct=await directResponse.json();
+    assert.equal(direct.text,"Mock direct reply: Summarize the release notes");assert.equal(direct.model,"test/coding-large");assert.equal(direct.provider,"openai");
+    const misroutedKey=await fetch(gui.url+"/api/providers",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({provider:"unknown-provider-fixture",apiKey:"unknown-provider-key-fixture"})});
+    assert.equal(misroutedKey.status,400);assert.match((await misroutedKey.json()).error,/Unknown model provider/);
+    assert.equal((await fetch(gui.url+"/api/providers").then(r=>r.json())).status.hasKey,false,"a key sent with an unknown provider id must not be saved for another provider");
+    assert.deepEqual(requests,[],"mock mode must not contact a model provider");
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("harness catalogs report the OpenCode preferred model as their default model",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-harness-default-model-"));
+  const originalProbe=AgentRuntimeManager.prototype.probe,originalModels=AgentRuntimeManager.prototype.models;
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"
+      ?this.instances().find(item=>item.id===instanceOrKind||item.kind===instanceOrKind)
+      :instanceOrKind;
+    const kind=instance?.kind||String(instanceOrKind||"codex");
+    return {id:instance?.id||`${kind}-default`,kind,name:kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  AgentRuntimeManager.prototype.models=async function(instanceOrKind,options){
+    const kind=typeof instanceOrKind==="string"?instanceOrKind:instanceOrKind?.kind;
+    // Claude Code's own model list (its capability probe), with "default" as Claude Code's default model.
+    if(kind==="claude")return {models:["default","haiku"],metadata:[{id:"default",provider:"claude",agent:"Claude Code"},{id:"haiku",provider:"claude",agent:"Claude Code"}],source:"live",preferred:"default",inventory:{commands:[{name:"review"}],agents:[{name:"Plan"}]}};
+    if(kind!=="opencode")return originalModels.call(this,instanceOrKind,options);
+    const models=["fixture/other","fixture/preferred"];
+    return {models,metadata:models.map(id=>({id,provider:"opencode",agent:"OpenCode"})),source:"live-connected",preferred:"fixture/preferred",connectedProviders:["fixture"]};
+  };
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    const codexModels=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(codexModels.agentRuntime,"codex");assert.ok(codexModels.models.length>=1);assert.equal(codexModels.defaultModel,null);
+    const opencode=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"opencode",instanceId:"opencode-default"})}).then(r=>r.json());
+    assert.equal(opencode.selectedRuntime,"opencode");assert.deepEqual(opencode.catalog.models,["fixture/other","fixture/preferred"]);assert.equal(opencode.catalog.defaultModel,"fixture/preferred");
+    const opencodeModels=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(opencodeModels.agentRuntime,"opencode");assert.equal(opencodeModels.defaultModel,"fixture/preferred");
+    const claude=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"claude",instanceId:"claude-default"})}).then(r=>r.json());
+    assert.equal(claude.selectedRuntime,"claude");assert.deepEqual(claude.catalog.models,["default","haiku"]);assert.equal(claude.catalog.defaultModel,"default");
+    assert.deepEqual(claude.catalog.inventory,{commands:[{name:"review"}],agents:[{name:"Plan"}]},"a new chat's slash commands and agents come with the catalog");
+  }finally{
+    if(gui)await gui.close();
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    AgentRuntimeManager.prototype.models=originalModels;
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("a model list still loading when the harness switches is named for the harness it was asked for",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-catalog-switch-race-"));
+  const originalProbe=AgentRuntimeManager.prototype.probe,originalModels=AgentRuntimeManager.prototype.models;
+  let openCodeLists=0,release=()=>{},reached=()=>{};
+  const gate=new Promise(resolve=>{release=resolve}),waiting=new Promise(resolve=>{reached=resolve});
+  AgentRuntimeManager.prototype.probe=async function(instanceOrKind){
+    const instance=typeof instanceOrKind==="string"?this.instances().find(item=>item.id===instanceOrKind||item.kind===instanceOrKind):instanceOrKind;
+    const kind=instance?.kind||String(instanceOrKind||"codex");
+    return {id:instance?.id||`${kind}-default`,kind,name:kind,available:true,installed:true,authenticated:true,version:"fixture"};
+  };
+  AgentRuntimeManager.prototype.models=async function(instanceOrKind,options){
+    const kind=typeof instanceOrKind==="string"?instanceOrKind:instanceOrKind?.kind;
+    if(kind==="opencode"){
+      // The list the switch to OpenCode loads answers at once; the next one is still loading when the user switches to Cursor.
+      if(++openCodeLists>1){reached();await gate}
+      return {models:["opencode/slow"],metadata:[{id:"opencode/slow",provider:"opencode",agent:"OpenCode"}],source:"live-connected",preferred:"opencode/slow"};
+    }
+    if(kind==="cursor")return {models:["default"],metadata:[{id:"default",provider:"cursor",agent:"Cursor"}],source:"live",preferred:"default"};
+    return originalModels.call(this,instanceOrKind,options);
+  };
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const select=runtime=>fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime,instanceId:runtime+"-default"})}).then(r=>r.json());
+  let gui=null;
+  try{
+    gui=await createGuiServer({port,appPort,mock:true,env});
+    assert.equal((await select("opencode")).selectedRuntime,"opencode");
+    const loading=fetch(gui.url+"/api/models").then(r=>r.json());
+    await waiting;
+    const cursor=await select("cursor");
+    assert.equal(cursor.selectedRuntime,"cursor");assert.deepEqual(cursor.catalog.models,["default"]);
+    release();
+    const stale=await loading;
+    assert.equal(stale.agentRuntime,"opencode","OpenCode's list is never shown as Cursor's");assert.deepEqual(stale.models,["opencode/slow"]);
+    const current=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.equal(current.agentRuntime,"cursor");assert.deepEqual(current.models,["default"]);assert.equal(current.defaultModel,"default");
+  }finally{
+    release();
+    if(gui)await gui.close();
+    AgentRuntimeManager.prototype.probe=originalProbe;
+    AgentRuntimeManager.prototype.models=originalModels;
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+test("GUI server exposes mock bootstrap, provider models, and health", async () => {
+  const home=await mkdtemp(join(tmpdir(),"trebell-gui-test-"));
+  const externalCodexHome=join(home,"external-codex");const externalRollouts=join(externalCodexHome,"sessions","2026","09","23");await mkdir(externalRollouts,{recursive:true});
+  const externalSessionId="12345678-1234-4abc-8123-123456789abc";
+  await writeFile(join(externalRollouts,"rollout-import.jsonl"),[
+    JSON.stringify({timestamp:"2026-09-23T01:00:00Z",type:"session_meta",payload:{id:externalSessionId,cwd:process.cwd()}}),
+    JSON.stringify({type:"event_msg",payload:{type:"user_message",message:"Imported GUI history fixture"}}),
+  ].join("\n"));
+  const env={...process.env,TREBELL_HOME:home,CODEX_HOME:externalCodexHome,TREBELL_HISTORY_DISABLE_CLAUDE:"1"};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:true,env});
+  try{
+    const boot=await fetch(gui.url+"/api/bootstrap").then(r=>r.json());
+    assert.equal(boot.mock,true);
+    assert.deepEqual(Object.keys(boot).filter(key=>/bridge|logged/i.test(key)),[],"the bootstrap payload carries no provider bridge or account sign-in state");
+    assert.equal(boot.version,packageVersion);
+    assert.equal(boot.runtimeCapabilities.nativeSandbox,true);
+    assert.equal(boot.runtimeCapabilities.dynamicTools,true);
+
+    const publicSettings=await fetch(gui.url+"/api/settings").then(r=>r.json());
+    const publicState=await fetch(gui.url+"/api/state").then(r=>r.json());
+    for(const retired of ["remoteAccessToken","remoteAccessEnabled","remoteAccessPort"])assert.equal(Object.prototype.hasOwnProperty.call(publicSettings,retired),false);
+    for(const retired of ["remoteAccessToken","remoteAccessEnabled","remoteAccessPort"])assert.equal(Object.prototype.hasOwnProperty.call(publicState.settings||{},retired),false);
+    for(const key of ["checkpoints","usageRecords","verificationRecords","repositoryKnowledge"])assert.equal(Object.prototype.hasOwnProperty.call(publicState,key),false,key+" should be queried through its indexed API instead of the general state payload");
+    const compatibilityToken=["older","client","remote","credential"].join("-");
+    const updatedSettings=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({remoteAccessToken:compatibilityToken,remoteAccessEnabled:true,remoteAccessPort:4555})}).then(r=>r.json());
+    for(const retired of ["remoteAccessToken","remoteAccessEnabled","remoteAccessPort"])assert.equal(Object.prototype.hasOwnProperty.call(updatedSettings,retired),false);
+    assert.doesNotMatch(await readFile(join(home,"ui-state.json"),"utf8"),new RegExp(compatibilityToken));
+
+    await fetch(gui.url+"/api/thread-meta",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({threadId:"catalog-meta-fixture",patch:{runtime:"native",runtimeInstanceId:"native-default",cwd:home,projectless:true,branch:"feature/catalog",threadSnapshot:{id:"catalog-meta-fixture",name:"Catalog fixture",preview:"Compact bootstrap row",cwd:home,updatedAt:100,createdAt:90,status:{type:"idle"},runtime:"native"},delegation:{parentThreadId:"parent",task:"Child fixture",status:"running",ownership:["src/app.js"]},goal:{objective:"Heavy goal"},trebellQueue:[{id:"queue-heavy",input:[{type:"text",text:"heavy queued input"}]}],trebellContext:{task:"active-only",exactInjectedContext:"large context that should not be bootstrapped"},reviewedFiles:["src/app.js"]}})});
+    const compactState=await fetch(gui.url+"/api/state").then(r=>r.json()),compactMeta=compactState.threadMeta["catalog-meta-fixture"];
+    assert.equal(compactMeta.runtime,"native");assert.equal(compactMeta.threadSnapshot.name,"Catalog fixture");assert.equal(compactMeta.delegation.parentThreadId,"parent");
+    for(const heavy of ["goal","trebellQueue","trebellContext","reviewedFiles"])assert.equal(Object.prototype.hasOwnProperty.call(compactMeta,heavy),false,heavy+" must not ride the general bootstrap payload");
+    const fullMeta=await fetch(gui.url+"/api/thread-meta?threadId=catalog-meta-fixture").then(r=>r.json());assert.equal(fullMeta.goal.objective,"Heavy goal");assert.equal(fullMeta.trebellQueue[0].id,"queue-heavy");assert.equal(fullMeta.trebellContext.task,"active-only");
+
+    const models=await fetch(gui.url+"/api/models").then(r=>r.json());
+    assert.ok(models.models.length>=1);
+    assert.ok(models.metadata.models.length>=1);for(const row of models.metadata.models){assert.ok(row.capabilities);assert.equal(Object.prototype.hasOwnProperty.call(row.capabilities,"contextWindow"),true);assert.equal(Object.prototype.hasOwnProperty.call(row.capabilities,"vision"),true);assert.equal(Object.prototype.hasOwnProperty.call(row.capabilities,"protocolCompatibility"),true);assert.equal(Object.prototype.hasOwnProperty.call(row.capabilities,"pricing"),true)}
+    const traces=await fetch(gui.url+"/api/traces?limit=20").then(r=>r.json());
+    assert.ok(Array.isArray(traces.items));
+    assert.equal(traces.journal.lastError,null);
+    assert.equal(typeof traces.journal.records,"number");
+    const checkpointRepo=join(home,"checkpoint-trace-repo");await mkdir(checkpointRepo,{recursive:true});
+    await git(checkpointRepo,["init"]);await git(checkpointRepo,["config","user.email","trace@example.test"]);await git(checkpointRepo,["config","user.name","Trace Test"]);await writeFile(join(checkpointRepo,"fixture.txt"),"before\n");await git(checkpointRepo,["add","fixture.txt"]);await git(checkpointRepo,["commit","-m","fixture"]);
+    const checkpoint=await fetch(gui.url+"/api/checkpoints",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({cwd:checkpointRepo,threadId:"checkpoint-trace-thread",label:"Trace checkpoint"})}).then(r=>r.json());
+    assert.equal(checkpoint.supported,true);assert.ok(checkpoint.id);
+    const checkpointLinked=await fetch(gui.url+"/api/checkpoints/link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:checkpoint.id,patch:{turnId:"trace-turn"}})}).then(r=>r.json());
+    assert.equal(checkpointLinked.checkpoint.turnId,"trace-turn");
+    const failedRestore=await fetch(gui.url+"/api/checkpoints/restore",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:checkpoint.id,threadId:"wrong-thread"})});
+    assert.equal(failedRestore.status,400);
+    await writeFile(join(checkpointRepo,"fixture.txt"),"after\n");await mkdir(join(checkpointRepo,"ui"),{recursive:true});await writeFile(join(checkpointRepo,"ui","panel.jsx"),"export function Panel(){ return <button>Save</button>; }\n");
+    const plannedTurnResponse=await fetch(gui.url+"/api/verification/plan-turn",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({threadId:"checkpoint-trace-thread",turnId:"trace-turn"})});
+    assert.equal(plannedTurnResponse.status,200);
+    const plannedTurn=await plannedTurnResponse.json();
+    assert.equal(plannedTurn.supported,true);assert.deepEqual(plannedTurn.changedPaths,["fixture.txt","ui/panel.jsx"]);
+    assert.equal(plannedTurn.record.status,"incomplete");assert.equal(plannedTurn.record.risk,"medium");assert.equal(plannedTurn.nextAction.action,"verify");assert.equal(plannedTurn.nextAction.nextStep.id,"browser_runtime");
+    const automaticDiagnostics=plannedTurn.record.evidence.find(item=>item.stepId==="diagnostics");assert.equal(automaticDiagnostics?.status,"passed");assert.equal(automaticDiagnostics?.source,"harness-diagnostics");
+    assert.ok(plannedTurn.record.plan.steps.some(step=>step.id==="browser_interaction"&&step.required===true));
+    assert.ok(plannedTurn.record.plan.steps.some(step=>step.id==="visual"&&step.required===true));
+    const plannedHistory=await fetch(gui.url+"/api/verification-records?"+new URLSearchParams({threadId:"checkpoint-trace-thread"})).then(r=>r.json());
+    assert.equal(plannedHistory.records.length,1);assert.equal(plannedHistory.records[0].turnId,"trace-turn");
+    const plannedTraces=await fetch(gui.url+"/api/traces?"+new URLSearchParams({threadId:"checkpoint-trace-thread",limit:"20"})).then(r=>r.json());
+    const plannedTrace=plannedTraces.items.find(item=>item.name==="verification.planned");
+    assert.ok(plannedTrace);assert.equal(plannedTrace.data.changedPathCount,2);assert.equal(plannedTrace.data.nextStepId,"browser_runtime");assert.equal(plannedTrace.data.automaticEvidenceCount,1);assert.equal(Object.prototype.hasOwnProperty.call(plannedTrace.data,"evidence"),false);
+    assert.ok(plannedTraces.items.some(item=>item.name==="diagnostics.generated"&&item.status==="passed"&&item.data?.recordId===plannedTurn.record.id));
+    const checkpointTraces=await fetch(gui.url+"/api/traces?limit=100").then(r=>r.json());
+    const checkpointEvents=checkpointTraces.items.filter(item=>item.category==="checkpoint"&&item.data?.checkpointId===checkpoint.id);
+    assert.ok(checkpointEvents.some(item=>item.name==="checkpoint.created"&&item.status==="completed"));
+    assert.ok(checkpointEvents.some(item=>item.name==="checkpoint.linked"&&item.turnId==="trace-turn"));
+    assert.ok(checkpointEvents.some(item=>item.name==="checkpoint.restore_failed"&&item.status==="error"));
+    const privateCommitMessage="trace-message-must-not-be-journaled";await writeFile(join(checkpointRepo,"fixture.txt"),"after\n");
+    const commitMutation=await fetch(gui.url+"/api/git/action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"commit",cwd:checkpointRepo,message:privateCommitMessage})});
+    assert.equal(commitMutation.status,200);
+    const pushMutation=await fetch(gui.url+"/api/git/action",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"push",cwd:checkpointRepo})});
+    assert.equal(pushMutation.status,400);
+    const sourceControlTraces=await fetch(gui.url+"/api/traces?limit=100").then(r=>r.json()),sourceControlEvents=sourceControlTraces.items.filter(item=>item.category==="source-control");
+    assert.ok(sourceControlEvents.some(item=>item.name==="source_control.git.commit"&&item.status==="completed"&&item.data?.externalSideEffect===false));
+    assert.ok(sourceControlEvents.some(item=>item.name==="source_control.push"&&item.status==="failed"&&item.data?.externalSideEffect===true));
+    assert.doesNotMatch(JSON.stringify(sourceControlEvents),new RegExp(privateCommitMessage));
+    assert.equal(models.metadata.provider,"codex");
+    assert.equal(models.agentRuntime,"codex");
+    assert.equal(Object.prototype.hasOwnProperty.call(models,"provider"),false,"external harness catalogs must not masquerade as Trebell Native provider catalogs");
+    assert.ok(models.metadata.models.every(model=>model.provider==="codex"));
+    const runtimeUsage=await fetch(gui.url+"/api/agent-runtime-usage").then(r=>r.json());
+    assert.equal(runtimeUsage.runtime,"codex");
+    assert.deepEqual(runtimeUsage.windows,[]);
+    assert.equal(runtimeUsage.unavailable.reason,"unsupported");
+    const runtimeAuth=await fetch(gui.url+"/api/agent-runtime-auth",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"login",runtime:"claude",environmentId:null,cwd:process.cwd()})}).then(r=>r.json());
+    assert.equal(runtimeAuth.ok,true);
+    assert.deepEqual(runtimeAuth.auth.args,["auth","login"]);
+    assert.equal(runtimeAuth.session.id,"mock-runtime-auth");
+    assert.equal(runtimeAuth.session.environmentId,null);
+    const directRuntimeAuth=await fetch(gui.url+"/api/agent-runtime-auth",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"login",runtime:"antigravity",environmentId:null,cwd:process.cwd()})}).then(r=>r.json());
+    assert.equal(directRuntimeAuth.authenticated,true);
+    assert.ok(Array.isArray(directRuntimeAuth.agentSnapshot?.definitions));
+    assert.ok(Array.isArray(directRuntimeAuth.agentSnapshot?.instances));
+    assert.ok(Array.isArray(directRuntimeAuth.agentSnapshot?.statuses));
+
+    const projectsBefore=await fetch(gui.url+"/api/projects").then(r=>r.json());
+    assert.ok(Array.isArray(projectsBefore.projects));
+    const historyImport=await fetch(gui.url+"/api/history-import").then(r=>r.json());
+    const codexHistory=historyImport.sessions.find(item=>item.providerSessionId===externalSessionId);
+    assert.equal(codexHistory.source,"codex");assert.equal(codexHistory.title,"Imported GUI history fixture");assert.equal(codexHistory.alreadyImported,false);assert.equal(Object.prototype.hasOwnProperty.call(codexHistory,"sourcePath"),false);
+    // The mock server runs Codex on Local machine without an app-server, and says that is why Codex history cannot be imported.
+    assert.equal(historyImport.codexImportAvailable,false);assert.equal(historyImport.codexImportUnavailable.reason,"app-server");assert.match(historyImport.codexImportUnavailable.message,/local Codex app-server/);
+    const projectPath=process.cwd();
+    const projectSaved=await fetch(gui.url+"/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      path:projectPath,
+      scripts:[{id:"dev",name:"Dev server",command:"npm run dev",previewUrl:"http://localhost:5173",autoOpenPreview:true}],
+      preferredScriptId:"dev",
+    })}).then(r=>r.json());
+    assert.equal(projectSaved.project.scripts[0].id,"dev");
+    const remoteEnvironment=await fetch(gui.url+"/api/environments",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      id:"ssh-test",name:"Remote test",type:"ssh",host:"example.invalid",cwd:"/srv/app",
+    })}).then(r=>r.json());
+    assert.equal(remoteEnvironment.profile.id,"ssh-test");
+    assert.equal(remoteEnvironment.profile.enabled,true);
+    const disabledEnvironment=await fetch(gui.url+"/api/environment/enabled",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test",enabled:false})}).then(r=>r.json());
+    assert.equal(disabledEnvironment.profile.enabled,false);
+    const disabledActivationResponse=await fetch(gui.url+"/api/environment/activate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test"})});
+    assert.equal(disabledActivationResponse.status,400);
+    assert.match((await disabledActivationResponse.json()).error,/switched off/i);
+    const environmentsWhileDisabled=await fetch(gui.url+"/api/environments").then(r=>r.json());
+    assert.equal(environmentsWhileDisabled.profiles.find(profile=>profile.id==="ssh-test").enabled,false);
+    const enabledEnvironment=await fetch(gui.url+"/api/environment/enabled",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test",enabled:true})}).then(r=>r.json());
+    assert.equal(enabledEnvironment.profile.enabled,true);
+    // Codex cannot be reached on a host whose name never resolves, so using it for agents fails and Local machine stays active.
+    const unreachableActivation=await fetch(gui.url+"/api/environment/activate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test"})});
+    assert.equal(unreachableActivation.status,503);
+    assert.ok((await unreachableActivation.json()).error);
+    assert.equal((await fetch(gui.url+"/api/environments").then(r=>r.json())).activeEnvironmentId,null);
+    // With the host and Codex answering there, the switch is kept.
+    const originalProbe=AgentRuntimeManager.prototype.probe,originalEnvironmentProbe=EnvironmentManager.prototype.probe;
+    EnvironmentManager.prototype.probe=async function(id){return {exitCode:0,stdout:"trebell-environment-ok",stderr:"",timedOut:false,ok:true,profile:{id}}};
+    AgentRuntimeManager.prototype.probe=async function(instance){return {id:instance?.id,kind:instance?.kind,name:"Codex",available:true,installed:true,authenticated:true,version:"fixture"}};
+    const activatedEnvironment=await fetch(gui.url+"/api/environment/activate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test"})}).then(r=>r.json()).finally(()=>{AgentRuntimeManager.prototype.probe=originalProbe;EnvironmentManager.prototype.probe=originalEnvironmentProbe});
+    assert.equal(activatedEnvironment.activeEnvironmentId,"ssh-test");
+    assert.equal(activatedEnvironment.agentRuntime,"codex");
+    assert.equal(activatedEnvironment.agentRuntimeReady,true);
+    assert.equal(activatedEnvironment.appServerReady,true);
+    assert.ok(activatedEnvironment.agentRuntimeInstanceId);
+    const disabledActiveEnvironment=await fetch(gui.url+"/api/environment/enabled",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test",enabled:false})}).then(r=>r.json());
+    assert.equal(disabledActiveEnvironment.activeEnvironmentId,null);
+    const afterActiveDisable=await fetch(gui.url+"/api/environments").then(r=>r.json());
+    assert.equal(afterActiveDisable.activeEnvironmentId,null);
+    await fetch(gui.url+"/api/environment/enabled",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({id:"ssh-test",enabled:true})});
+    const remoteProject=await fetch(gui.url+"/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      path:"/srv/app",environmentId:"ssh-test",
+      scripts:[{id:"remote-dev",name:"Remote dev",command:"npm run dev"}],
+    })}).then(r=>r.json());
+    assert.equal(remoteProject.project.path,"/srv/app");
+    assert.equal(remoteProject.project.environmentId,"ssh-test");
+    const projectsAfter=await fetch(gui.url+"/api/projects").then(r=>r.json());
+    assert.equal(projectsAfter.projects.find(project=>project.id===remoteProject.project.id).environment.name,"Remote test");
+    const remoteAction=await fetch(gui.url+"/api/project-script/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:"/srv/app",environmentId:"ssh-test",scriptId:"remote-dev"})}).then(r=>r.json());
+    assert.equal(remoteAction.ok,true);
+    assert.equal(remoteAction.session.environmentId,"ssh-test");
+    assert.equal(remoteAction.session.environmentType,"ssh");
+    const actionRun=await fetch(gui.url+"/api/project-script/run",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:projectPath,scriptId:"dev"})}).then(r=>r.json());
+    assert.equal(actionRun.ok,true);
+    assert.equal(actionRun.session.id,"mock-project-action");
+    assert.equal(actionRun.previewUrl,"http://localhost:5173");
+    const previewServers=await fetch(gui.url+"/api/preview/servers").then(r=>r.json());
+    assert.ok(Array.isArray(previewServers.servers));
+    const suggested=await fetch(gui.url+"/api/project-actions/suggestions?path="+encodeURIComponent(projectPath)).then(r=>r.json());
+    assert.ok(Array.isArray(suggested.scripts));
+    assert.ok(suggested.scripts.some(script=>script.source==="package.json"));
+    const configProject=join(home,"file-project");await import("node:fs/promises").then(fs=>fs.mkdir(configProject,{recursive:true}));
+    // trebell.json in Trebell's own words (re-pinned from the keys it first had: scripts, defaultThreadEnvMode, worktreeSubmodules).
+    await writeFile(join(configProject,"trebell.json"),JSON.stringify({workspace:"worktree",submodules:"first-level",actions:[
+      {label:"Dev server",run:"npm run dev",preview:"http://localhost:5173",openPreview:true},{label:"Install",run:"npm ci",onNewWorktree:"wait"},
+      {label:"Seed",run:"node seed.mjs",onNewWorktree:"start"},{label:"No command"}]}));
+    await mkdir(join(configProject,"src"),{recursive:true});
+    await mkdir(join(configProject,"tests"),{recursive:true});
+    await writeFile(join(configProject,"AGENTS.md"),"Prefer deterministic repository context.\n");
+    await writeFile(join(configProject,"package.json"),JSON.stringify({packageManager:"pnpm@10.0.0",scripts:{test:"node --test",build:"vite build"}}));
+    await writeFile(join(configProject,"src","session.js"),"export class RefreshSession { refresh(token) { return token; } }\n");
+    await writeFile(join(configProject,"src","broken.ts"),"export const broken: string = ;\n");
+    await writeFile(join(configProject,"tests","session.test.js"),"import { RefreshSession } from \"../src/session.js\";\nexport function testSession() { return new RefreshSession().refresh(\"x\"); }\n");
+    const contextPacketResponse=await fetch(gui.url+"/api/context/packet",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:configProject,task:"Fix refresh session",userTask:"Fix refresh session",deliveryProjection:"seed",maxTokens:1200,maxFiles:6,environmentId:null})});
+    assert.equal(contextPacketResponse.status,200);
+    const contextPacket=await contextPacketResponse.json();
+    assert.ok(contextPacket.items.some(item=>item.path==="src/session.js"));
+    assert.match(contextPacket.injection,/Prefer deterministic repository context/);
+    assert.equal(contextPacket.deliveryProjection,"seed");
+    assert.doesNotMatch(contextPacket.untrustedInjection,/Task: Fix refresh session/);
+    assert.ok(contextPacket.tokenEstimate<=1200);
+    const symbolResponse=await fetch(gui.url+"/api/context/symbols?"+new URLSearchParams({path:configProject,q:"RefreshSession"}));
+    assert.equal(symbolResponse.status,200);
+    const symbolResult=await symbolResponse.json();
+    assert.equal(symbolResult.data[0].name,"RefreshSession");
+    assert.equal(symbolResult.data[0].path,"src/session.js");
+    const fileResponse=await fetch(gui.url+"/api/context/files?"+new URLSearchParams({path:configProject,q:"session",limit:"10"}));
+    assert.equal(fileResponse.status,200);
+    const fileResult=await fileResponse.json();
+    assert.ok(fileResult.data.some(item=>item.path==="src/session.js"&&item.indexedSource===true));
+    const mapResponse=await fetch(gui.url+"/api/context/map?"+new URLSearchParams({path:configProject,q:"refresh session",limit:"10"}));
+    assert.equal(mapResponse.status,200);
+    const mapResult=await mapResponse.json();
+    assert.ok(mapResult.data.some(item=>item.path==="src/session.js"&&item.definitions.some(definition=>definition.name==="RefreshSession")));
+    const commandsResponse=await fetch(gui.url+"/api/context/commands?"+new URLSearchParams({path:configProject,limit:"10"}));
+    assert.equal(commandsResponse.status,200);
+    const commandsResult=await commandsResponse.json();
+    assert.ok(commandsResult.declared.some(item=>item.command==="pnpm run test"&&item.confidence==="declared"));
+    assert.ok(commandsResult.declared.some(item=>item.command==="pnpm run build"));
+    const verificationResponse=await fetch(gui.url+"/api/context/verification?"+new URLSearchParams({path:configProject,file:"src/session.js",semantic:"true"}));
+    assert.equal(verificationResponse.status,200);
+    const verificationResult=await verificationResponse.json();
+    assert.equal(verificationResult.pathSource,"explicit");
+    assert.deepEqual(verificationResult.paths,["src/session.js"]);
+    assert.deepEqual(verificationResult.relatedTests,["tests/session.test.js"]);
+    assert.ok(verificationResult.steps.some(item=>item.id==="targeted_tests"&&item.command==="pnpm run test"));
+    const assessmentResponse=await fetch(gui.url+"/api/context/verification/assess",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({plan:{risk:"medium",steps:[{id:"tests",kind:"tests",required:true}]},evidence:[{stepId:"tests",exitCode:0}]})});
+    assert.equal(assessmentResponse.status,200);
+    const assessmentResult=await assessmentResponse.json();
+    assert.equal(assessmentResult.status,"verified");assert.equal(assessmentResult.verified,true);assert.equal(assessmentResult.summary.passed,1);
+    const verificationNextResponse=await fetch(gui.url+"/api/context/verification/next",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({plan:{risk:"medium",steps:[{id:"diagnostics",kind:"diagnostics",cost:"low",required:true},{id:"tests",kind:"tests",cost:"medium",required:true}]},evidence:[{stepId:"diagnostics",errorCount:0}]})});
+    assert.equal(verificationNextResponse.status,200);
+    const verificationNext=await verificationNextResponse.json();
+    assert.equal(verificationNext.action,"verify");assert.equal(verificationNext.nextStep.id,"tests");
+    const persistedVerificationResponse=await fetch(gui.url+"/api/verification-records",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projectPath:configProject,threadId:"thread-verification",turnId:"turn-verification",plan:{risk:"medium",steps:[{id:"tests",kind:"tests",required:true}]},evidence:[{stepId:"tests",exitCode:0}]})});
+    assert.equal(persistedVerificationResponse.status,200);
+    const persistedPayload=await persistedVerificationResponse.json(),persistedVerification=persistedPayload.record;
+    assert.equal(persistedVerification.status,"verified");assert.equal(persistedVerification.assessment.verified,true);assert.equal(persistedVerification.threadId,"thread-verification");
+    assert.equal(persistedPayload.nextAction.action,"complete");
+    const verificationHistoryResponse=await fetch(gui.url+"/api/verification-records?"+new URLSearchParams({threadId:"thread-verification",projectPath:configProject}));
+    assert.equal(verificationHistoryResponse.status,200);
+    const verificationHistory=(await verificationHistoryResponse.json()).records;
+    assert.equal(verificationHistory.length,1);assert.equal(verificationHistory[0].id,persistedVerification.id);assert.equal(verificationHistory[0].status,"verified");
+    const verificationTraces=await fetch(gui.url+"/api/traces?"+new URLSearchParams({threadId:"thread-verification",limit:"20"})).then(r=>r.json());
+    const verificationTrace=verificationTraces.items.find(item=>item.name==="verification.completed");
+    assert.ok(verificationTrace);assert.equal(verificationTrace.status,"verified");assert.equal(verificationTrace.data.verified,true);assert.equal(verificationTrace.data.summary.passed,1);assert.equal(verificationTrace.data.nextAction,"complete");assert.equal(Object.prototype.hasOwnProperty.call(verificationTrace.data,"evidence"),false);
+    const relationResponse=await fetch(gui.url+"/api/context/relations?"+new URLSearchParams({path:configProject,file:"src/session.js"}));
+    assert.equal(relationResponse.status,200);
+    const relationResult=await relationResponse.json();
+    assert.equal(relationResult.path,"src/session.js");
+    assert.ok(relationResult.definitions.some(item=>item.name==="RefreshSession"));
+    const relatedTestsResponse=await fetch(gui.url+"/api/context/tests?"+new URLSearchParams({path:configProject,file:"src/session.js"}));
+    assert.equal(relatedTestsResponse.status,200);
+    const relatedTests=await relatedTestsResponse.json();
+    assert.deepEqual(relatedTests.data.map(item=>item.path),["tests/session.test.js"]);
+    const callsResponse=await fetch(gui.url+"/api/context/calls?"+new URLSearchParams({path:configProject,name:"RefreshSession",limit:"10"}));
+    assert.equal(callsResponse.status,200);
+    const callsResult=await callsResponse.json();
+    assert.equal(callsResult.semantic,false);
+    assert.ok(callsResult.callers.some(item=>item.path==="tests/session.test.js"&&item.caller==="testSession"&&item.kind==="construct"));
+    const diagnosticsResponse=await fetch(gui.url+"/api/context/diagnostics?"+new URLSearchParams({path:configProject,file:"src/broken.ts",limit:"10"}));
+    assert.equal(diagnosticsResponse.status,200);
+    const diagnosticsResult=await diagnosticsResponse.json();
+    assert.equal(diagnosticsResult.supported,true);assert.equal(diagnosticsResult.engine,"babel-parser");assert.equal(diagnosticsResult.semantic,false);assert.ok(diagnosticsResult.diagnostics.length>=1);
+    const semanticDiagnosticsResponse=await fetch(gui.url+"/api/context/diagnostics?"+new URLSearchParams({path:configProject,file:"src/session.js",semantic:"true",limit:"10"}));
+    assert.equal(semanticDiagnosticsResponse.status,200);
+    const semanticDiagnosticsResult=await semanticDiagnosticsResponse.json();
+    assert.equal(semanticDiagnosticsResult.semanticRequested,true);assert.equal(semanticDiagnosticsResult.semantic,false);assert.equal(semanticDiagnosticsResult.semanticInfo.available,false);
+    const languageSymbolResponse=await fetch(gui.url+"/api/context/language-symbol?"+new URLSearchParams({path:configProject,file:"src/session.js",line:"1",column:"14",operation:"definition",limit:"10"}));
+    assert.equal(languageSymbolResponse.status,200);
+    const languageSymbolResult=await languageSymbolResponse.json();
+    assert.equal(languageSymbolResult.supported,false);assert.equal(languageSymbolResult.semantic,false);assert.match(languageSymbolResult.reason,/TypeScript/i);
+    const codeActionsResponse=await fetch(gui.url+"/api/context/code-actions?"+new URLSearchParams({path:configProject,file:"src/session.js",line:"1",column:"14",codes:"2322",limit:"10"}));
+    assert.equal(codeActionsResponse.status,200);
+    const codeActionsResult=await codeActionsResponse.json();
+    assert.equal(codeActionsResult.supported,false);assert.equal(codeActionsResult.semantic,false);assert.deepEqual(codeActionsResult.actions,[]);assert.match(codeActionsResult.reason,/TypeScript/i);
+    const organizeImportsResponse=await fetch(gui.url+"/api/context/organize-imports?"+new URLSearchParams({path:configProject,file:"src/session.js",limit:"10"}));
+    assert.equal(organizeImportsResponse.status,200);
+    const organizeImportsResult=await organizeImportsResponse.json();
+    assert.equal(organizeImportsResult.supported,false);assert.equal(organizeImportsResult.semantic,false);assert.deepEqual(organizeImportsResult.changes,[]);assert.match(organizeImportsResult.reason,/TypeScript/i);
+    const renameResponse=await fetch(gui.url+"/api/context/rename-preview?"+new URLSearchParams({path:configProject,file:"src/session.js",line:"1",column:"14",newName:"RenamedSession",limit:"10"}));
+    assert.equal(renameResponse.status,200);
+    const renameResult=await renameResponse.json();
+    assert.equal(renameResult.supported,false);assert.equal(renameResult.semantic,false);assert.equal(renameResult.canRename,false);assert.deepEqual(renameResult.locations,[]);assert.match(renameResult.reason,/TypeScript/i);
+    const referencesResponse=await fetch(gui.url+"/api/context/references?"+new URLSearchParams({path:configProject,name:"RefreshSession",limit:"10"}));
+    assert.equal(referencesResponse.status,200);
+    const referencesResult=await referencesResponse.json();
+    assert.ok(referencesResult.data.some(item=>item.path==="src/session.js"&&item.definition===true&&item.precision==="ast"));
+    const codeSearchResponse=await fetch(gui.url+"/api/context/search?"+new URLSearchParams({path:configProject,q:"RefreshSession",limit:"10"}));
+    assert.equal(codeSearchResponse.status,200);
+    const codeSearch=await codeSearchResponse.json();
+    assert.ok(codeSearch.data.some(item=>item.path==="src/session.js"&&item.line===1));
+    const sourceResponse=await fetch(gui.url+"/api/context/source?"+new URLSearchParams({path:configProject,file:"src/session.js",startLine:"1",endLine:"1"}));
+    assert.equal(sourceResponse.status,200);
+    const sourceRange=await sourceResponse.json();
+    assert.equal(sourceRange.path,"src/session.js");assert.equal(sourceRange.startLine,1);assert.equal(sourceRange.endLine,1);assert.match(sourceRange.content,/RefreshSession/);
+    const gitContextResponse=await fetch(gui.url+"/api/context/git?"+new URLSearchParams({path:configProject}));
+    assert.equal(gitContextResponse.status,200);assert.equal((await gitContextResponse.json()).isGit,false);
+    const historyResponse=await fetch(gui.url+"/api/context/history?"+new URLSearchParams({path:configProject,file:"src/session.js",limit:"5"}));
+    assert.equal(historyResponse.status,200);assert.deepEqual((await historyResponse.json()).data,[]);
+    const blameResponse=await fetch(gui.url+"/api/context/blame?"+new URLSearchParams({path:configProject,file:"src/session.js",startLine:"1",endLine:"1"}));
+    assert.equal(blameResponse.status,400);
+    const missingRelationResponse=await fetch(gui.url+"/api/context/relations?"+new URLSearchParams({path:configProject,file:"../outside.js"}));
+    assert.equal(missingRelationResponse.status,400);
+    const remoteContextResponse=await fetch(gui.url+"/api/context/packet",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({path:"/srv/app",task:"remote task",environmentId:"ssh-test"})});
+    assert.equal(remoteContextResponse.status,400);
+    assert.doesNotMatch((await remoteContextResponse.json()).error,/local workspaces only/i);
+    const fileSuggested=await fetch(gui.url+"/api/project-actions/suggestions?path="+encodeURIComponent(configProject)).then(r=>r.json());
+    assert.deepEqual(fileSuggested.projectFile,{present:true,workspaceMode:"worktree",submodules:"top-level",actions:3});
+    assert.deepEqual(fileSuggested.scripts.filter(script=>script.source==="trebell.json").map(({name,command,previewUrl,autoOpenPreview,runOnWorktreeCreate,waitForSetup})=>[name,command,previewUrl,autoOpenPreview,runOnWorktreeCreate,waitForSetup]),[
+      ["Dev server","npm run dev","http://localhost:5173",true,false,false],["Install","npm ci",null,false,true,true],["Seed","node seed.mjs",null,false,true,false]]);
+    // A file written for 2.1.1 or 2.1.2 uses keys this release does not read: the file is there, but sets nothing and gives no action.
+    const otherKeys=join(home,"other-keys-project");await mkdir(otherKeys,{recursive:true});
+    await writeFile(join(otherKeys,"trebell.json"),JSON.stringify({defaultThreadEnvMode:"worktree",worktreeSubmodules:"top-level",scripts:[{name:"Dev",command:"npm run dev"}]}));
+    const otherSuggested=await fetch(gui.url+"/api/project-actions/suggestions?path="+encodeURIComponent(otherKeys)).then(r=>r.json());
+    assert.deepEqual(otherSuggested.projectFile,{present:true,workspaceMode:null,submodules:null,actions:0});
+    assert.equal(otherSuggested.scripts.some(script=>script.source==="trebell.json"),false);
+    const visualizationDir=join(configProject,"artifacts");await mkdir(visualizationDir,{recursive:true});
+    const visualizationPath=join(visualizationDir,"chart.html");await writeFile(visualizationPath,"<!doctype html><style>body{margin:0}</style><script>document.body.dataset.ready='1'</script>","utf8");
+    const visualizationResponse=await fetch(gui.url+"/api/visualization?"+new URLSearchParams({root:configProject,path:visualizationPath}));
+    assert.equal(visualizationResponse.status,200);assert.match(await visualizationResponse.text(),/dataset\.ready/);
+    assert.match(visualizationResponse.headers.get("content-security-policy")||"",/connect-src 'none'/);
+    assert.match(visualizationResponse.headers.get("content-security-policy")||"",/script-src 'unsafe-inline'/);
+    const outsideVisualization=join(home,"outside.html");await writeFile(outsideVisualization,"<p>outside</p>","utf8");
+    const blockedVisualization=await fetch(gui.url+"/api/visualization?"+new URLSearchParams({root:configProject,path:outsideVisualization}));
+    assert.equal(blockedVisualization.status,400);
+    const settings=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({followUpMode:"steer"})}).then(r=>r.json());
+    assert.equal(settings.followUpMode,"steer");
+    const customCodexId="codex-settings-test";
+    const customCodex=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"upsert",instance:{id:customCodexId,kind:"codex",displayName:"Settings API test",homePath:join(home,"codex-settings-test")}})}).then(r=>r.json());
+    assert.equal(customCodex.instance.id,customCodexId);
+    const codexSettingsResponse=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agentRuntime:"codex",agentRuntimeInstanceId:customCodexId})});
+    assert.equal(codexSettingsResponse.status,200);
+    const codexSettings=await codexSettingsResponse.json();
+    assert.equal(codexSettings.agentRuntime,"codex");assert.equal(codexSettings.agentRuntimeInstanceId,customCodexId);
+    const codexRuntimeSnapshot=await fetch(gui.url+"/api/agent-runtimes").then(r=>r.json());
+    assert.equal(codexRuntimeSnapshot.selectedRuntime,"codex");assert.equal(codexRuntimeSnapshot.selectedInstanceId,customCodexId);
+    const codexBootstrap=await fetch(gui.url+"/api/bootstrap").then(r=>r.json());
+    assert.equal(codexBootstrap.agentRuntime,"codex");assert.equal(codexBootstrap.agentRuntimeInstanceId,customCodexId);
+    const nativeRuntimeSelection=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"native",instanceId:"native-default"})}).then(r=>r.json());
+    assert.equal(nativeRuntimeSelection.selectedRuntime,"native");assert.equal(nativeRuntimeSelection.selectedInstanceId,"native-default");
+    assert.equal(nativeRuntimeSelection.bootstrap.agentRuntime,"native");assert.equal(nativeRuntimeSelection.bootstrap.agentRuntimeInstanceId,"native-default");
+    assert.equal(nativeRuntimeSelection.catalog.agentRuntime,"native");assert.ok(nativeRuntimeSelection.catalog.models.length>=1);
+    const restoredCodexSelection=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"codex",instanceId:customCodexId})}).then(r=>r.json());
+    assert.equal(restoredCodexSelection.selectedRuntime,"codex");assert.equal(restoredCodexSelection.selectedInstanceId,customCodexId);
+    assert.equal(restoredCodexSelection.bootstrap.agentRuntime,"codex");assert.equal(restoredCodexSelection.bootstrap.agentRuntimeInstanceId,customCodexId);
+    assert.equal(restoredCodexSelection.catalog.agentRuntime,"codex");assert.ok(restoredCodexSelection.catalog.models.length>=1);
+    const activeCodexUpdate=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"upsert",instance:{id:customCodexId,kind:"codex",displayName:"Settings API updated",homePath:join(home,"codex-settings-test")}})}).then(r=>r.json());
+    assert.equal(activeCodexUpdate.selectedInstanceId,customCodexId);assert.equal(activeCodexUpdate.bootstrap.agentRuntimeInstanceId,customCodexId);assert.equal(activeCodexUpdate.catalog.agentRuntime,"codex");
+    const spareCodexId="codex-delete-test";
+    const spareCodex=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"upsert",instance:{id:spareCodexId,kind:"codex",displayName:"Delete API test",homePath:join(home,"codex-delete-test")}})}).then(r=>r.json());
+    assert.equal(spareCodex.instance.id,spareCodexId);assert.equal(Object.prototype.hasOwnProperty.call(spareCodex,"bootstrap"),false);
+    const spareSelection=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"codex",instanceId:spareCodexId})}).then(r=>r.json());
+    assert.equal(spareSelection.selectedInstanceId,spareCodexId);
+    const removedActiveSpare=await fetch(gui.url+"/api/agent-runtimes?id="+encodeURIComponent(spareCodexId),{method:"DELETE"}).then(r=>r.json());
+    assert.equal(removedActiveSpare.resetTo,"codex-default");assert.equal(removedActiveSpare.selectedInstanceId,"codex-default");assert.equal(removedActiveSpare.bootstrap.agentRuntimeInstanceId,"codex-default");assert.equal(removedActiveSpare.catalog.agentRuntime,"codex");
+    const reselectedCustomCodex=await fetch(gui.url+"/api/agent-runtimes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"select",runtime:"codex",instanceId:customCodexId})}).then(r=>r.json());
+    assert.equal(reselectedCustomCodex.selectedInstanceId,customCodexId);
+    const unavailableClaude=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agentRuntime:"claude",agentRuntimeInstanceId:"claude-default"})});
+    if(unavailableClaude.status===400){
+      const afterRejectedRuntime=await fetch(gui.url+"/api/agent-runtimes").then(r=>r.json());
+      assert.equal(afterRejectedRuntime.selectedRuntime,"codex");assert.equal(afterRejectedRuntime.selectedInstanceId,customCodexId);
+    }
+    const resetCodex=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({agentRuntime:"codex",agentRuntimeInstanceId:"codex-default"})});
+    assert.equal(resetCodex.status,200);
+    const storageBefore=await fetch(gui.url+"/api/storage-cleanup").then(r=>r.json());
+    assert.deepEqual(storageBefore.settings,{attachmentsAfterDays:null,terminalHistoryAfterDays:null});
+    const storageSettings=await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({storageCleanup:{attachmentsAfterDays:7,terminalHistoryAfterDays:30}})}).then(r=>r.json());
+    assert.deepEqual(storageSettings.storageCleanup,{attachmentsAfterDays:7,terminalHistoryAfterDays:30});
+    const storageSweep=await fetch(gui.url+"/api/storage-cleanup",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(r=>r.json());
+    assert.equal(storageSweep.attachments.enabled,true);assert.equal(storageSweep.attachments.removed,0);
+    assert.equal(storageSweep.terminalHistory.enabled,false);
+    const sourceDefaults=await fetch(gui.url+"/api/scoped-settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({environmentId:null,projectId:projectSaved.project.id,patch:{sourceControlMergeMethod:"rebase",sourceControlTextStyle:"repository",sourceControlTextModel:"test/coding-fast"},resetKeys:[]})}).then(r=>r.json());
+    assert.equal(sourceDefaults.effective.sourceControlMergeMethod,"rebase");
+    assert.equal(sourceDefaults.effective.sourceControlTextStyle,"repository");
+    assert.equal(sourceDefaults.effective.sourceControlTextModel,"test/coding-fast");
+    const commitText=await fetch(gui.url+"/api/git/commit-message",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({cwd:projectPath,environmentId:null,model:"test/coding-large"})}).then(r=>r.json());
+    assert.equal(commitText.message,"Mock generated commit");assert.equal(commitText.style,"repository");assert.equal(commitText.model,"test/coding-fast");
+    const reviewText=await fetch(gui.url+"/api/git/review-text",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({cwd:projectPath,environmentId:null,model:"test/coding-large"})}).then(r=>r.json());
+    assert.equal(reviewText.title,"Mock generated review");assert.equal(reviewText.body,"Mock generated description.");assert.equal(reviewText.style,"repository");assert.equal(reviewText.model,"test/coding-fast");
+    const meta=await fetch(gui.url+"/api/thread-meta",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({threadId:"thread-test",patch:{pinned:true}})}).then(r=>r.json());
+    assert.equal(meta.pinned,true);
+    const general=await fetch(gui.url+"/api/general-workspace",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({environmentId:null})}).then(r=>r.json());
+    assert.equal(general.environmentId,null);
+    assert.equal(general.remote,false);
+    assert.equal(general.environmentName,"Local machine");
+    assert.equal((await stat(general.path)).isDirectory(),true);
+    assert.match(general.path,/general$/);
+    await fetch(gui.url+"/api/thread-meta",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({threadId:"thread-branch",patch:{
+      cwd:projectPath,environmentId:null,branch:"feature/x",sectionName:"Active",
+      branchPullRequest:{identity:{provider:"github",host:"github.com",repository:"acme/widget",number:21},number:21,title:"Detected review",state:"OPEN",url:"https://github.com/acme/widget/pull/21",headRefName:"feature/x",baseRefName:"main"},
+      lastBranchPullRequestSyncAt:123,
+    }})});
+    const branchReviews=await fetch(gui.url+"/api/source-control/branch-reviews").then(r=>r.json());
+    const detectedReview=branchReviews.items.find(item=>item.threadId==="thread-branch");
+    assert.equal(detectedReview.branch,"feature/x");assert.equal(detectedReview.review.number,21);assert.equal(detectedReview.lastSyncedAt,123);
+    const linked=await fetch(gui.url+"/api/source-control/thread-link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      action:"link",threadId:"thread-test",refresh:false,source:"manual",pr:{
+        identity:{provider:"github",host:"github.com",repository:"acme/widget",number:17},
+        number:17,title:"Linked review",state:"OPEN",url:"https://github.com/acme/widget/pull/17",headRefName:"feature",baseRefName:"main",
+      },
+    })}).then(r=>r.json());
+    assert.equal(linked.ok,true);assert.equal(linked.links.length,1);assert.equal(linked.link.identity.repository,"acme/widget");
+    const threadLinks=await fetch(gui.url+"/api/source-control/thread-link?threadId=thread-test").then(r=>r.json());
+    assert.equal(threadLinks.links[0].snapshot.title,"Linked review");
+    const reverse=await fetch(gui.url+"/api/source-control/thread-link?host=github.com&repository=acme%2Fwidget&number=17&provider=github").then(r=>r.json());
+    assert.equal(reverse.threads.some(thread=>thread.threadId==="thread-test"),true);
+    const unlinked=await fetch(gui.url+"/api/source-control/thread-link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      action:"unlink",threadId:"thread-test",identity:{provider:"github",host:"github.com",repository:"acme/widget",number:17},
+    })}).then(r=>r.json());
+    assert.equal(unlinked.links.length,0);
+    await fetch(gui.url+"/api/settings",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({autoSettleMergedThreads:true})});
+    await fetch(gui.url+"/api/source-control/thread-link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+      action:"link",threadId:"thread-settle",refresh:false,source:"manual",pr:{
+        identity:{provider:"github",host:"github.com",repository:"acme/widget",number:18},
+        number:18,title:"Finished review",state:"MERGED",url:"https://github.com/acme/widget/pull/18",headRefName:"done",baseRefName:"main",mergedAt:"2026-09-22T10:00:00Z",
+      },
+    })});
+    const syncedTerminal=await fetch(gui.url+"/api/source-control/thread-link",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"sync",threadId:"thread-settle"})}).then(r=>r.json());
+    assert.equal(syncedTerminal.lifecycle.terminal,true);assert.ok(syncedTerminal.pendingSettlement?.signature);
+    const settlements=await fetch(gui.url+"/api/source-control/settlements").then(r=>r.json());
+    assert.equal(settlements.enabled,true);assert.equal(settlements.items.some(item=>item.threadId==="thread-settle"),true);
+
+    for(const retiredRoute of ["/api/login/start","/api/logout"]){
+      const retiredResponse=await fetch(gui.url+retiredRoute,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});
+      assert.equal(retiredResponse.status,404,retiredRoute+" must not remain an API surface");
+      assert.deepEqual(await retiredResponse.json(),{error:"API route not found"});
+    }
+
+    const health=await fetch(gui.url+"/api/health").then(r=>r.json());
+    assert.equal(health.ok,true);
+
+    const retiredDeviceApi=await fetch(gui.url+"/api/devices");
+    assert.equal(retiredDeviceApi.status,404,"retired mobile-device control must not remain an API surface");
+    assert.deepEqual(await retiredDeviceApi.json(),{error:"API route not found"});
+  } finally {
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A Projects card's save names its project. One still on its way when the person removes the project reaches the server after the
+// removal: it is refused, instead of creating the project again as a bare record named after its folder. The removal answers with
+// the record as it removed it, for Undo to put back with every save that reached the server first.
+test("a save that names a removed project is refused instead of adding it again, and a removal answers with the record it removed",async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-gui-projects-"));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:true,env});
+  const post=body=>fetch(gui.url+"/api/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const listed=async path=>(await fetch(gui.url+"/api/projects").then(response=>response.json())).projects.filter(project=>project.path===path);
+  try{
+    const path=join(home,"work","app");
+    const created=(await post({path,name:"App",permissionMode:"edits"}).then(response=>response.json())).project;
+    const saved=await post({id:created.id,path,permissionMode:"supervised"});
+    assert.equal(saved.status,200);assert.equal((await saved.json()).project.permissionMode,"supervised");
+    const removal=await fetch(gui.url+"/api/projects?id="+encodeURIComponent(created.id),{method:"DELETE"}).then(response=>response.json());
+    assert.equal(removal.ok,true);assert.equal(removal.project.id,created.id);
+    assert.equal(removal.project.name,"App");assert.equal(removal.project.permissionMode,"supervised","the record removed has the save that came first");
+    const late=await post({id:created.id,path,permissionMode:"auto"});
+    assert.equal(late.status,404);assert.deepEqual(await late.json(),{error:"Project was not found"});
+    assert.deepEqual(await listed(path),[],"the late save did not add the project again");
+    // A save that names another folder's project changes neither.
+    const other=(await post({path:join(home,"work","other"),name:"Other"}).then(response=>response.json())).project;
+    assert.equal((await post({id:other.id,path,name:"Wrong folder"})).status,404);
+    assert.deepEqual(await listed(path),[]);
+    // A save without an id (a folder opened, Undo putting a project back) adds the project as before.
+    const added=await post({path,name:"App"});
+    assert.equal(added.status,200);const again=(await added.json()).project;assert.notEqual(again.id,created.id);
+    assert.deepEqual((await listed(path)).map(project=>project.name),["App"]);
+    assert.deepEqual(await fetch(gui.url+"/api/projects?id=no-such-project",{method:"DELETE"}).then(response=>response.json()),{ok:true,project:null});
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A project action runs as its terminal's own program, once at a time: running it again while it runs shows the terminal it runs
+// in (a second dev server would only fail on its port), Stop ends it and keeps its terminal as stopped history, and the next run
+// starts it afresh. Its command keeps its double quotes.
+test("a project action runs once at a time in its own terminal, and Stop ends it and keeps its output",{timeout:60000},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-project-action-runs-")),projectPath=join(home,"app");await mkdir(projectPath,{recursive:true});
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const state=new TrebellStateStore(env);state.updateSettings({agentRuntime:"native",agentRuntimeInstanceId:"native-default",modelProvider:"openai",onboardingComplete:true});state.close?.();
+  const fetchFn=async input=>{throw new Error("Unexpected external request: "+String(input?.url||input))};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env,fetchFn});
+  const post=(path,body)=>fetch(gui.url+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json());
+  const runs=()=>fetch(gui.url+"/api/project-script/runs?path="+encodeURIComponent(projectPath)).then(r=>r.json()).then(r=>r.runs);
+  const sessionOf=async id=>(await fetch(gui.url+"/api/terminal/sessions").then(r=>r.json())).sessions.find(session=>session.id===id);
+  try{
+    await post("/api/projects",{path:projectPath,scripts:[{id:"dev",name:"Dev server",command:`node -e "console.log('dev server ready');setInterval(()=>{},1000)"`}]});
+    const first=await post("/api/project-script/run",{path:projectPath,scriptId:"dev"});
+    assert.equal(first.ok,true);assert.equal(first.session.running,true);assert.equal(first.alreadyRunning,undefined);
+    const again=await post("/api/project-script/run",{path:projectPath,scriptId:"dev"});
+    assert.equal(again.alreadyRunning,true,"a second run while it runs starts nothing");
+    assert.equal(again.session.id,first.session.id,"and names the terminal it runs in");
+    assert.equal((await fetch(gui.url+"/api/terminal/sessions").then(r=>r.json())).sessions.length,1,"one terminal");
+    assert.deepEqual(await runs(),{dev:first.session.id});
+    for(let wait=0;wait<100&&!(await sessionOf(first.session.id))?.buffer?.includes("dev server ready");wait++)await new Promise(resolve=>setTimeout(resolve,100));
+    assert.match((await sessionOf(first.session.id)).buffer,/dev server ready/,"the command ran as written, quotes and all");
+    const stopped=await post("/api/project-script/stop",{path:projectPath,scriptId:"dev"});
+    assert.equal(stopped.ok,true);assert.equal(stopped.session.id,first.session.id);assert.equal(stopped.session.running,false);
+    const history=await sessionOf(first.session.id);
+    assert.equal(history.running,false,"its terminal stays, stopped");assert.match(history.buffer,/dev server ready/,"with its output");
+    assert.deepEqual(await runs(),{});
+    const next=await post("/api/project-script/run",{path:projectPath,scriptId:"dev"});
+    assert.equal(next.session.running,true);assert.notEqual(next.session.id,first.session.id,"the next run starts it afresh");
+    assert.equal((await post("/api/project-script/stop",{path:projectPath,scriptId:"dev"})).session.running,false);
+  }finally{
+    await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});
+
+// A tray Quit and Restart & install close the GUI server while the window is still open (desktop/main.mjs before-quit and
+// beforeInstall), and the HTTP server's close waits for every socket on it. It waited for good on one nobody ends: the terminal
+// drawer's, or an upgrade no socket server takes, as the drawer's is when it opens again after the terminals' socket server has closed.
+// The app then stayed running, hidden and without its tray icon, and an install never started its installer. The close is given
+// UNDER_LOAD_MS, as the desktop's tray-Quit test gives it a minute: it also stops the agent relay and the live terminal, whose worker
+// may take 15 s for each of its kill and shutdown calls on a busy machine, and one that never ends fails it however long it is given.
+test("the GUI server's close finishes with the terminal drawer's socket open and an upgrade nobody answers, as a tray Quit or an install closes it",{timeout:150_000},async()=>{
+  const home=await mkdtemp(join(tmpdir(),"trebell-close-with-terminal-"));
+  await writeFile(join(home,"ui-state.json"),JSON.stringify({settings:{agentRuntime:"native",agentRuntimeInstanceId:"native-default",onboardingComplete:true}}));
+  const env={...process.env,TREBELL_HOME:home,TREBELL_HISTORY_DISABLE_CLAUDE:"1",OPENAI_API_KEY:"",ANTHROPIC_API_KEY:"",GEMINI_API_KEY:"",GOOGLE_API_KEY:""};
+  const [port,appPort]=await Promise.all([freePort(),freePort()]);
+  const gui=await createGuiServer({port,appPort,mock:false,env});
+  // The server's own ends of the sockets, so that a close still waiting when the test ends can be let go.
+  const serverSockets=new Set();let upgraded=false;
+  gui.server.on("connection",socket=>serverSockets.add(socket));gui.server.on("upgrade",req=>{if(String(req.url).startsWith("/api/no-such/"))upgraded=true});
+  let drawer=null,held=null,closing=null;
+  try{
+    // Create terminal, and the drawer's socket on it.
+    const created=await fetch(gui.url+"/api/terminal/sessions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({cwd:home,cols:120,rows:32,name:"Terminal"})}).then(r=>r.json());
+    assert.equal(created.session?.running,true,JSON.stringify(created));
+    drawer=new WebSocket(gui.url.replace(/^http/,"ws")+"/api/terminal/ws?session="+encodeURIComponent(created.session.id));
+    assert.equal(await new Promise((resolve,reject)=>{drawer.once("message",raw=>resolve(JSON.parse(String(raw)).type));drawer.once("error",reject)}),"snapshot","the drawer's socket is open on its terminal");
+    const drawerClosed=new Promise(resolve=>drawer.once("close",resolve));
+    held=connect(port,"127.0.0.1");held.on("error",()=>{});await new Promise(resolve=>held.once("connect",resolve));
+    held.write(`GET /api/no-such/ws HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`); // gitleaks:allow -- Public RFC 6455 example nonce, not a credential.
+    await until(()=>upgraded,"the server has the upgrade",10_000);
+    closing=gui.close();
+    let bound=null;const overdue=new Promise(resolve=>{bound=setTimeout(()=>resolve(`still closing after ${UNDER_LOAD_MS/1000} s`),UNDER_LOAD_MS)});
+    assert.equal(await Promise.race([closing.then(()=>"closed"),overdue]).finally(()=>clearTimeout(bound)),"closed","the close finishes");
+    await drawerClosed;
+  }finally{
+    drawer?.terminate();held?.destroy();
+    if(closing){for(const socket of serverSockets)socket.destroy();await closing}else await gui.close();
+    await rm(home,{recursive:true,force:true,maxRetries:30,retryDelay:100});
+  }
+});

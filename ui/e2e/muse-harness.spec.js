@@ -1,0 +1,315 @@
+import { test,expect } from "@playwright/test";
+import { mkdirSync } from "node:fs";
+import { chmod,mkdir,mkdtemp,readFile,rm,writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import spawn from "cross-spawn";
+import { attachAgentRelay } from "../../src/agent-relay.mjs";
+import { AgentRuntimeManager } from "../../src/agent-runtime-manager.mjs";
+import { AgentThreadStore } from "../../src/agent-thread-store.mjs";
+import { interactiveTerminalCommand } from "../../src/terminal-command.mjs";
+import { keepThreadMeta } from "./test-home.js";
+
+// Muse Code as a person meets it in Trebell: Settings' Agents & models lists it with its version and signs in with Muse's own
+// `muse login` in a terminal, and the composer lists Muse's models with the Thinking levels each offers, runs a turn on the model and
+// level picked, and names Muse Code in the sidebar. A host that fails refuses a message once in Muse's own words, and one that exits
+// between turns says so after the last reply. Behind the page run the real agent relay and runtime manager, on a stand-in Muse
+// Code (tests/fixtures/muse/fake-muse.cjs) laid out as Meta's installer lays Muse out; the app's own endpoints answer from them.
+const auditDir=fileURLToPath(new URL("../../visual-audit/muse-harness/",import.meta.url));mkdirSync(auditDir,{recursive:true});
+const FAKE_MUSE=fileURLToPath(new URL("../../tests/fixtures/muse/fake-muse.cjs",import.meta.url));
+const MODEL_LIST=fileURLToPath(new URL("../../tests/fixtures/muse/model-list-1.4.13.json",import.meta.url));
+const windows=process.platform==="win32";
+const json=(route,value)=>route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(value)});
+async function freePort(){const server=createServer();await new Promise((resolve,reject)=>server.listen(0,"127.0.0.1",resolve).once("error",reject));const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port}
+
+// The status checks run the stand-in only: every other harness answers as not installed, so nothing installed here is started.
+function onlyMuse(launcher){
+  return (command,args=[],{env,cwd,timeoutMs=6000}={})=>new Promise(resolve=>{
+    if(command!==launcher)return resolve({ok:false,code:null,error:`spawn ${command} ENOENT`,stdout:"",stderr:""});
+    const child=spawn(command,args,{env,cwd,windowsHide:true,stdio:["ignore","pipe","pipe"]});let stdout="",stderr="";
+    child.stdout.on("data",chunk=>{stdout+=chunk});child.stderr.on("data",chunk=>{stderr+=chunk});
+    const timer=setTimeout(()=>child.kill(),timeoutMs);
+    child.once("error",error=>{clearTimeout(timer);resolve({ok:false,code:null,error:error.message,stdout,stderr})});
+    child.once("close",code=>{clearTimeout(timer);resolve({ok:code===0,code,error:null,stdout,stderr})});
+  });
+}
+
+// Nothing a test of this file runs leaves this machine, as the GUI server's offline E2E fetch keeps it: while a harness is up, a
+// request the global fetch would send anywhere but here is refused and recorded, and its close fails the test that made it.
+function offlineGlobalFetch(){
+  const ownFetch=globalThis.fetch,external=[];
+  globalThis.fetch=async(input,init)=>{
+    const url=String(input?.url||input);
+    if(/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?:[:/]|$)/i.test(url))return ownFetch(input,init);
+    external.push(url);throw new Error("Offline E2E blocked a request leaving this machine: "+url);
+  };
+  return {external,restore(){globalThis.fetch=ownFetch;if(external.length)throw new Error("Requests left this machine: "+external.join(", "))}};
+}
+
+// failing: while the file it names is there (from the start with serveFails), the stand-in's host exits as Muse does with a
+// malformed settings file.
+async function startMuseHarness({serveFails=false}={}){
+  const offline=offlineGlobalFetch();
+  const root=await mkdtemp(join(tmpdir(),"trebell-muse-e2e-")),repo=join(root,"muse-repo"),log=join(root,"muse.log");await mkdir(repo,{recursive:true});
+  const failing=join(root,"serve-fails");if(serveFails)await writeFile(failing,"3");
+  const folder=windows?join(root,"AppData","Local","Programs","muse"):join(root,"home",".local","bin");await mkdir(folder,{recursive:true});
+  const launcher=join(folder,windows?"muse.cmd":"muse");
+  await writeFile(launcher,windows?`@echo off\r\nsetlocal\r\n"${process.execPath}" "${FAKE_MUSE}" %*\r\nexit /b %ERRORLEVEL%\r\n`:`#!/bin/sh\nexec "${process.execPath}" "${FAKE_MUSE}" "$@"\n`);
+  if(!windows)await chmod(launcher,0o755);
+  const settings={agentRuntime:"muse",agentRuntimeInstanceId:"muse-default",activeEnvironmentId:null,agentRuntimeInstances:[{id:"muse-default",kind:"muse",displayName:"Muse Code",enabled:true,binaryPath:null,environment:{MUSE_FAKE_LOG:log,MUSE_FAKE_MODELS:MODEL_LIST,MUSE_FAKE_SERVE_FAIL:failing}}]},meta=new Map();
+  const state={settings:()=>settings,updateSettings:patch=>Object.assign(settings,patch),threadMeta:id=>meta.get(id)||{},updateThreadMeta:(id,patch)=>{const next={...(meta.get(id)||{}),...patch};meta.set(id,next);return next}};
+  const env={...process.env,TREBELL_HOME:join(root,"trebell"),CODEX_HOME:join(root,"codex"),CLAUDE_CONFIG_DIR:join(root,"claude"),MUSE_INSTALL_DIR:"",...(windows?{LOCALAPPDATA:join(root,"AppData","Local")}:{HOME:join(root,"home")})};
+  // Meta's channel manifest is not read from here: the update reading of Settings' listings finds it unavailable.
+  const fetchImpl=async()=>new Response("unavailable",{status:503});
+  const runtimeManager=new AgentRuntimeManager({state,env,runFn:onlyMuse(launcher),fetchImpl}),threadStore=new AgentThreadStore(env);
+  const relayServer=createServer((_req,res)=>{res.writeHead(404);res.end()});
+  const relay=attachAgentRelay(relayServer,{runtimeManager,threadStore,terminals:{},state,version:"muse-e2e-fixture"});
+  const relayPort=await freePort();await new Promise((resolve,reject)=>relayServer.listen(relayPort,"127.0.0.1",resolve).once("error",reject));
+  const entries=async()=>(await readFile(log,"utf8").catch(()=>"")).split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
+  const frames=async method=>(await entries()).filter(entry=>entry.frame?.method===method).map(entry=>entry.frame);
+  // Every `muse serve` started: a session's host, and the read-only one that lists the models.
+  const serves=async()=>(await entries()).filter(entry=>entry.start?.[0]==="serve");
+  return {
+    root,repo,launcher,failing,runtimeManager,threadStore,frames,serves,wsUrl:`ws://127.0.0.1:${relayPort}/api/agent/ws`,
+    async close(){try{await relay.close();await new Promise(resolve=>relayServer.close(()=>resolve()));threadStore.close?.();await rm(root,{recursive:true,force:true,maxRetries:20,retryDelay:100})}finally{offline.restore()}},
+  };
+}
+
+// The app's endpoints for a window on Muse Code, answered from the harness's runtime manager as the GUI server answers them.
+// signIns lists the sign-ins the page asks for; the sign-in terminal shows the command Trebell types into it.
+async function routeMuseApp(page,harness){
+  const manager=harness.runtimeManager,status=await manager.probe("muse",{fresh:true}),listed=await manager.models("muse");
+  const project={id:"muse-project",name:"Muse Project",path:harness.repo,environmentId:null,effectiveSettings:{}},signIns=[],terminals=[];
+  const settings={onboardingComplete:true,appearance:"dark",appearanceMode:"dark",panelAnimationMs:0,agentRuntime:"muse",agentRuntimeInstanceId:"muse-default",modelProvider:"openai",defaultPermissionMode:"supervised",defaultWorkspaceMode:"current",followUpMode:"queue"};
+  await keepThreadMeta(page);
+  await page.route(/\/api\/bootstrap$/,route=>json(route,{mock:false,agentRuntime:"muse",agentRuntimeInstanceId:"muse-default",runtimeCapabilities:manager.capabilities("muse"),agentRuntimeReady:true,agentRuntimeStatus:status,provider:"openai",providerReady:true,appServerReady:true,wsUrl:harness.wsUrl,cwd:harness.repo,platform:process.platform,version:"muse-e2e-fixture",activeEnvironment:null,activeEnvironmentId:null}));
+  // Settings' poll, which the GUI server answers with a status check of the harness in use.
+  await page.route(/\/api\/runtime$/,async route=>json(route,{agentRuntime:"muse",agentRuntimeInstanceId:"muse-default",agentRuntimeStatus:await manager.probe("muse"),provider:"openai",providerReady:true,appServerReady:true,appServerExitCode:null,activeEnvironment:null,appServerError:null,logs:[]}));
+  await page.route(/\/api\/state$/,route=>json(route,{settings,projects:[project],activeProjectId:project.id,threadMeta:{}}));
+  await page.route(/\/api\/settings$/,route=>route.request().method()==="POST"?json(route,Object.assign(settings,route.request().postDataJSON()||{})):json(route,settings));
+  await page.route(/\/api\/models$/,route=>json(route,{agentRuntime:"muse",ready:true,models:listed.models,defaultModel:listed.preferred||null,metadata:{provider:"muse",agentRuntime:"muse",source:listed.source,models:listed.metadata},error:listed.error||null}));
+  // As the GUI server answers: its own listing (Settings' open and Refresh) reads Muse Code's list again.
+  await page.route(/\/api\/agent-runtimes$/,async route=>json(route,await manager.snapshot(route.request().method()==="GET"?{refresh:true}:{})));
+  await page.route(/\/api\/agent-runtime-auth$/,route=>{
+    const body=route.request().postDataJSON()||{};signIns.push(body);
+    const {prelude,...auth}=manager.authCommand(body.instanceId||body.runtime,{action:"login"});
+    const session={id:"muse-sign-in",name:auth.name+" sign in",cwd:body.cwd||harness.repo,environmentId:null,environmentName:"Local machine",environmentType:"local",cols:120,rows:32,running:true,exitCode:null,createdAt:Date.now(),updatedAt:Date.now(),buffer:""};
+    terminals.push({session,typed:interactiveTerminalCommand(auth.command,auth.args)});
+    return json(route,{ok:true,auth,session});
+  });
+  await page.route(/\/api\/terminal\/sessions(?:\?.*)?$/,route=>route.request().method()==="GET"?json(route,{sessions:terminals.map(item=>item.session)}):route.fallback());
+  await page.route(/\/api\/project-script\/runs(?:\?.*)?$/,route=>json(route,{runs:{}}));
+  await page.routeWebSocket(/\/api\/terminal\/ws\?/,ws=>{
+    const url=new URL(ws.url()),found=terminals.find(item=>item.session.id===url.searchParams.get("session"));
+    if(url.searchParams.get("watch")==="1"){ws.send(JSON.stringify({type:"state",running:Boolean(found),exitCode:null}));return}
+    ws.send(JSON.stringify({type:"snapshot",session:{...(found?.session||{}),buffer:found?`${harness.repo}>${found.typed}\r\n`:""}}));
+  });
+  await page.route(/\/api\/projects(?:\?.*)?$/,route=>json(route,route.request().method()==="POST"?{project}:{projects:[project]}));
+  await page.route(/\/api\/worktree\/ensure$/,route=>json(route,{ok:true}));
+  await page.route(/\/api\/git\/info(?:\?.*)?$/,route=>json(route,{isGit:false,cwd:harness.repo,root:null,branch:null,branches:[],status:[],remotes:[],worktrees:[]}));
+  await page.route(/\/api\/checkpoints(?:\?.*)?$/,route=>json(route,route.request().method()==="POST"?{id:"muse-checkpoint-"+Date.now(),threadId:null}:{checkpoints:[]}));
+  await page.route(/\/api\/checkpoints\/link$/,route=>json(route,{ok:true}));
+  await page.route(/\/api\/context\/packet$/,route=>json(route,{id:"muse-context",skipped:true,budget:{reserveTokens:1024}}));
+  await page.route(/\/api\/verification\/plan-turn$/,route=>json(route,{supported:false}));
+  await page.route(/\/api\/recovery$/,route=>json(route,{enabled:false,items:[]}));
+  await page.route(/\/api\/environment\/themes$/,route=>json(route,{environmentKey:"local",environmentName:"Local machine",directory:"",themes:[]}));
+  await page.addInitScript(()=>localStorage.setItem("trebell-layout-v1",JSON.stringify({sidebarWidth:258,rightPanelWidth:460,terminalHeight:330})));
+  return {status,listed,signIns};
+}
+async function switchMode(page,mode){
+  const html=page.locator("html");if(await html.getAttribute("data-mode")===mode)return;
+  await page.getByTestId("appearance-toggle").first().click();await expect(html).toHaveAttribute("data-mode",mode);
+}
+async function type(page,text){await page.getByTestId("composer").click();await page.keyboard.type(text)}
+// Waits up to ms for check() to hold, and says whether it did.
+async function within(check,ms){const end=Date.now()+ms;while(!(await check())){if(Date.now()>end)return false;await new Promise(done=>setTimeout(done,50))}return true}
+const reply=(page,text)=>page.locator(".history-assistant").filter({hasText:text});
+// Where a row reads on screen, top to bottom, and the activity card a step is listed in.
+const edges=locator=>locator.evaluate(node=>{const box=node.getBoundingClientRect();return {top:Math.round(box.top),bottom:Math.round(box.bottom)}});
+const cardOf=step=>step.locator("xpath=ancestor::*[@data-testid='activity-card'][1]");
+
+test("Settings lists Muse Code with its version, and Sign in opens a Trebell terminal running Muse Code's own `muse login`",async({page})=>{
+  test.setTimeout(60_000);
+  const harness=await startMuseHarness();
+  try{
+    const {status,signIns}=await routeMuseApp(page,harness);
+    expect(status.version).toBe("1.4.13-R6996.1");
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"Settings",exact:true}).click();
+    await page.getByRole("button",{name:/Agents & models/}).click();
+    const row=page.locator(".agent-runtime-option").filter({hasText:"Muse Code"});
+    await expect(row).toHaveCount(1);
+    await expect(row.locator("small")).toHaveText("1.4.13-R6996.1");
+    await expect(row.getByText("Active",{exact:true})).toBeVisible();
+    await expect(page.locator(".agent-runtime-settings")).toContainText("Antigravity and Muse Code run as their real harnesses");
+    // Muse Code does not say whether it is signed in (its turns do), so it offers Sign in; Trebell does not install it.
+    await expect(row.getByRole("button",{name:"Sign in",exact:true})).toBeVisible();
+    await expect(row.getByRole("button",{name:/^(Install|Update)$/})).toHaveCount(0);
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await row.scrollIntoViewIfNeeded();await page.screenshot({animations:"disabled",path:auditDir+`settings-muse-row-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    await row.getByRole("button",{name:"Sign in",exact:true}).click();
+    await expect.poll(()=>signIns.length).toBe(1);
+    expect(signIns[0]).toMatchObject({action:"login",runtime:"muse",instanceId:"muse-default"});
+    const drawer=page.getByTestId("drawer"),screen=drawer.locator(".terminal-pane.active .terminal-screen");
+    await expect(drawer.locator(".terminal-tab")).toHaveCount(1);
+    await expect(drawer.locator(".terminal-tab")).toContainText("Muse Code sign in");
+    await expect(screen).toContainText(harness.launcher);
+    await expect(screen).toContainText(/muse(\.cmd)?"? login\s*$/);
+    // The terminal comes up over the workspace, where the sign-in goes on in Muse Code's own words.
+    await expect(page.getByRole("button",{name:"Muse Code sign in",exact:true})).toBeVisible();
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`settings-muse-sign-in-terminal-${mode}-1280x800.png`})}
+  }finally{await harness.close()}
+});
+
+test("Settings says Muse Code could not list its models and to press Refresh, and Refresh lists them once Muse Code works again",async({page})=>{
+  test.setTimeout(60_000);
+  const harness=await startMuseHarness({serveFails:true});
+  try{
+    await routeMuseApp(page,harness);
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"Settings",exact:true}).click();
+    await page.getByRole("button",{name:/Agents & models/}).click();
+    const status=page.locator(".agent-runtime-settings > p").filter({has:page.getByRole("button",{name:"Refresh"})});
+    await expect(status).toHaveClass(/provider-status-error/);
+    await expect(status).toContainText(/Muse Code · Muse Code could not list its models: Muse Code could not load its settings; check ~\/\.config\/muse\/settings\.json \(exit code 3\): .*malformed settings file.*\. Press Refresh to check it again\./);
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await status.scrollIntoViewIfNeeded();await page.screenshot({animations:"disabled",path:auditDir+`settings-muse-list-failed-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    // Muse Code works again (its settings mended outside Trebell), and the person presses Refresh.
+    await rm(harness.failing);
+    await status.getByRole("button",{name:"Refresh"}).click();
+    await expect(status).toHaveClass(/provider-note/);
+    await expect(status).toContainText("Muse Code · Muse Code checks its sign-in when a turn runs. Sign in with muse login if a turn says it is signed out.");
+    await expect(page.locator(".agent-runtime-option").filter({hasText:"Muse Code"}).locator("small")).toHaveText("1.4.13-R6996.1");
+    // Settings' next poll finds Muse Code ready too: its status checks read the list Refresh read.
+    await expect(page.locator(".settings-card").filter({hasText:"Harness connection:"})).toContainText("Agent runtime: ready",{timeout:15_000});
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await status.scrollIntoViewIfNeeded();await page.screenshot({animations:"disabled",path:auditDir+`settings-muse-list-refreshed-${mode}-1280x800.png`})}
+  }finally{await harness.close()}
+});
+
+// The conversation has no Refresh (Settings' is in Agents & models): a send checks Muse Code itself, and its refusal says Muse's
+// failure once, so once Muse Code works again the next message goes, within the minute Settings' polls keep a failed check.
+test("a message sent while Muse Code's host fails is not sent, saying why once in Muse's own words, and once Muse Code works again the next message goes",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await startMuseHarness();
+  try{
+    // Settings' check listed the models while Muse Code worked; then its host fails as Muse does with a malformed settings file.
+    await routeMuseApp(page,harness);
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    await expect(page.locator(".sidebar-provider strong")).toHaveText("Muse Code");
+    await writeFile(harness.failing,"3");
+    const failure="Muse Code could not load its settings; check ~/.config/muse/settings.json (exit code 3): load settings for serve composition: malformed settings file at ~/.config/muse/settings.json";
+    const composer=page.getByTestId("composer"),alert=page.getByTestId("composer-alert");
+    await type(page,"First try while Muse is broken");await page.keyboard.press("Enter");
+    await expect(alert).toContainText("Not sent:",{timeout:20_000});
+    await expect.soft(alert,"Muse's failure once, with no Refresh to press").toHaveText(`Not sent: ${failure}. Your draft is kept.`);
+    await expect(composer).toHaveValue("First try while Muse is broken");
+    // All of it shows in a narrow window too.
+    await page.setViewportSize({width:900,height:800});
+    expect.soft(await alert.evaluate(node=>node.scrollHeight<=node.clientHeight),"nothing of the refusal scrolls out of its alert at 900 wide").toBe(true);
+    for(const [width,mode] of [[1280,"dark"],[1280,"light"],[900,"dark"],[900,"light"]]){await page.setViewportSize({width,height:800});await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`composer-muse-host-failed-${mode}-${width}x800.png`})}
+    await switchMode(page,"dark");await page.setViewportSize({width:1280,height:800});
+    // Sent again with the Send button while Muse Code still fails: the send asks Muse Code again, and says so once. The send takes
+    // the draft from the composer, and its refusal gives it back.
+    const asked=(await harness.serves()).length;
+    await page.getByTestId("send").click();
+    expect.soft(await within(async()=>(await harness.serves()).length>asked,10_000),"the send asked Muse Code again").toBe(true);
+    await expect(composer).toHaveValue("First try while Muse is broken",{timeout:20_000});
+    await expect.soft(alert,"the same failure, once, with no Refresh to press").toHaveText(`Not sent: ${failure}. Your draft is kept.`);
+    // Muse Code works again (its settings mended outside Trebell), and the person presses Enter: the message goes.
+    await rm(harness.failing);
+    await composer.click();await page.keyboard.press("Enter");
+    await expect(reply(page,"Muse fixture reply"),"the next message goes once Muse Code works again").toBeVisible({timeout:20_000});
+    await expect(alert).toHaveCount(0);
+  }finally{await harness.close()}
+});
+
+test("the composer lists Muse Code's models and the Thinking levels each offers, a turn runs on the model and level picked, and the sidebar names Muse Code",async({page})=>{
+  test.setTimeout(60_000);
+  const harness=await startMuseHarness();
+  try{
+    await routeMuseApp(page,harness);
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    await expect(page.locator(".sidebar-provider strong")).toHaveText("Muse Code");
+    const picker=page.getByTestId("model-picker"),thinking=page.getByTestId("reasoning-effort-picker");
+    await expect(picker).toContainText("Muse Spark 1.2","a new chat starts on Muse's own default model");
+    await picker.click();
+    const menu=page.locator(".model-picker-menu");
+    // Muse's own list, by the names it gives (its label, else a bare muse-* id title-cased), each row naming Muse Code; the local
+    // provider's row and the second muse-spark-1.3 row are left out.
+    await expect(menu.locator("button strong")).toHaveText(["Wonder 1.0 Preview","Muse Spark 1.3","Muse Spark 1.2","Muse Spark 1.3 Contributor"]);
+    await expect(menu.locator("button").first()).toContainText("Muse Code");
+    await expect(menu).not.toContainText("Local coder");
+    for(const mode of ["dark","light"]){await switchMode(page,mode);if(!await menu.isVisible())await picker.click();await page.screenshot({animations:"disabled",path:auditDir+`composer-muse-models-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    if(!await menu.isVisible())await picker.click();
+    await menu.getByRole("button",{name:/Wonder 1\.0 Preview/}).click();
+    await expect(picker).toContainText("Wonder 1.0 Preview");
+    // Wonder's own levels, Minimal to Max; None, which Meta's provider refuses, is not one.
+    await expect(thinking.locator("option")).toHaveText(["Thinking · Default","Thinking · Minimal","Thinking · Low","Thinking · Medium","Thinking · High","Thinking · Extra high","Thinking · Max"]);
+    await thinking.selectOption({label:"Thinking · Extra high"});
+    await expect(thinking).toHaveValue("xhigh");
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`composer-muse-thinking-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    const composer=page.getByTestId("composer");
+    await composer.click();await page.keyboard.type("Hello Muse");await page.keyboard.press("Enter");
+    await expect(page.getByText("Muse fixture reply on muse-wonder-1.0 at xhigh effort.")).toBeVisible({timeout:20_000});
+    const [start]=await harness.frames("session/start"),[turn]=await harness.frames("turn/start");
+    expect([start.params.modelId,start.params.providerId]).toEqual(["muse-wonder-1.0","meta"]);
+    expect(turn.params.reasoningEffort).toBe("xhigh");
+    // The contributor model lists Low to High: its levels replace Wonder's, and the next turn goes there with session/setModel.
+    await picker.click();await menu.getByRole("button",{name:/Muse Spark 1\.3 Contributor/}).click();
+    await expect(thinking.locator("option")).toHaveText(["Thinking · Default","Thinking · Low","Thinking · Medium","Thinking · High"]);
+    await thinking.selectOption({label:"Thinking · High"});
+    await composer.click();await page.keyboard.type("And again");await page.keyboard.press("Enter");
+    await expect(page.getByText("Muse fixture reply on muse-spark-1.3-contributor at high effort.")).toBeVisible({timeout:20_000});
+    expect((await harness.frames("session/setModel")).map(frame=>frame.params.model)).toEqual([{modelId:"muse-spark-1.3-contributor",providerId:"meta"}]);
+    await expect(page.locator(".sidebar-provider strong")).toHaveText("Muse Code");
+    await expect(page.locator(".thread-row.active")).toContainText("muse-spark-1.3-contributor");
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await page.screenshot({animations:"disabled",path:auditDir+`muse-thread-reply-${mode}-1280x800.png`})}
+  }finally{await harness.close()}
+});
+
+// A host that exits between turns fails no turn: the window says so below the last reply, in no turn's card, with what the next
+// message does, and the turn it had finished keeps its card as it was; the next message starts Muse Code again on the conversation.
+test("a Muse Code host that exits between turns says so below the last reply with what the next message does, and the turn it had finished keeps its card as it was",async({page})=>{
+  test.setTimeout(90_000);
+  const harness=await startMuseHarness();
+  try{
+    await routeMuseApp(page,harness);
+    await page.setViewportSize({width:1280,height:800});
+    await page.goto("/");
+    // The stand-in replies, completes the turn and exits 300 ms later, as a Muse that crashed between turns (fake-muse.cjs).
+    await type(page,"Reply, then exit when idle");await page.keyboard.press("Enter");
+    const answer=reply(page,"Muse fixture reply");
+    await expect(answer).toBeVisible({timeout:20_000});
+    const exited=page.locator(".tool-event").filter({hasText:"Muse Code exited unexpectedly (code 1): panic: the model stream went away"});
+    await expect(exited).toHaveCount(1,{timeout:20_000});
+    // The finished turn's card lists its own step, the repository context its message was sent with, and nothing failed.
+    const card=page.locator("[data-testid=activity-card]").filter({hasText:"Trebell context skipped"});
+    await expect(card).toHaveCount(1);
+    const placed=async()=>{
+      await expect.soft(card,"the finished turn's card does not list the exit").not.toContainText("exited unexpectedly");
+      await expect.soft(card.locator(".activity-card-failed"),"the finished turn's card says nothing failed").toHaveCount(0);
+      const [{top},{bottom}]=await Promise.all([edges(cardOf(exited)),edges(answer)]);
+      expect.soft(top,"the exit's card reads below the finished turn's reply").toBeGreaterThanOrEqual(bottom);
+    };
+    await placed();
+    await expect.soft(exited.locator("summary strong"),"what happened, and what the next message does").toHaveText("Muse Code exited unexpectedly (code 1): panic: the model stream went away. The next message starts Muse Code again.");
+    for(const mode of ["dark","light"]){await switchMode(page,mode);await exited.scrollIntoViewIfNeeded();await page.screenshot({animations:"disabled",path:auditDir+`muse-host-exited-between-turns-${mode}-1280x800.png`})}
+    await switchMode(page,"dark");
+    // In a narrow window too.
+    await page.setViewportSize({width:700,height:800});await placed();await page.setViewportSize({width:1280,height:800});
+    // The next message starts Muse Code again, which resumes the conversation, and the notice goes with the gap it was about.
+    await type(page,"One more message after the crash");await page.keyboard.press("Enter");
+    await expect(answer).toHaveCount(2,{timeout:20_000});
+    expect((await harness.frames("session/resume")).length,"the new host resumed the conversation").toBe(1);
+    await expect(exited).toHaveCount(0);
+    await expect(page.locator(".activity-card-failed"),"no turn failed").toHaveCount(0);
+  }finally{await harness.close()}
+});

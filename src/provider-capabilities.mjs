@@ -1,0 +1,106 @@
+const STATUS=new Set(["supported","unsupported","unverified"]);
+
+function feature(status,reason){
+  const value=STATUS.has(status)?status:"unverified";
+  return Object.freeze({status:value,reason:String(reason||"").slice(0,500)});
+}
+
+const PROXY_UNVERIFIED="The configured Trebell provider is a third-party compatibility endpoint; upstream API features are not assumed to survive the proxy without provider documentation or a live Trebell verification.";
+
+const COMMON_PROXY=Object.freeze({
+  promptCaching:feature("unverified",PROXY_UNVERIFIED),
+  explicitCacheControl:feature("unverified",PROXY_UNVERIFIED),
+  previousResponseContinuation:feature("unverified",PROXY_UNVERIFIED),
+  persistentConnection:feature("unverified",PROXY_UNVERIFIED),
+  nativeCompaction:feature("unverified",PROXY_UNVERIFIED),
+  parallelToolCalls:feature("unverified","Trebell can request parallel tool calls, but provider/model behavior must be verified per route."),
+  cacheUsageBreakdown:feature("supported","Trebell normalizes cache read/write fields when the provider returns them; absence of fields or zero values is not treated as a cache hit."),
+});
+
+const CAPABILITIES=Object.freeze({
+  openai:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("supported","The direct OpenAI Responses route keeps a deterministic prompt_cache_key for the reusable model/instruction/tool/parallel-tool prefix rather than user-task text; Trebell records returned cache usage and same-session cache diagnostics when the model supports them."),
+    explicitCacheControl:feature("supported","For GPT-5.6 and later, Trebell keeps implicit caching enabled and adds explicit cache breakpoints to provider-visible tool results so growing agent prefixes can be reused; earlier models keep their legacy cache behavior."),
+    previousResponseContinuation:feature("supported","Trebell keeps its own durable conversation state and, within a live ProviderManager process, may additionally send previous_response_id only when the current full provider-visible history exactly matches the locally fingerprinted prior request + prior response prefix. Missing or rewritten state falls back to a full request."),
+    persistentConnection:feature("supported","Official OpenAI Native turns with a stable Trebell session ID can use one multiplexed Responses WebSocket with per-session stream IDs. Trebell automatically replays over HTTPS only for failures proven to happen before response.create was sent; uncertain post-send failures fail closed to avoid duplicate provider work. Transient transport failures use a cooldown before a later independent turn probes a fresh socket, while protocol corruption disables the socket path for the process. Live-provider verification is tracked separately from local support."),
+    nativeCompaction:feature("unsupported","Trebell Native owns compaction rather than delegating it to the OpenAI API."),
+  }),
+  anthropic:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("supported","Trebell's direct Anthropic Messages route enables Anthropic automatic prompt caching with top-level cache_control and records returned cache-read/write usage."),
+    explicitCacheControl:feature("supported","The direct Anthropic Messages route emits cache_control with an ephemeral automatic breakpoint; compatible proxy routes are not assumed to support it."),
+    previousResponseContinuation:feature("unsupported","Trebell Native carries the conversation explicitly through Messages API turns."),
+    persistentConnection:feature("unsupported","The current Trebell Native Anthropic integration uses HTTPS Messages requests."),
+    nativeCompaction:feature("unsupported","Trebell Native owns compaction for direct Anthropic API sessions."),
+  }),
+  gemini:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("unverified","The direct Gemini route currently uses Google's OpenAI-compatibility API; Trebell does not assume Gemini cache behavior without measured returned usage."),
+    explicitCacheControl:feature("unsupported","Trebell does not currently map Gemini cached_content controls through the compatibility route."),
+    previousResponseContinuation:feature("unsupported","Trebell Native carries conversation state explicitly through Chat Completions-compatible requests."),
+    persistentConnection:feature("unsupported","The current Trebell Native Gemini integration uses HTTPS Chat Completions requests."),
+    nativeCompaction:feature("unsupported","Trebell Native owns compaction for direct Gemini API sessions."),
+  }),
+  xai:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("unverified","xAI caches repeated prompt prefixes and routes requests that share a prompt_cache_key together; Trebell sends a stable key per model, instructions and tools and records returned cached tokens, but has not measured cache hits live."),
+    explicitCacheControl:feature("unsupported","Trebell sends no explicit cache breakpoints to the xAI Responses API."),
+    previousResponseContinuation:feature("unsupported","Trebell Native sends the whole conversation with store:false and carries the current turn's encrypted reasoning back itself; it does not use previous_response_id with xAI."),
+    persistentConnection:feature("unsupported","The current Trebell Native xAI integration uses HTTPS Responses requests."),
+    nativeCompaction:feature("unsupported","Trebell Native owns compaction for direct xAI API sessions."),
+  }),
+  meta:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("unverified","The Meta Model API groups requests for cache efficiency by prompt_cache_key; Trebell sends a stable key per model, instructions and tools and records returned cached tokens, but has not measured cache hits live."),
+    explicitCacheControl:feature("unsupported","Trebell sends no explicit cache breakpoints to the Meta Model API."),
+    previousResponseContinuation:feature("unsupported","Trebell Native sends the whole conversation with store:false and carries the current turn's encrypted reasoning back itself, Meta's stateless replay; it does not use previous_response_id with Meta."),
+    persistentConnection:feature("unsupported","The current Trebell Native Meta integration uses HTTPS Responses requests."),
+    nativeCompaction:feature("unsupported","Trebell Native owns compaction for direct Meta Model API sessions."),
+  }),
+  agentrouter:Object.freeze({
+    ...COMMON_PROXY,
+    previousResponseContinuation:feature("unverified","AgentRouter accepts a Responses-shaped API, but Trebell has not verified that previous_response_id semantics are preserved by this proxy."),
+    persistentConnection:feature("unsupported","The current AgentRouter integration uses HTTPS Responses requests, not a persistent WebSocket transport."),
+  }),
+  justworker:Object.freeze({
+    ...COMMON_PROXY,
+    explicitCacheControl:feature("unverified","The route is Anthropic-Messages-compatible, but Trebell has not verified cache_control support through JustWorker."),
+    previousResponseContinuation:feature("unsupported","The current Anthropic Messages compatibility path is stateless from Trebell's perspective."),
+    persistentConnection:feature("unsupported","The current JustWorker integration uses HTTPS Messages requests."),
+  }),
+  hcnsec:Object.freeze({
+    ...COMMON_PROXY,
+    previousResponseContinuation:feature("unsupported","The current HCNSec Chat Completions compatibility path is stateless from Trebell's perspective."),
+    persistentConnection:feature("unsupported","The current HCNSec integration uses HTTPS Chat Completions requests."),
+  }),
+  vyceai:Object.freeze({
+    ...COMMON_PROXY,
+    promptCaching:feature("unverified","A controlled Trebell live run on 2026-10-27 observed zero cached input tokens across repeated stable prefixes; this is evidence of no observed hit, not proof that the proxy can never cache."),
+    explicitCacheControl:feature("unsupported","The current Vyce integration exposes an OpenAI Chat Completions compatibility route and Trebell has no verified explicit cache-control mechanism for it."),
+    previousResponseContinuation:feature("unsupported","The current Vyce Chat Completions route has no verified server-side continuation mechanism in Trebell."),
+    persistentConnection:feature("unsupported","The current Vyce integration uses HTTPS Chat Completions requests."),
+    nativeCompaction:feature("unsupported","No provider-native compaction API is verified on the current Vyce Chat Completions route."),
+  }),
+});
+
+// A missing, unknown or retired provider id keeps the conservative all-unverified profile; it never
+// inherits a first-party provider's verified features.
+export function providerCapabilities(providerId){
+  const id=String(providerId||"").trim().toLowerCase();
+  const value=Object.prototype.hasOwnProperty.call(CAPABILITIES,id)?CAPABILITIES[id]:COMMON_PROXY;
+  return {
+    promptCaching:{...value.promptCaching},
+    explicitCacheControl:{...value.explicitCacheControl},
+    previousResponseContinuation:{...value.previousResponseContinuation},
+    persistentConnection:{...value.persistentConnection},
+    nativeCompaction:{...value.nativeCompaction},
+    parallelToolCalls:{...value.parallelToolCalls},
+    cacheUsageBreakdown:{...value.cacheUsageBreakdown},
+  };
+}
+
+export function providerFeatureEnabled(providerId,featureName){
+  return providerCapabilities(providerId)?.[featureName]?.status==="supported";
+}
+

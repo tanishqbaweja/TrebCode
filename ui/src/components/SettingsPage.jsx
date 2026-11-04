@@ -1,0 +1,1309 @@
+import React,{useEffect,useLayoutEffect,useMemo,useRef,useState} from "react";
+import { Activity, Bell, Bot, Boxes, Camera, Cloud, Download, GitPullRequest, Globe2, HardDrive, Keyboard, Layers, MessageSquareText, MonitorCog, Paintbrush, Palette, PlugZap, Power, RefreshCw, RotateCcw, Search, Server, Settings2, ShieldCheck, SlidersHorizontal, Stethoscope, X } from "lucide-react";
+import { api } from "../api.js";
+import { openWebLink } from "../web-link.js";
+import { formatBytes } from "../format-bytes.js";
+import { desktopBridgeToolAvailability } from "../desktop-tool-availability.js";
+import { KEYBINDING_COMMANDS, KEYBINDING_CONTEXTS, normalizeKeybindingRules, projectKeybindingRules, shadowedKeybindings, shortcutHint, shortcutProblem, whenProblem } from "../keybindings.js";
+import { searchSettings } from "../settings-search.js";
+import { normalizeCustomTheme } from "../theme-utils.js";
+import { parseThemeJson } from "../theme-json.js";
+import { sharedRuntimeCapabilities } from "../../../src/runtime-capabilities.mjs";
+import { runtimeStatusForKind } from "../runtime-status.js";
+import { terminalPresses } from "../terminal-keyboard.js";
+import { harnessCheck, harnessStateText, harnessStateTitle } from "../harness-check.js";
+import { agentName } from "../display-labels.js";
+import { DEFAULT_MODEL_PROVIDER, MISSING_PROVIDER_KEY, MODEL_PROVIDER_LABELS, modelProviderLabel } from "../provider-labels.js";
+import ScopedSettingsCard from "./ScopedSettingsCard.jsx";
+import { ignorePressRest } from "./ThreadSidebar.jsx";
+import { askConfirm } from "../ask-dialog.js";
+
+const PROVIDER_NOTES={
+  openai:"Models are loaded live from the official OpenAI /v1/models API for this key.",
+  anthropic:"Models are loaded live from the official Anthropic /v1/models API for this key.",
+  gemini:"Models are loaded live from Google's Gemini OpenAI-compatible /models API for this key.",
+  xai:"Grok models from xAI. Models are loaded live from the official xAI /v1/language-models API for this key.",
+  meta:"Muse models from Meta. Models are loaded live from the official Meta Model API /v1/models for this key.",
+  agentrouter:"Models are loaded live from AgentRouter /v1/models for this key.",
+  vyceai:"Models are loaded live from Vyce AI /v1/models for this key.",
+  justworker:"Available model: claude-opus-4-8.",
+  hcnsec:"Available model: glm-5.3.",
+};
+let appliedSettingsEntryNonce=null;
+// The last harness snapshot this window saw: Agents & models renders it at once on later visits while a fresh probe runs.
+let lastAgentRuntimeInfo=null;
+// The section open when Settings was last left: coming back (from the sidebar, Ctrl+, or Back to Settings) opens it again.
+// It lives as long as the window, so a fresh start opens General.
+let lastSettingsSection="general";
+// The last refused harness switch ({kind,instanceId,profile,text}), said on the row that was clicked (a profile's row for a profile),
+// and the Settings pages that show it: a refusal that comes once Settings was left, or left and opened again, reaches the page on
+// screen. agentRowsShown counts the pages with the harness rows open; with none, the refusal is said in the app's alert. A switch to
+// that harness that went through since, also one the app made (opening one of its threads), ends it.
+let lastSwitchRefusal=null,agentRowsShown=0;const switchRefusalViews=new Set();
+function keepSwitchRefusal(value){lastSwitchRefusal=value;for(const show of switchRefusalViews)show(value)}
+if(typeof window!=="undefined")window.addEventListener("trebell:runtime-switched",event=>{if(lastSwitchRefusal&&lastSwitchRefusal.kind===event.detail)keepSwitchRefusal(null)});
+// The harness installs and updates on their way (running, by harness) and what the last one did ({kind,text,error,seen}), said on the
+// row whose Install or Update was pressed, and the Settings pages that show them: a page opened while one runs says Installing… on
+// its row with its button held, and the answer reaches the page on screen with the harness list it brings. An answer that comes with
+// no harness rows on screen waits for the next page that shows them (a failure is also said in the app's alert); one they showed is
+// kept until they are left.
+let agentInstalls={running:[],note:null};const agentInstallViews=new Set();
+function keepAgentInstalls(change,info=null){agentInstalls={...agentInstalls,...change};for(const show of agentInstallViews)show(agentInstalls,info)}
+// The sign-in on its way from a harness row or a profile row (the id of the profile, or of the harness, whose Sign in was pressed), and
+// the Settings pages that show it. Antigravity's waits on Google's page for up to 5 minutes, and Settings can be left and opened again
+// meanwhile: a page opened while it runs holds Sign in (Opening…), as the page that pressed it does, and the answer ({kind,text,error,
+// info}) is said on the page on screen, which takes the harness list it brings.
+let agentSignIn=null;const agentSignInViews=new Set();
+function keepAgentSignIn(id,answer=null){agentSignIn=id;for(const show of agentSignInViews)show(id,answer)}
+// The installs this window has started or waits on, by their id. The server names each install on its way and how the last one of
+// each harness ended (the harness list's installs), so this window also says Installing… for one it did not start (another tab's,
+// or its own from before a reload, which forgets the module state) and waits for its answer. tabInstalls keeps, for the tab's life,
+// the install of each harness this tab waits on, so one that ended during a reload is still said once.
+const handledInstalls=new Set();
+const TAB_INSTALLS_KEY="trebell-agent-installs";
+function tabInstalls(){try{const value=JSON.parse(sessionStorage.getItem(TAB_INSTALLS_KEY)||"{}");return value&&typeof value==="object"?value:{}}catch{return {}}}
+function keepTabInstall(kind,id){try{const value=tabInstalls();if(id)value[kind]=id;else delete value[kind];sessionStorage.setItem(TAB_INSTALLS_KEY,JSON.stringify(value))}catch{}}
+function newInstallId(){try{if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID()}catch{}return Date.now().toString(36)+"-"+Math.random().toString(36).slice(2)}
+// The install whose answer may still be scrolled into view under its row: from its Install or Update press until the person's next
+// scroll, click or key (the repeats of a key held down carry on from the press). An answer that comes later (an npm install can run
+// for minutes) is said on its row without moving the page against them, as followSettingTarget never scrolls against them.
+let followedInstall=null,stopInstallFollow=null;
+function followInstall(kind){
+  stopInstallFollow?.();
+  const inputs=["wheel","touchstart","mousedown","keydown"],press=event=>{if(!event.repeat)stop()};
+  function stop(){for(const name of inputs)window.removeEventListener(name,press,true);if(stopInstallFollow===stop){stopInstallFollow=null;followedInstall=null}}
+  for(const name of inputs)window.addEventListener(name,press,true);
+  followedInstall=kind;stopInstallFollow=stop;
+}
+// A window reloading (or going to another page) leaves the answer of an install it waits on to the page it loads next (tabInstalls):
+// its request ends with the page, and is not the install's answer.
+let pageLeaving=false;
+if(typeof window!=="undefined"){window.addEventListener("pagehide",()=>{pageLeaving=true});window.addEventListener("pageshow",()=>{pageLeaving=false})}
+// Muse Code's status says nothing of its sign-in (a turn checks it): one that lists its models is ready.
+const installedText=(label,status)=>status?.installed&&!(status?.authenticated||status?.kind==="muse"&&status.available)?label+" installed. Sign in with the CLI, then refresh diagnostics.":label+" installed and ready.";
+// What a harness row or a profile row says, in its status line and under it (a note, a refused switch), with each command it names
+// (between backticks) as code that reads as one (code.run-command): its words stay whole, so `pnpm add -g …` no longer breaks into
+// "pnpm add -" and "g …", and no backtick shows as typed.
+const withCommands=text=>{const parts=String(text).split("`");return parts.length%2?parts.map((part,index)=>index%2?<code className="run-command" key={index}>{part.split(" ").map((word,at)=><React.Fragment key={at}>{at?" ":""}<span>{word}</span></React.Fragment>)}</code>:part):text};
+// A shortcut or condition being typed is a draft. It is saved when the field is left or Enter is pressed, and only once it can work,
+// so a half-typed "Ctrl+" or "threadOpen &&" never replaces the one in use. A draft that cannot work stays in the field, marked
+// invalid, until it is fixed or Escape gives it up. `shown` is the saved value as the field reads while it is not being edited. A saved
+// value the check refuses (one saved before the check came in) is marked the same way while no draft replaces it, and left as saved.
+function useDraftField({saved,shown=saved,check,save}){
+  const [draft,setDraft]=useState(null);
+  const [focused,setFocused]=useState(false);
+  const [typedProblem,setProblem]=useState("");
+  const savedProblem=check(saved),problem=draft===null?typedProblem||savedProblem:typedProblem;
+  const sending=useRef(null);
+  const latest=useRef(null);latest.current={draft,saved,check,save};
+  function commit(){
+    if(draft===null)return;
+    const next=draft.trim(),message=check(next);
+    setProblem(message);
+    if(message||next===sending.current)return;
+    if(next===saved){setDraft(null);return}
+    sending.current=next;
+    Promise.resolve(save(next)).finally(()=>{if(sending.current===next)sending.current=null;setDraft(current=>current===draft?null:current)});
+  }
+  // Leaving Settings by a shortcut while the field has focus removes it without a blur: a finished draft is still saved.
+  useEffect(()=>()=>{
+    const {draft,saved,check,save}=latest.current;if(draft===null)return;
+    const next=draft.trim();if(next!==saved&&next!==sending.current&&!check(next))save(next);
+  },[]);
+  return {problem,savedWorks:!savedProblem,props:{
+    value:draft??(focused?saved:shown),
+    "aria-invalid":problem?"true":undefined,
+    onFocus:()=>setFocused(true),
+    onBlur:()=>{setFocused(false);commit()},
+    // Once a problem shows, it follows the typing, so the field clears as soon as the value can work.
+    onChange:event=>{const value=event.target.value;setDraft(value);if(problem)setProblem(check(value.trim()))},
+    onKeyDown:event=>{
+      if(event.key==="Enter"){event.preventDefault();commit()}
+      else if(event.key==="Escape"&&(draft!==null||typedProblem)){event.preventDefault();event.stopPropagation();setDraft(null);setProblem("")}
+    },
+  }};
+}
+// One command in Settings > Shortcuts. The shortcut reads as the app writes it elsewhere (Ctrl+Shift+P, or ⌘ on macOS) and in its
+// stored form (mod+shift+p) while it is edited. A problem with either field is said under the row, with what stays in use meanwhile
+// or, when the saved one is refused as well, that it does not work; and so is a key this command shares with another one (note).
+// Each field is named for its command ("New thread shortcut", "New thread when"), since the column captions alone would give every
+// row's fields the same two names.
+function KeybindingRow({id,label,rule,defaultWhen="",onUpdate,note=null}){
+  const savedKey=rule?.key||"",savedWhen=rule?.when||defaultWhen;
+  const key=useDraftField({saved:savedKey,shown:shortcutHint(savedKey)||savedKey,check:value=>shortcutProblem(value),save:value=>onUpdate({key:value})});
+  const when=useDraftField({saved:savedWhen,check:whenProblem,save:value=>onUpdate({when:value})});
+  const base="keybinding-"+id.replace(/[^a-z0-9-]/gi,"-");
+  const keyProblem=key.problem&&key.problem+(!key.savedWorks?" Until then the saved shortcut does not work.":savedKey?` Until then the shortcut stays ${shortcutHint(savedKey)}.`:"");
+  const whenText=when.problem&&when.problem+(when.savedWorks?" Until then the saved condition is used.":" Until then the saved condition does not work.");
+  const describedBy=(problem,problemId)=>[problem&&problemId,note&&base+"-note"].filter(Boolean).join(" ")||undefined;
+  return <div className="keybinding-row">
+    <strong>{label}</strong>
+    <label>Shortcut<input {...key.props} aria-label={label+" shortcut"} placeholder="Not set" title={savedKey?(shortcutHint(savedKey)||savedKey)+" · stored as "+savedKey:undefined} aria-describedby={describedBy(keyProblem,base+"-key-problem")}/></label>
+    <label>When<input {...when.props} aria-label={label+" when"} placeholder={defaultWhen||"Always"} title={savedWhen||undefined} aria-describedby={describedBy(whenText,base+"-when-problem")}/></label>
+    {keyProblem&&<p className="keybinding-note" id={base+"-key-problem"} role="alert">{keyProblem}</p>}
+    {whenText&&<p className="keybinding-note" id={base+"-when-problem"} role="alert">{whenText}</p>}
+    {note&&<p className={"keybinding-note "+note.kind} id={base+"-note"} role="status">{note.text}</p>}
+  </div>;
+}
+// A key Settings saves for a harness, named as the Model provider card names it: "Anthropic API" -> "Anthropic API key".
+const keyLabel=name=>/API$/.test(name)?name+" key":name+" API key";
+// Whether the last press was a key's (Tab, an arrow key in a radio group) rather than a mouse's, a pen's or a touch's. A harness row
+// is brought whole into view for the keyboard only (the stage's onFocus, HarnessSignIn), never moved under the pointer: a press into
+// a row's key field matches :focus-visible too, as a text field always does, and moved the row between the press and its release, so
+// the second press of a double click landed on what came up there (Remove key, at a phone's width).
+let keyboardLast=false;
+if(typeof window!=="undefined"){window.addEventListener("keydown",()=>{keyboardLast=true},true);window.addEventListener("pointerdown",()=>{keyboardLast=false},true)}
+// Until the person moves on (a scroll, a press or a key), as followInstall never scrolls against them: on, and stop() to end it.
+function untilMovedOn(){
+  const inputs=["wheel","touchstart","pointerdown","keydown"],state={on:true,stop(){state.on=false;for(const name of inputs)window.removeEventListener(name,state.stop,true)}};
+  for(const name of inputs)window.addEventListener(name,state.stop,true);
+  return state;
+}
+// How the harness a row shows signs in (Settings' choice for that profile, harness-auth.mjs): its own sign-in, or its vendor's API
+// key from Trebell's one key per provider, added, replaced or removed here in the Model provider card's store (for Trebell Native
+// too, which reads the same store), whichever harness is active. Cursor has no API key.
+function HarnessSignIn({def,profile,busy,onMethod,onKey}){
+  const info=profile?.signIn,[key,setKey]=useState(""),[provider,setProvider]=useState(""),[pending,setPending]=useState(null);
+  // API key chosen from the keyboard (an arrow key or Space in the radio group, which Tab reaches on its checked radio) opens the key
+  // fields under the radios, and the row is then brought whole into view with them, as Tab brings it (the stage's onFocus), and again
+  // as the server's answer redraws it (its status line can take another line), until the person moves on: the radio's own focus came
+  // before they showed, and left them under the window's edge. A choice made with the mouse moves nothing.
+  const box=useRef(null),keyed=useRef(null),onKeyMethod=(pending||info?.method)==="api-key";
+  useLayoutEffect(()=>{
+    const follow=keyed.current;if(!follow)return;
+    if(follow.on&&onKeyMethod)box.current?.closest(".agent-runtime-option")?.scrollIntoView({block:"nearest"});
+    if(!pending){follow.stop();keyed.current=null}
+  },[onKeyMethod,pending]);
+  useEffect(()=>()=>keyed.current?.stop(),[]);
+  if(!info)return null;
+  // The choice shows at once, as the server saves it.
+  const choose=value=>{keyed.current?.stop();keyed.current=keyboardLast?untilMovedOn():null;setPending(value);Promise.resolve(onMethod(profile,value)).finally(()=>setPending(null))};
+  const chosen=info.keys.find(item=>item.provider===provider)||info.keys[0],group="harness-auth-"+profile.id;
+  // A key from the environment is none saved in Trebell Code: one saved here takes its place, for Trebell Native too. A saved one is
+  // said to be shared with Trebell Native, as its Remove key removes it there too.
+  const env=item=>item.source==="environment",kept=chosen.saved&&!env(chosen);
+  const uses=info.keys.length>1?"Uses each saved key, shared with Trebell Native: "+info.keys.map(item=>keyLabel(item.name)+(item.saved?env(item)?` (from ${item.from})`:" (saved)":" (none)")).join(", ")+".":`Uses the ${keyLabel(chosen.name)}${chosen.saved?(env(chosen)?` from ${chosen.from}; a key saved here replaces it, for Trebell Native too.`:", saved in Trebell Code, shared with Trebell Native."):": none saved yet."}`;
+  return <div ref={box} className="harness-auth" data-testid={"harness-auth-"+def.id}>
+    <div role="radiogroup" aria-label={def.name+" signs in with"}>
+      <label><input type="radio" name={group} checked={!onKeyMethod} disabled={busy} onChange={()=>choose("sign-in")}/>Sign in</label>
+      <label><input type="radio" name={group} checked={onKeyMethod} disabled={busy} onChange={()=>choose("api-key")}/>API key</label>
+    </div>
+    {onKeyMethod&&<div className="harness-auth-key"><small>{uses}</small>
+      {info.keys.length>1&&<select aria-label={"Key for "+def.name} value={chosen.provider} onChange={e=>setProvider(e.target.value)}>{info.keys.map(item=><option key={item.provider} value={item.provider}>{item.name}</option>)}</select>}
+      <input type="password" autoComplete="off" aria-label={keyLabel(chosen.name)+" for "+def.name} value={key} onChange={e=>setKey(e.target.value)} placeholder={kept?"Saved key ••••••••":"Paste "+keyLabel(chosen.name)}/>
+      <button disabled={busy||!key.trim()} onClick={async()=>{if(await onKey(def,chosen.provider,key))setKey("")}}>{kept?"Replace key":"Save key"}</button>
+      {kept&&<button disabled={busy} onClick={()=>onKey(def,chosen.provider,"")}>Remove key</button>}
+    </div>}
+  </div>;
+}
+const AGENT_RUNTIME_SKELETON_ROWS=["Trebell Native","Codex","Claude Code","Cursor","Grok Build","OpenCode","Antigravity","Muse Code"];
+// What a harness's status says of a sign-in: nothing when its version check did not answer and no sign-in was read after it (a
+// Codex answer is its account read's, whatever its --version did), or when it is a Claude Code profile's with its own API endpoint.
+// Its row shows what was found, with no Needs setup and no Sign in.
+function saysNothingOfSignIn(status,kind){
+  return Boolean((status?.versionCheckFailed&&status.authenticated==null&&kind!=="codex")||status?.account?.type==="ownEndpoint")&&Boolean(status?.message);
+}
+// A setting opened from the search that is taller than the part of the page the window shows opens at its top, its heading and first
+// rows in view, and a shorter one in the middle: centred, the Keyboard shortcuts card showed rows from the middle of its list, its
+// heading far above the window. While the settings error alert is up it stands over the top of the page as it scrolls, so the part
+// the window shows is the part under it, where the scroll leaves the setting (the page's scroll-padding): the card's heading went
+// under the alert. The alert sticks its top offset below the page's own top padding (44 px wide, 28 px narrow), not below the
+// page's edge, so the part under it starts below that padding too: counted from the edge, the heading still went under it at 1280.
+function settingBlock(target){
+  const page=target.closest(".secondary-page"),alert=page?.querySelector(".settings-action-error");
+  const under=alert?parseFloat(getComputedStyle(page).paddingTop)+parseFloat(getComputedStyle(alert).top)+alert.offsetHeight:0;
+  if(page)page.style.scrollPaddingTop=under?under+"px":"";
+  return target.offsetHeight>(page?page.clientHeight-under:window.innerHeight)?"start":"center";
+}
+// A setting opened from the search stays in view while the page around it settles: a card above it that loads later (Project
+// defaults shows its fields once the scoped settings answer) grew after its one scroll and pushed it out of view. Each change of the
+// page's height scrolls to it again at once, before the change is painted (ending its first scroll if that is still on its way), so
+// it stays put on screen. The person's first scroll, click or key ends this (the second click of a double click on the result, and
+// the repeats of a key held down, such as the Enter that opened the result, carry on from the first), as do 10 s, so it never
+// scrolls against them.
+let stopSettingFollow=null;
+function followSettingTarget(target){
+  stopSettingFollow?.();
+  const stage=target.closest(".settings-stage");if(!stage||typeof ResizeObserver==="undefined")return;
+  let height=stage.offsetHeight;
+  const observer=new ResizeObserver(()=>{if(!target.isConnected)stop();else if(stage.offsetHeight!==height){height=stage.offsetHeight;target.scrollIntoView({block:settingBlock(target)})}});
+  const press=event=>{if(event.detail<2&&!event.repeat)stop()},inputs=["wheel","touchstart","mousedown","keydown"],timer=setTimeout(stop,10000);
+  function stop(){observer.disconnect();clearTimeout(timer);for(const name of inputs)window.removeEventListener(name,press,true);if(stopSettingFollow===stop)stopSettingFollow=null}
+  for(const name of inputs)window.addEventListener(name,press,true);
+  observer.observe(stage);stopSettingFollow=stop;
+}
+// The second click of a double click on a search result lands on what takes the result's place under the pointer (the categories,
+// or a card the page scrolls past to the setting): it presses nothing. The next press of its own lets clicks through again.
+function swallowSecondClick(){
+  const swallow=event=>{if(event.detail>1){event.preventDefault();event.stopPropagation()}else for(const name of ["mousedown","click"])window.removeEventListener(name,swallow,true)};
+  for(const name of ["mousedown","click"])window.addEventListener(name,swallow,true);
+}
+
+// runningTasks: the tasks whose turns run, as their sidebar rows say ({title,runtime,open}, open for the open thread's). onActionError(error,
+// label) says a failure in the app's alert.
+export default function SettingsPage({settings,runtimeKnown=true,harnessReady=null,onSettings,onProviderChanging,onProviderUpdated,onAgentRuntimeSwitch,runningTasks=[],onActionError,runtime,runtimeCapabilities={},rpcStatus,projectPath,runtimeEnvironmentId=null,onOpenRuntimeAuthTerminal,projectScripts=[],modelError,models=[],model="",modelDefault="",onScopedSettingsChanged,environmentThemeCatalog={environmentKey:"local",environmentName:"Local machine",directory:"",themes:[]},environmentThemes=[],onRefreshEnvironmentThemes,onOfferUndo,entry:settingsEntry=null,onSectionChange}){
+  const [settingsSection,setSettingsSection]=useState(()=>settingsEntry?.nonce&&settingsEntry.nonce!==appliedSettingsEntryNonce&&settingsEntry.section||lastSettingsSection);
+  useEffect(()=>{lastSettingsSection=settingsSection},[settingsSection]);
+  // The harness rows are on screen while this page shows Agents & models (agentRowsShown), and so is what an install said there. It
+  // ends once no rows are left on screen, a moment after, as React mounts a page again at once in development.
+  useEffect(()=>{if(settingsSection!=="agents")return;agentRowsShown++;if(agentInstalls.note)agentInstalls.note.seen=true;return()=>{agentRowsShown--;setTimeout(()=>{if(!agentRowsShown&&agentInstalls.note?.seen)keepAgentInstalls({note:null})})}},[settingsSection]);
+  const [settingsSearch,setSettingsSearch]=useState("");
+  const [workspaceScope,setWorkspaceScope]=useState({environmentId:settings.activeEnvironmentId||"local",projectId:""});
+  const [workspaceScopeCatalog,setWorkspaceScopeCatalog]=useState({environmentData:{profiles:[]},projects:[]});
+  const [diagnostics,setDiagnostics]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [providerInfo,setProviderInfo]=useState(null);
+  const [apiKey,setApiKey]=useState("");
+  const [providerMessage,setProviderMessage]=useState("");
+  const [settingsError,setSettingsError]=useState("");
+  // The control that had the keyboard when the alert came up (the one whose save failed): dismissing the alert gives focus back to
+  // it, or to the next control after the alert once it is gone, instead of dropping it on the page body. A control disabled while it
+  // works (Refresh published themes) has let go of the keyboard by then, so the last control the keyboard was on stands for it.
+  const failedControlRef=useRef(null),lastFocusedRef=useRef(null);
+  useEffect(()=>{if(!settingsError)return;const active=document.activeElement;failedControlRef.current=active&&active!==document.body&&!active.closest(".settings-action-error")?active:lastFocusedRef.current},[settingsError]);
+  function dismissSettingsError(event){
+    const alert=event.currentTarget.closest(".settings-action-error"),failed=failedControlRef.current;
+    const next=failed?.isConnected&&!failed.disabled?failed:[...alert.parentElement.querySelectorAll("button,input,select,textarea,a[href]")].find(item=>alert.compareDocumentPosition(item)&Node.DOCUMENT_POSITION_FOLLOWING&&!alert.contains(item)&&item.tabIndex>=0&&!item.disabled&&item.getClientRects().length);
+    setSettingsError("");next?.focus();
+  }
+  const [environmentThemeRefreshing,setEnvironmentThemeRefreshing]=useState(false);
+  const [providerSwitching,setProviderSwitching]=useState(false);
+  const [agentInfo,setAgentInfoState]=useState(()=>lastAgentRuntimeInfo);
+  const [agentInfoRefreshing,setAgentInfoRefreshing]=useState(false);
+  const [agentInfoError,setAgentInfoError]=useState("");
+  const agentInfoSeqRef=useRef(0);
+  const [agentMessage,setAgentMessage]=useState("");
+  const [agentMessageTarget,setAgentMessageTarget]=useState(null);
+  const [agentMessageError,setAgentMessageError]=useState(false);
+  // A refused switch is said on the row that was clicked (lastSwitchRefusal); the status line sits under the whole list, out of view.
+  const [switchRefusal,showSwitchRefusal]=useState(()=>lastSwitchRefusal),setSwitchRefusal=keepSwitchRefusal;
+  useEffect(()=>{switchRefusalViews.add(showSwitchRefusal);showSwitchRefusal(lastSwitchRefusal);return()=>{switchRefusalViews.delete(showSwitchRefusal)}},[]);
+  const [providerMessageError,setProviderMessageError]=useState(false);
+  const [savingInstance,setSavingInstance]=useState(false);
+  const showAgentMessage=(text,error=false)=>{setAgentMessage(text);setAgentMessageError(Boolean(error));setSwitchRefusal(null)};
+  const showProviderMessage=(text,error=false)=>{setProviderMessage(text);setProviderMessageError(Boolean(error))};
+  const [agentSelectionOverride,setAgentSelectionOverride]=useState(null);
+  // The installs every Settings page knows of (agentInstalls). An answer that comes while this page is open brings it the harness
+  // list, and what the install did is scrolled into view under its row, as a refused save is in its editor, while the person has not
+  // moved on since the press (followInstall): it never moves the page from a field they are typing in further down.
+  const [installs,showInstalls]=useState(()=>agentInstalls);
+  const installNoteRef=useRef(null),arrivedNoteRef=useRef(null);
+  useEffect(()=>{const show=(next,info)=>{arrivedNoteRef.current=next.note;showInstalls(next);if(info)setAgentInfo(info)};agentInstallViews.add(show);showInstalls(agentInstalls);return()=>{agentInstallViews.delete(show)}},[]);
+  useEffect(()=>{if(installs.note?.follow&&installs.note===arrivedNoteRef.current)installNoteRef.current?.scrollIntoView({block:"nearest"})},[installs.note]);
+  // An install on its way on the server that this window did not start (another tab's, or this tab's own from before a reload) says
+  // Installing… on its row, and its answer is said there once it comes (answerInstall); one this tab waited on that ended during a
+  // reload is said once.
+  useEffect(()=>{
+    const known=agentInfo?.installs;if(!known)return;
+    for(const {runtime,id} of known.running||[]){
+      if(!id||handledInstalls.has(id)||agentInstalls.running.includes(runtime))continue;
+      handledInstalls.add(id);keepTabInstall(runtime,id);keepAgentInstalls({running:[...agentInstalls.running,runtime],note:null});
+      answerInstall(runtime,id,()=>api("/api/agent-runtimes",{method:"POST",body:{action:"install-wait",runtime}}));
+    }
+    for(const [runtime,id] of Object.entries(tabInstalls())){
+      if(agentInstalls.running.includes(runtime))continue;
+      keepTabInstall(runtime,null);
+      if(!handledInstalls.has(id)&&(known.ended||[]).some(item=>item.runtime===runtime&&item.id===id)){handledInstalls.add(id);answerInstall(runtime,id,async()=>({waited:false,...agentInfo}))}
+    }
+  },[agentInfo]);
+  // The sign-in every Settings page knows of (agentSignIn): its answer is said here, with the harness list it brings, while this page shows.
+  const [authenticatingAgent,setAuthenticatingAgent]=useState(()=>agentSignIn);
+  useEffect(()=>{
+    const show=(id,answer)=>{setAuthenticatingAgent(id);if(!answer)return;if(answer.info)setAgentInfo(answer.info);setAgentMessageTarget(answer.kind);showAgentMessage(answer.text,answer.error)};
+    agentSignInViews.add(show);setAuthenticatingAgent(agentSignIn);return()=>{agentSignInViews.delete(show)};
+  },[]);
+  // A harness's sign-in method or key on its way from its row (HarnessSignIn).
+  const [harnessAuthBusy,setHarnessAuthBusy]=useState(false);
+  const [instanceDraft,setInstanceDraft]=useState(null);
+  // The approved variables as typed, while their field is being edited. The list is made from them at each change and shows, one name
+  // a line, once the field is left: shown at each key, it took a new line or a comma away as soon as it was typed. Another window
+  // coming to the front leaves the focus on the field (activeElement), so the text stays as typed meanwhile.
+  const [environmentKeysText,setEnvironmentKeysText]=useState(null);
+  // A refused Save profile is said in the editor, under its buttons, and scrolled into view: the status line under the editor was out
+  // of view of the button.
+  const [instanceRefusal,setInstanceRefusal]=useState("");
+  const instanceRefusalRef=useRef(null);
+  useEffect(()=>{if(instanceRefusal)instanceRefusalRef.current?.scrollIntoView({block:"nearest"})},[instanceRefusal]);
+  const [modelDraft,setModelDraft]=useState({id:"",name:"",effort:"",serviceTier:"",inputPrice:"",outputPrice:"",cacheReadPrice:"",cacheWritePrice:""});
+  const [customModelEditorOpen,setCustomModelEditorOpen]=useState(false);
+  // What the custom model form has to say (a draft it refuses, or that the model was saved), said in its own card under the form and
+  // scrolled into view there: the harness card's status line, higher up the page, was out of view of it.
+  const [customModelMessage,setCustomModelMessage]=useState({text:"",error:false});
+  const customModelMessageRef=useRef(null);
+  useEffect(()=>{if(customModelMessage.text)customModelMessageRef.current?.scrollIntoView({block:"nearest"})},[customModelMessage]);
+  const showCustomModelMessage=(text,error=false)=>setCustomModelMessage({text,error});
+  function showCustomModelEditor(open){setCustomModelEditorOpen(open);showCustomModelMessage("")}
+  const [mcpDraft,setMcpDraft]=useState(null);
+  const [mcpMessage,setMcpMessage]=useState("");
+  const [snapshotInfo,setSnapshotInfo]=useState({enabled:false,shortcut:"CommandOrControl+Shift+S",includeText:false,playSound:true,sound:"soft-pop",flash:true,animations:true,registered:false,pending:0});
+  const [snapshotMessage,setSnapshotMessage]=useState("");
+  // Capture now takes one SnapShot a press: the rest of the press (the second click of a double click, Enter held) does nothing, as a
+  // thread's menu item runs, and a press while its SnapShot is being taken takes none. It says it is capturing then (aria-disabled, so
+  // the keyboard stays on it when the capture fails). As it starts it clears the line saying why the last capture failed, and only
+  // that line (a save's Saving…, notes and failures stay): the line stayed above Capturing…, and a retry that failed the same way left
+  // the card as it was.
+  const [snapshotCapturing,setSnapshotCapturing]=useState(false),snapshotFailure=useRef("");
+  function captureSnapshot(event){
+    ignorePressRest(!event.detail);if(snapshotCapturing)return;
+    setSnapshotCapturing(true);setSnapshotMessage(current=>current===snapshotFailure.current?"":current);
+    window.trebellDesktop.snapshots.capture().catch(error=>setSnapshotMessage(snapshotFailure.current=error.message)).finally(()=>setSnapshotCapturing(false));
+  }
+  const [browserImport,setBrowserImport]=useState({sources:[],platform:null});
+  const [browserImportProfile,setBrowserImportProfile]=useState("");
+  // error: the message reports a failure (red, announced); scanFailed: the profile scan itself failed, so an empty list means
+  // "unknown", not "nothing found".
+  const [browserImportMessage,setBrowserImportMessage]=useState({text:"",error:false,scanFailed:false});
+  const [browserImportBusy,setBrowserImportBusy]=useState(false);
+  // The storage card's numbers are the last read that worked. A read that fails says so (storageError), in place of the numbers when
+  // none came yet and under them when a later refresh fails; a cleanup says what it removed, or what failed (storageMessage).
+  const [storageInfo,setStorageInfo]=useState(null);
+  // A read that fails again says it still could not, and is a new alert (storageFailures keys it), so it is seen and said again.
+  const [storageError,setStorageError]=useState("");
+  const [storageFailures,setStorageFailures]=useState(0);
+  const [storageMessage,setStorageMessage]=useState({text:"",error:false});
+  const [storageBusy,setStorageBusy]=useState(false);
+  const [themeDraft,setThemeDraft]=useState(null);
+  // A theme note is a status, or the error of a failed save or import, said as an alert: its text, which can hold a theme's name,
+  // does not decide which. Each note is a new one (said keys it), also one in the same words as the last: a Save & apply refused again
+  // left the note as it was, so nothing was said again or scrolled back into view, and the press seemed to do nothing. A save does not
+  // clear the note as it starts (an import does): the editor under the note would move up under the pointer while the save runs.
+  const [themeNote,setThemeNote]=useState({text:"",error:false,said:0});
+  const themeMessage=themeNote.text,themeMessageError=themeNote.error,setThemeMessage=(text,error=false)=>setThemeNote(note=>({text:String(text||""),error,said:note.said+1}));
+  // The theme note shows under the theme actions, by Import JSON, and is scrolled into view when one comes: under the theme editor,
+  // which an import opens, it was out of view of the button.
+  const themeMessageRef=useRef(null);
+  useEffect(()=>{if(themeMessage)themeMessageRef.current?.scrollIntoView({block:"nearest"})},[themeNote]);
+  const themeImportRef=useRef(null);
+  const [panelAnimationDraft,setPanelAnimationDraft]=useState(null);
+  const panelAnimationSaveRef=useRef(null);
+  // The storage retention values still on their way to the server, by field (saveStorageRetention).
+  const retentionSendingRef=useRef(new Map());
+  const settingsRef=useRef(settings);settingsRef.current=settings;
+  const selected=settings.modelProvider||DEFAULT_MODEL_PROVIDER;
+  const providerOptions=providerInfo?.providers?.length
+    ?providerInfo.providers.map(item=>({id:item.id,name:item.name||modelProviderLabel(item.id),official:Boolean(item.official)}))
+    :Object.entries(MODEL_PROVIDER_LABELS).map(([id,name])=>({id,name,official:["openai","anthropic","gemini","xai","meta"].includes(id)}));
+  // Until the app knows which harness runs (its first load is still reading it), its settings hold the default harness: the server's own
+  // report decides, so Settings never offers to switch to the harness that already runs.
+  const appRuntime=runtimeKnown?settings.agentRuntime:null;
+  const selectedAgent=agentSelectionOverride||(runtimeKnown?appRuntime||runtime?.agentRuntime||agentInfo?.selectedRuntime:agentInfo?.selectedRuntime||runtime?.agentRuntime)||"codex";
+  const switchingAgent=Boolean(agentSelectionOverride);
+  // The app owns a harness switch end to end: it clears the old models and gates sends before the request, then applies the confirmed runtime with one reconnect.
+  const switchRuntime=onAgentRuntimeSwitch||((target,perform)=>perform());
+  // The profile the server runs comes from settings, which the app keeps current through every switch. agentInfo can be the snapshot cached on an
+  // earlier visit (opening another harness's thread switches profiles meanwhile), so it decides neither the Active markers nor the gated reload path.
+  const activeInstanceId=(runtimeKnown?settings.agentRuntimeInstanceId:null)||(appRuntime?`${appRuntime}-default`:agentInfo?.selectedInstanceId)||null;
+  // The app's composer, model picker and harness status go by its own read of whether the harness that runs is ready (harnessReady,
+  // null in mock mode). A harness list that says otherwise, or otherwise than the list compared before it, has the app read its status
+  // and models again, so a sign-in, a sign-in method or key change, an install, a profile change or a Refresh after a sign-in in its
+  // terminal shows there with no reload. The second is for a read the app started for an earlier list that is still on its way (Claude
+  // Code's model list runs its capability probe): it would land that list's readiness after this one, and the newer read replaces it.
+  // A list that comes while this page shows is compared in an effect; one that comes once Settings was left (Antigravity's sign-in
+  // answers once the person has finished Google's page, maybe at New task by then) is compared as it comes (rememberAgentInfo), with
+  // what this page last knew. The list a page opens with, this window's last one, was compared when it came.
+  const following=useRef(null),compared=useRef(null),pageShown=useRef(false),openedAgentInfo=useRef(agentInfo);
+  following.current={harnessReady,switchingAgent,activeInstanceId,appRuntime,onProviderUpdated};
+  useEffect(()=>{pageShown.current=true;return()=>{pageShown.current=false}},[]);
+  function followHarnessList(info){
+    const {harnessReady,switchingAgent,activeInstanceId,appRuntime,onProviderUpdated}=following.current;
+    if(typeof harnessReady!=="boolean"||switchingAgent||!info||info.selectedInstanceId!==activeInstanceId)return;
+    const status=runtimeStatusForKind(info,appRuntime,{preferSelected:true});if(!status)return;
+    const available=Boolean(status.available),before=compared.current?.instanceId===activeInstanceId?compared.current.available:available;
+    compared.current={instanceId:activeInstanceId,available};
+    if(available!==harnessReady||available!==before)Promise.resolve(onProviderUpdated?.({agentRuntime:appRuntime})).catch(()=>{});
+  }
+  useEffect(()=>{if(agentInfo!==openedAgentInfo.current)followHarnessList(agentInfo)},[agentInfo]);
+  const selectedManagedInference=Boolean(sharedRuntimeCapabilities(selectedAgent).managedInference);
+  const keybindingRules=useMemo(()=>normalizeKeybindingRules(settings),[settings.keybindingRules,settings.keyboardShortcuts]);
+  // A shortcut another command takes over is said on both rows: the one that never runs names the commands that run instead, and
+  // each of those says whose key it takes. Only this project's actions take keys here (projectKeybindingRules), as in the app.
+  const keybindingNotes=useMemo(()=>{
+    const label=command=>KEYBINDING_COMMANDS.find(item=>item.id===command)?.label||"Run "+(projectScripts.find(item=>"script."+item.id+".run"===command)?.name||"project action");
+    const names=list=>list.length>1?list.slice(0,-1).join(", ")+" and "+list[list.length-1]:list[0];
+    const keyOf=command=>keybindingRules.find(rule=>rule.command===command)?.key||"";
+    const notes=new Map(),taken=new Map();
+    for(const [command,{key,by}] of shadowedKeybindings(projectKeybindingRules(keybindingRules,projectScripts))){
+      const many=by.length>1;
+      notes.set(command,{kind:"clash",text:`${names(by.map(label))} also ${many?"use":"uses"} ${shortcutHint(key)} and ${many?"run":"runs"} instead.`});
+      for(const winner of by)taken.set(winner,[...(taken.get(winner)||[]),command]);
+    }
+    for(const [command,losers] of taken)notes.set(command,{kind:"takes",text:`Takes ${shortcutHint(keyOf(command))} from ${names(losers.map(label))}.`});
+    return notes;
+  },[keybindingRules,projectScripts]);
+  function updateKeybinding(command,patch){
+    const found=keybindingRules.some(rule=>rule.command===command);
+    const next=found?keybindingRules.map(rule=>rule.command===command?{...rule,...patch}:rule):[...keybindingRules,{command,key:String(patch.key||""),when:String(patch.when||"projectOpen && !modalOpen")}];
+    return saveSetting({keybindingRules:next});
+  }
+
+  async function loadProviders({strict=false}={}){
+    try{
+      const info=await api("/api/providers");
+      setProviderInfo(info);
+      return info;
+    }catch(error){
+      if(strict)throw error;
+      const fallback=providerInfo||{error:error?.message||String(error),providers:[]};
+      if(!providerInfo)setProviderInfo(fallback);
+      return fallback;
+    }
+  }
+  function rememberAgentInfo(info){
+    if(info&&!info.error&&Array.isArray(info.definitions)&&info.definitions.length)lastAgentRuntimeInfo=info;
+    setAgentInfoState(info);
+    // No page effect runs for a list that comes once Settings was left: it is compared here.
+    if(!pageShown.current)followHarnessList(info);
+  }
+  // A mutation answer is newer than any probe still in flight, so that probe's answer is discarded.
+  function setAgentInfo(info){agentInfoSeqRef.current++;setAgentInfoRefreshing(false);setAgentInfoError("");rememberAgentInfo(info)}
+  // kept: the section's open, which keeps OpenCode's complete catalogs (each read starts an `opencode serve`); Refresh reads them again.
+  async function loadAgentRuntimes({strict=false,kept=false}={}){
+    const seq=++agentInfoSeqRef.current;setAgentInfoRefreshing(true);
+    try{
+      const info=await api("/api/agent-runtimes",kept?{headers:{"x-trebell-catalogs":"kept"}}:{});
+      if(seq===agentInfoSeqRef.current){setAgentInfoError("");rememberAgentInfo(info)}
+      return info;
+    }catch(error){
+      if(strict)throw error;
+      const fallback=agentInfo||{error:error?.message||String(error),definitions:[],instances:[],statuses:[]};
+      // Cached rows stay on screen after a failed probe, so the failure is shown with them instead of passing them off as current.
+      if(seq===agentInfoSeqRef.current){if(agentInfo)setAgentInfoError(error?.message||String(error));else setAgentInfoState(fallback)}
+      return fallback;
+    }finally{if(seq===agentInfoSeqRef.current)setAgentInfoRefreshing(false)}
+  }
+  // A harness row's Switch, or a profile's Use (profile: another profile of the harness that runs).
+  async function selectAgentRuntime(kind,instanceId=null){
+    const name=id=>(agentInfo?.definitions||[]).find(item=>item.id===id)?.name||id,profile=kind===selectedAgent;
+    const target=profile?(agentInfo?.instances||[]).find(item=>item.id===instanceId)?.displayName||instanceId:name(kind);
+    // A turn of another harness on the agent relay runs on through a switch, and its row in the sidebar goes on saying how it stands
+    // (the relay tells every window), but Codex is restarted on a switch to it or to another of its profiles, which ends its turns,
+    // and a window on Codex hears nothing of the relay's turns, nor one on the relay of Codex's. A switch that crosses Codex while a
+    // turn this window follows runs is refused on the row that was clicked, as opening another harness's thread is; any other
+    // switch asks first when the open thread's turn runs, which leaves the screen: it runs on, and its thread stays in the sidebar.
+    const followed=runningTasks.filter(task=>(task.runtime==="codex")===(selectedAgent==="codex")),open=runningTasks.find(task=>task.open);
+    if(followed[0]&&(kind==="codex"||selectedAgent==="codex")){
+      setSwitchRefusal({kind,instanceId,profile,text:`Could not switch to ${target}: ${name(followed[0].runtime)} is running “${followed[0].title}”. Stop the running turn before switching ${profile?"Codex profiles":"agent runtimes"}.`});
+      return;
+    }
+    if(open&&!await askConfirm(`Switch to ${target} while ${name(open.runtime)} is running “${open.title}”? The task keeps running in ${name(open.runtime)}, and its thread stays in the sidebar.`,{confirm:"Switch to "+target,tone:"primary"}))return;
+    setAgentSelectionOverride(kind);
+    setAgentMessageTarget(kind);
+    showAgentMessage("Switching…");
+    try{
+      const result=await switchRuntime({runtime:kind,instanceId,resetThread:true},()=>api("/api/agent-runtimes",{method:"POST",body:{action:"select",runtime:kind,instanceId}}));
+      setAgentInfo(result);
+      // Said for this harness, also when an install that ended meanwhile said its own for the harness it installed.
+      setAgentMessageTarget(kind);showAgentMessage(`${result.selected?.status?.name||kind} selected.`);
+    }catch(error){
+      // The selection falls back to the harness that is still active; the refusal is said on the row that was clicked, and in the
+      // app's alert when no harness rows are on screen as it comes (the person went back to the chat, or to another section).
+      setAgentMessageTarget(null);showAgentMessage("");setSwitchRefusal({kind,instanceId,profile,text:`Could not switch to ${target}: ${error.message}`});
+      if(!agentRowsShown)onActionError?.(error,"Could not switch to "+target);
+    }
+    finally{setAgentSelectionOverride(null)}
+  }
+  // A profile opened for editing starts with the card's status line clear: the answer to the last save under it read as this one's.
+  function editInstance(instance=null){
+    setEnvironmentKeysText(null);setInstanceRefusal("");setAgentMessage("");
+    setInstanceDraft(instance?{...instance}:{
+      id:`${selectedAgent}-${crypto.randomUUID()}`,kind:selectedAgent,displayName:`${(agentInfo?.definitions||[]).find(item=>item.id===selectedAgent)?.name||selectedAgent} profile`,binaryPath:"",homePath:"",serverUrl:"",autoCompactWindow:"",
+    });
+  }
+  async function saveInstance(){
+    if(!instanceDraft||savingInstance)return;
+    setSavingInstance(true);setInstanceRefusal("");
+    setAgentMessageTarget(instanceDraft.kind||selectedAgent);
+    showAgentMessage("Saving runtime profile…");
+    try{
+      const instance={...instanceDraft};delete instance.environmentKeys;delete instance.signIn;
+      const request=()=>api("/api/agent-runtimes",{method:"POST",body:{action:"upsert",instance}});
+      // Saving the active profile reloads its harness: the same single reconnect as a switch. Other profiles save in place.
+      const active=activeInstanceId===instance.id;
+      const result=active?await switchRuntime({runtime:instance.kind||selectedAgent,instanceId:instance.id,resetThread:true},request):await request();
+      if(!active&&result.selectedInstanceId===instance.id)await switchRuntime({runtime:result.selectedRuntime||instance.kind,instanceId:instance.id,resetThread:true},async()=>result,{gate:false});
+      setAgentInfo(result);setInstanceDraft(null);showAgentMessage("Runtime profile saved.");
+    }catch(error){showAgentMessage("");setInstanceRefusal(`Could not save the runtime profile “${instanceDraft.displayName||instanceDraft.id}”: ${error.message}`)}
+    finally{setSavingInstance(false)}
+  }
+  async function removeInstance(instance){
+    if(!instance||instance.id===`${instance.kind}-default`)return;
+    // A profile holds its paths, its server and the variables it passes on, and a removal cannot be undone: it asks first, in the
+    // app's dialog, and Cancel keeps it. Removing the active one also says which profile its harness goes back to.
+    const harness=(agentInfo?.definitions||[]).find(item=>item.id===instance.kind)?.name||instance.kind||"The harness";
+    const activeNote=activeInstanceId===instance.id?` ${harness} goes back to its default profile.`:"";
+    if(!await askConfirm(`Remove the runtime profile “${instance.displayName||instance.id}”? This cannot be undone: its paths and settings are lost.${activeNote}`,{confirm:"Remove profile"}))return;
+    setAgentMessageTarget(instance.kind||selectedAgent);
+    showAgentMessage("Removing runtime profile…");
+    try{
+      const request=()=>api("/api/agent-runtimes?id="+encodeURIComponent(instance.id),{method:"DELETE"});
+      // Removing the active profile moves its harness back to the default profile: the same single reconnect as a switch.
+      const active=activeInstanceId===instance.id;
+      const result=active?await switchRuntime({runtime:instance.kind||selectedAgent,instanceId:`${instance.kind||selectedAgent}-default`,resetThread:true},request):await request();
+      if(!active&&result.resetTo)await switchRuntime({runtime:result.selectedRuntime||result.kind||settings.agentRuntime,instanceId:result.selectedInstanceId||result.resetTo,resetThread:true},async()=>result,{gate:false});
+      setAgentInfo(result);setInstanceDraft(null);showAgentMessage("Runtime profile removed.");
+    }catch(error){showAgentMessage(error.message,true)}
+  }
+  // verb: what the button said, Install or Update, which the question's button says again. status: the row's, whose update names the
+  // newer release and the command that installs it, for the profile it is about.
+  async function installAgentRuntime(kind,verb="Install",status=null){
+    const definition=(agentInfo?.definitions||[]).find(item=>item.id===kind),update=status?.update;if(!definition?.installable&&!update)return;
+    const label=definition.name||kind;const packageName=definition.packageName||"the official package";
+    // The command as code that reads as one (askChoice's {command}), and after it what the server says of it in brackets ("(with
+    // CODEX_HOME set to …)", "(OpenCode 1.x)").
+    const [,command,beside=""]=/^(.*?)( \([^()]*\))?$/.exec(String(update?update.command:definition.installCommand||"npm install -g "+packageName));
+    const confirmation=kind==="antigravity"
+      ?"Install or update "+label+" ACP runtime on this machine?\n\nTrebell will download Google's published Antigravity ACP runtime through the official Agent Client Protocol registry."
+      :[(update?"Update "+label+" to "+update.latest:"Install or update "+label)+" in the selected environment?\n\nTrebell will run: ",{command},beside];
+    // One install of a harness at a time, also from a Settings page opened while one runs.
+    if(!await askConfirm(confirmation,{confirm:verb+" "+label,tone:"primary"})||agentInstalls.running.includes(kind))return;
+    const id=newInstallId();handledInstalls.add(id);keepTabInstall(kind,id);followInstall(kind);
+    showAgentMessage("");keepAgentInstalls({running:[...agentInstalls.running,kind],note:null});
+    await answerInstall(kind,id,()=>api("/api/agent-runtimes",{method:"POST",body:{action:"install",runtime:kind,environmentId:settings.activeEnvironmentId||null,id,instanceId:status?.id||null}}),verb);
+  }
+  // What an install did, said on its row with the harness list its answer brings (agentInstalls). request is the install pressed here,
+  // or the wait for one this window did not start (install-wait), whose waited:false answer is the harness list once that one has
+  // ended, its installs saying how. verb: the button's, Install or Update, else what the row offers. A press refused as another install
+  // of the harness runs (one this window did not know of) waits for that one's answer instead.
+  async function answerInstall(kind,id,request,verb=null){
+    const names=info=>{const definition=(info?.definitions||[]).find(item=>item.id===kind),status=runtimeStatusForKind(info,kind);return {label:definition?.name||kind,status,verb:verb||(status?.installed?"Update":"Install")}};
+    const ended=(note,info=null)=>{
+      keepTabInstall(kind,null);const follow=followedInstall===kind;if(follow)stopInstallFollow?.();
+      keepAgentInstalls({running:agentInstalls.running.filter(item=>item!==kind),...(note?{note:{kind,...note,seen:agentRowsShown>0,follow}}:{})},info);
+    };
+    const failed=(info,error)=>{
+      const {label,verb:said}=names(info),text=`Could not ${said.toLowerCase()} ${label}`;ended({text:text+": "+error.message,error:true});
+      // With no harness rows on screen (Settings left, or another section open), the app's alert says it, as a refused switch.
+      if(!agentRowsShown)onActionError?.(error,text);
+    };
+    let result=null;
+    try{result=await request()}
+    catch(error){
+      // A request that ends with the page can fail before this module hears pagehide: the browser runs promise callbacks after each
+      // pagehide listener, and App's comes first (its window key). Its failure is read a task later, which a page that has gone never
+      // runs, so the page loaded next still says how that install went (tabInstalls).
+      await new Promise(resolve=>setTimeout(resolve));
+      if(pageLeaving)return;
+      const running=error?.data?.code==="install-running"?error.data.installId:null;
+      if(running&&!handledInstalls.has(running)){
+        handledInstalls.add(running);keepTabInstall(kind,running);
+        return answerInstall(kind,running,()=>api("/api/agent-runtimes",{method:"POST",body:{action:"install-wait",runtime:kind}}),verb);
+      }
+      return failed(lastAgentRuntimeInfo||agentInfo,error);
+    }
+    if(pageLeaving)return;
+    if(result?.waited===false){
+      const last=(result.installs?.ended||[]).find(item=>item.runtime===kind&&item.id===id);
+      if(last&&!last.ok)return failed(result,new Error(last.error||"The install did not finish."));
+      const {label,status}=names(result);
+      return ended(last?{text:installedText(label,status)}:null,result);
+    }
+    setAgentInfo(result);
+    // What the install did is said at once on its row, on the Settings page open now, which takes the harness list too.
+    ended({text:installedText(names(result).label,result.installed?.status)},result);
+    // Reinstalling the harness in use reloads it once the install finishes; the transport stays usable during the install itself.
+    // The app decides, once the switches asked before this answer have settled: this page can show a switch still on its way, or be
+    // closed. A harness switched to meanwhile, here or by opening its thread, keeps its transport and open thread; a switch refused
+    // leaves this harness in use, and it reloads.
+    switchRuntime({runtime:kind,instanceId:result.selectedInstanceId||null,resetThread:true},async()=>result,{gate:false}).catch(()=>{});
+  }
+  // The sign-in terminal the answer opens asks for the keyboard as of this press (pressed, terminal-keyboard.js), so a press made
+  // while the harness's sign in starts keeps it.
+  async function authenticateAgentRuntime(kind,instanceId){
+    const definition=(agentInfo?.definitions||[]).find(item=>item.id===kind),pressed=terminalPresses();if(!definition?.canAuthenticate)return;
+    const name=definition.name||kind;let answer=null;
+    setAgentMessageTarget(kind);
+    keepAgentSignIn(instanceId||kind);showAgentMessage("Opening "+name+" sign in…");
+    try{
+      // Each harness signs in in a terminal the answer opens, Antigravity in the browser page it opens itself.
+      const result=await api("/api/agent-runtime-auth",{method:"POST",body:{action:"login",runtime:kind,instanceId:instanceId||null,environmentId:runtimeEnvironmentId||null,cwd:projectPath||null}});
+      answer=result?.agentSnapshot?{kind,info:result.agentSnapshot,text:`${name} signed in (${result.auth?.methodName||"its own sign-in"}).`}:{kind,text:"Complete sign in in the terminal, then refresh runtime status."};
+      if(result?.session)onOpenRuntimeAuthTerminal?.(result.session,pressed);
+    }catch(error){
+      // With no harness rows on screen as it comes (Antigravity's can take minutes, and the person may have gone on), the app's alert
+      // says it, as a refused switch; a page that shows them says it under the list.
+      answer={kind,text:error.message,error:true};
+      if(!agentRowsShown)onActionError?.(error,"Could not sign in to "+name);
+    }
+    // The answer is said on the Settings page on screen, this one or one opened since this one was left. With none, the window keeps
+    // the harness list it brings, and the app follows it (rememberAgentInfo).
+    finally{const shown=agentSignInViews.size>0;keepAgentSignIn(null,answer);if(!shown&&answer?.info)setAgentInfo(answer.info)}
+  }
+  // A harness profile's sign-in method, and a key for the provider it runs on, from its row.
+  async function setHarnessMethod(profile,method){
+    const name=(agentInfo?.definitions||[]).find(item=>item.id===profile.kind)?.name||profile.kind;
+    setAgentMessageTarget(profile.kind);setHarnessAuthBusy(true);showAgentMessage("Saving…");
+    try{
+      const result=await api("/api/agent-runtime-auth",{method:"POST",body:{action:"method",instanceId:profile.id,method}});
+      if(result?.agentSnapshot)setAgentInfo(result.agentSnapshot);
+      showAgentMessage(`${name} ${method==="api-key"?"runs on its API key":"signs in with its own sign-in"}.${result?.stoppedChats?" Open chats on it stopped.":""}`);
+    }catch(error){showAgentMessage(error.message,true)}
+    finally{setHarnessAuthBusy(false)}
+  }
+  async function saveHarnessKey(def,provider,key){
+    setAgentMessageTarget(def.id);setHarnessAuthBusy(true);showAgentMessage("Saving…");
+    try{
+      const result=await api("/api/providers",{method:"POST",body:{provider,apiKey:key,select:false}});
+      setProviderInfo(result);await loadAgentRuntimes();showAgentMessage((key?"API key saved.":"API key removed.")+(result.stoppedChats?" Open chats on it stopped.":""));
+      // With Trebell Native active, the key of the provider it calls: the app's readiness and model list follow it, as after the
+      // Model provider card's (which only Native's Settings draw); on another harness, switching to Native reads them again.
+      if(selectedAgent==="native"&&provider===result.selected)await onProviderUpdated?.({provider,catalog:result,refreshBootstrap:false});
+      return true;
+    }catch(error){showAgentMessage(error.message,true);return false}
+    finally{setHarnessAuthBusy(false)}
+  }
+  // alert:false leaves a failure to the caller, which says it by its own control (the theme note), so it is not said twice.
+  async function save(patch,{alert=true}={}){
+    setSettingsError("");
+    if("appearance" in patch&&environmentThemeCatalog?.environmentKey){
+      const selections={...(settings.environmentThemeSelections||{})};
+      delete selections[environmentThemeCatalog.environmentKey];
+      patch={...patch,environmentThemeSelections:selections};
+    }
+    const providerChange="modelProvider" in patch&&patch.modelProvider!==settings.modelProvider;
+    const optimistic=providerChange?{...settings,modelProvider:patch.modelProvider}:null;
+    if(providerChange)setProviderSwitching(true);
+    if(optimistic){onProviderChanging?.(patch.modelProvider);onSettings(optimistic)}
+    let next,providerResult=null;
+    try{
+      if(providerChange){
+        providerResult=await api("/api/providers",{method:"POST",body:{provider:patch.modelProvider}});
+        next={...settings,...patch,modelProvider:providerResult.selected||patch.modelProvider};
+      }else next=await api("/api/settings",{method:"POST",body:patch});
+    }
+    catch(error){
+      if(optimistic){onProviderChanging?.(settings.modelProvider||DEFAULT_MODEL_PROVIDER);onSettings(settings)}
+      if(providerChange)setProviderSwitching(false);
+      if(alert)setSettingsError(error?.message||String(error)||"Could not save settings.");
+      throw error;
+    }
+    // With the keys this save named, so a read of the settings sent before it answered (Trebell's start-up among them) leaves them.
+    onSettings(next,Object.keys(patch));
+    if("modelProvider" in patch){
+      setApiKey("");
+      showProviderMessage("");
+      try{
+        if(providerResult){
+          setProviderInfo(providerResult);
+          await onProviderUpdated?.({provider:providerResult.selected||next.modelProvider||patch.modelProvider,agentRuntime:providerResult.agentRuntime||next.agentRuntime||selectedAgent,catalog:providerResult,refreshBootstrap:false});
+        }else{
+          const refreshPromise=onProviderUpdated?.({provider:next.modelProvider||patch.modelProvider,agentRuntime:next.agentRuntime||selectedAgent});
+          await Promise.all([loadProviders(),refreshPromise]);
+        }
+      }finally{if(providerChange)setProviderSwitching(false)}
+    }
+    if("customModels" in patch)await onProviderUpdated?.({refreshBootstrap:false});
+    return next;
+  }
+  // save() rejects so a caller can undo its own work (an MCP draft, background mode). Controls with nothing to undo save through here:
+  // the alert shows the failure and the rejection is not left unhandled. It resolves to the saved settings, or to undefined on failure.
+  function saveSetting(patch){return save(patch).catch(error=>{setSettingsError(current=>current||error?.message||String(error)||"Could not save settings.")})}
+  function mcpArgs(value){return String(value||"").split(/\r?\n/).map(item=>item.trim()).filter(Boolean).slice(0,64)}
+  function mcpSavedMessage(action="updated"){
+    return selectedAgent==="native"
+      ?`MCP server ${action}. Trebell Native threads reload MCP tools before their next turn.`
+      :`MCP server ${action}. New or resumed sessions will receive the change.`;
+  }
+  async function addMcpServer(){
+    const type=mcpDraft?.type==="http"?"http":"stdio";
+    if(!mcpDraft?.name?.trim()||(type==="http"?!mcpDraft?.url?.trim():!mcpDraft?.command?.trim()))return;
+    const environmentId=settings.activeEnvironmentId||null;
+    const entry=type==="http"
+      ?{id:`mcp-${crypto.randomUUID()}`,name:mcpDraft.name.trim(),runtime:selectedAgent,environmentId:null,enabled:true,type:"http",url:mcpDraft.url.trim(),bearerTokenEnv:mcpDraft.bearerTokenEnv?.trim()||null}
+      :{id:`mcp-${crypto.randomUUID()}`,name:mcpDraft.name.trim(),runtime:selectedAgent,environmentId,enabled:true,type:"stdio",command:mcpDraft.command.trim(),args:mcpArgs(mcpDraft.argsText),env:[]};
+    try{
+      const next=await save({mcpServers:[...(settings.mcpServers||[]),entry]});
+      // The server drops entries it cannot run (an HTTP URL that is not plain http(s), or carries credentials or token parameters), so the draft stays open instead of reporting a save.
+      if(Array.isArray(next?.mcpServers)&&!next.mcpServers.some(item=>item.id===entry.id)){setMcpMessage(type==="http"?"Save failed: use a plain http:// or https:// URL without a user name, password or token parameters.":"Save failed: Trebell could not use this MCP server for the selected runtime.");return}
+      setMcpDraft(null);setMcpMessage(mcpSavedMessage("saved"));
+    }catch(error){setMcpMessage(error?.message||String(error))}
+  }
+  async function toggleMcpServer(server){
+    setMcpMessage("");
+    try{await save({mcpServers:(settings.mcpServers||[]).map(item=>item.id===server.id?{...item,enabled:item.enabled===false}:item)});setMcpMessage(mcpSavedMessage(server.enabled===false?"enabled":"disabled"))}
+    catch(error){setMcpMessage(error?.message||String(error))}
+  }
+  // A removed server cannot be brought back from here, so Remove asks first, in the app's dialog; Cancel keeps it.
+  async function removeMcpServer(server){
+    if(!await askConfirm(`Remove the MCP server “${server.name}”? This cannot be undone: its ${server.type==="http"?"URL":"command"} and settings are lost.`,{confirm:"Remove server"}))return;
+    setMcpMessage("");
+    // The servers as they are once the person answers: a change that landed while the question was open (another server's Disable)
+    // stays.
+    try{await save({mcpServers:(settingsRef.current.mcpServers||[]).filter(item=>item.id!==server.id)});setMcpDraft(current=>current?.id===server.id?null:current);setMcpMessage(mcpSavedMessage("removed"))}
+    catch(error){setMcpMessage(error?.message||String(error))}
+  }
+  async function setBackgroundMode(enabled){
+    const previous=Boolean(settings.backgroundMode);setSettingsError("");
+    try{
+      await window.trebellDesktop.background.set(enabled);
+      await save({backgroundMode:enabled});
+    }catch(error){
+      if(enabled!==previous){
+        try{await window.trebellDesktop.background.set(previous)}catch{}
+      }
+      setSettingsError(error?.message||String(error)||"Could not update background mode.");
+    }
+  }
+  // A theme note answers the last theme action, so choosing another theme clears it instead of leaving it under the new choice.
+  function selectTheme(appearance){setThemeMessage("");return saveSetting({appearance})}
+  async function selectEnvironmentTheme(theme){
+    if(!theme?.publishedId||!environmentThemeCatalog?.environmentKey)return;
+    const selections={...(settings.environmentThemeSelections||{}),[environmentThemeCatalog.environmentKey]:theme.publishedId};
+    setThemeMessage("");await saveSetting({environmentThemeSelections:selections});
+  }
+  async function refreshPublishedThemes(){
+    if(environmentThemeRefreshing)return;
+    setSettingsError("");setEnvironmentThemeRefreshing(true);
+    try{await onRefreshEnvironmentThemes?.({strict:true})}
+    catch(error){setSettingsError("Could not refresh published themes: "+(error?.message||String(error)))}
+    finally{setEnvironmentThemeRefreshing(false)}
+  }
+  async function stopFollowingEnvironmentTheme(){
+    if(!environmentThemeCatalog?.environmentKey)return;
+    const selections={...(settings.environmentThemeSelections||{})};delete selections[environmentThemeCatalog.environmentKey];
+    setThemeMessage("");await saveSetting({environmentThemeSelections:selections});
+  }
+  async function duplicateEnvironmentTheme(theme){
+    if(!theme)return;
+    const copy=normalizeCustomTheme({...theme,name:`${theme.name} copy`},{id:`custom-${crypto.randomUUID()}`});
+    const selections={...(settings.environmentThemeSelections||{})};delete selections[environmentThemeCatalog.environmentKey];
+    const current=Array.isArray(settings.customThemes)?settings.customThemes:[];
+    if(!await saveSetting({customThemes:[...current,copy],appearance:copy.id,environmentThemeSelections:selections}))return;
+    setThemeDraft(copy);setThemeMessage("Published theme duplicated as an editable local theme.");
+  }
+  // A drag fires an input event per step: the thumb follows a local draft and one save goes out once the slider settles (or Settings closes).
+  function dragPanelAnimation(value){
+    setPanelAnimationDraft(value);clearTimeout(panelAnimationSaveRef.current?.timer);
+    panelAnimationSaveRef.current={timer:setTimeout(flushPanelAnimation,300),save:()=>saveSetting({panelAnimationMs:value}).then(()=>setPanelAnimationDraft(current=>current===value?null:current))};
+  }
+  function flushPanelAnimation(){const pending=panelAnimationSaveRef.current;if(!pending)return;clearTimeout(pending.timer);panelAnimationSaveRef.current=null;pending.save()}
+  useEffect(()=>flushPanelAnimation,[]);
+  function createTheme(){
+    const light=(settings.appearanceMode||"system")==="light";
+    setThemeDraft({id:`custom-${crypto.randomUUID()}`,name:"Custom theme",appearance:light?"light":"dark",canvas:light?"#f3f5f9":"#0c0f16",accent:"#9c6cff",colors:{}});setThemeMessage("");
+  }
+  async function saveTheme(){
+    if(!themeDraft)return;
+    try{
+      const theme=normalizeCustomTheme(themeDraft,{id:themeDraft.id});const current=Array.isArray(settings.customThemes)?settings.customThemes:[];
+      await save({customThemes:[...current.filter(item=>item.id!==theme.id),theme],appearance:theme.id},{alert:false});setThemeDraft(theme);setThemeMessage("Theme saved and applied.");
+    }catch(error){setThemeMessage(error.message||String(error),true)}
+  }
+  async function removeTheme(theme){
+    const current=Array.isArray(settings.customThemes)?settings.customThemes:[];const patch={customThemes:current.filter(item=>item.id!==theme.id)};
+    const index=current.findIndex(item=>item.id===theme.id),selected=settings.appearance===theme.id;
+    if(selected)patch.appearance="dark";
+    setThemeMessage("");if(!await saveSetting(patch))return;
+    if(themeDraft?.id===theme.id)setThemeDraft(null);
+    // The delete is immediate and the app's undo toast offers it back, as for archived threads: Undo restores the theme in its place, selected again if it was
+    // and nothing else was chosen since (the theme is still the "dark" the delete fell back to).
+    // It saves through save(), so a failed restore shows in the Settings alert, or in the app's error toast once Settings is closed.
+    const restore=()=>{const latest=(Array.isArray(settingsRef.current.customThemes)?settingsRef.current.customThemes:[]).filter(item=>item.id!==theme.id);latest.splice(index<0?latest.length:index,0,theme);return save({customThemes:latest,...(selected&&settingsRef.current.appearance==="dark"?{appearance:theme.id}:{})})};
+    if(onOfferUndo)onOfferUndo(`Theme “${theme.name}” deleted`,restore);else setThemeMessage("Theme removed.");
+  }
+  async function importThemeFile(event){
+    const file=event.target.files?.[0];event.target.value="";if(!file)return;
+    setThemeMessage("");
+    try{
+      const parsed=parseThemeJson(await file.text());const source=Array.isArray(parsed)?parsed[0]:parsed;const theme=normalizeCustomTheme(source,{id:`custom-${crypto.randomUUID()}`});const current=Array.isArray(settings.customThemes)?settings.customThemes:[];
+      await save({customThemes:[...current,theme],appearance:theme.id},{alert:false});setThemeDraft(theme);setThemeMessage(`Imported ${theme.name}.`);
+    }catch(error){setThemeMessage("Import failed: "+(error.message||String(error)),true)}
+  }
+  function exportTheme(theme){
+    const blob=new Blob([JSON.stringify(theme,null,2)+"\n"],{type:"application/json"});const url=URL.createObjectURL(blob);const anchor=document.createElement("a");anchor.href=url;anchor.download=(theme.name||"trebell-theme").replace(/[^a-z0-9._-]+/gi,"-").replace(/^-|-$/g,"")+".json";anchor.click();setTimeout(()=>URL.revokeObjectURL(url),0);
+  }
+  async function addCustomModel(){
+    const id=modelDraft.id.trim();if(!id)return;showCustomModelMessage("");
+    if(selectedAgent==="opencode"&&!id.includes("/")){showCustomModelMessage("OpenCode custom models must use provider/model format.",true);return}
+    const provider=selectedManagedInference?selected:null;
+    const entry={
+      id,name:modelDraft.name.trim()||id,runtime:selectedAgent,provider,
+      effort:modelDraft.effort||null,serviceTier:modelDraft.serviceTier||null,
+      inputPrice:modelDraft.inputPrice===""?null:Number(modelDraft.inputPrice),
+      outputPrice:modelDraft.outputPrice===""?null:Number(modelDraft.outputPrice),
+      cacheReadPrice:modelDraft.cacheReadPrice===""?null:Number(modelDraft.cacheReadPrice),
+      cacheWritePrice:modelDraft.cacheWritePrice===""?null:Number(modelDraft.cacheWritePrice),
+    };
+    for(const key of ["inputPrice","outputPrice","cacheReadPrice","cacheWritePrice"])if(entry[key]!=null&&(!Number.isFinite(entry[key])||entry[key]<0)){showCustomModelMessage("Custom model prices must be numbers of 0 or more.",true);return}
+    const current=Array.isArray(settings.customModels)?settings.customModels:[];
+    const next=[...current.filter(item=>!(item.id===id&&item.runtime===selectedAgent&&(!selectedManagedInference||item.provider===selected))),entry];
+    if(!await saveSetting({customModels:next}))return;
+    setModelDraft({id:"",name:"",effort:"",serviceTier:"",inputPrice:"",outputPrice:"",cacheReadPrice:"",cacheWritePrice:""});setCustomModelEditorOpen(false);showCustomModelMessage("Custom model saved.");
+  }
+  async function removeCustomModel(item){
+    const current=Array.isArray(settings.customModels)?settings.customModels:[];
+    await saveSetting({customModels:current.filter(candidate=>!(candidate.id===item.id&&candidate.runtime===item.runtime&&candidate.provider===item.provider))});
+  }
+  // Each key sent runs its live check against the provider, and the server checks one key at a time (a refused key puts back the one
+  // stored before it), so a key goes once a press. Enter's repeats and the second click of a double click send nothing, as they can
+  // come after a refusal has given the key back to the field, nor does a press while that key is on its way. Another key pressed
+  // meanwhile goes once that one has answered, so the key sent last is the one checked. What follows an answer (the providers read
+  // again, and the app's catalog, which can wait 12 s on the provider) holds back no press.
+  const providerKeySendRef=useRef({sending:null,next:null,seq:0});
+  function saveProviderKey(){
+    const send=providerKeySendRef.current,press={provider:selected,key:apiKey};
+    if(!send.sending)sendProviderKey(press);
+    else send.next=press.provider===send.sending.provider&&press.key===send.sending.key?null:press;
+  }
+  async function sendProviderKey({provider,key}){
+    const send=providerKeySendRef.current,seq=++send.seq;send.sending={provider,key};
+    showProviderMessage("Saving…");
+    let result=null,failure=null;
+    try{result=await api("/api/providers",{method:"POST",body:{provider,apiKey:key}})}catch(error){failure=error}
+    const next=send.next;send.sending=send.next=null;
+    if(result)setProviderInfo(result);
+    if(next)return sendProviderKey(next);
+    try{
+      if(failure)throw failure;
+      // A key typed into the field while this one was on its way stays there.
+      setApiKey(current=>current===key?"":current);
+      showProviderMessage(result.ready?"API key saved. Harness ready.":"API key saved.");
+      await onProviderUpdated?.({provider:result.selected||provider,agentRuntime:result.agentRuntime||selectedAgent,catalog:result,refreshBootstrap:false});
+    }catch(error){
+      // A refused key check comes back with the provider's status, which says why; other failures show their own message.
+      // The app's catalog then says why too, so the composer shows the failed check instead of a first step. A key sent since says
+      // how it went instead.
+      const refused=(await loadProviders())?.providers?.find(item=>item.id===provider)?.keyCheck;
+      if(seq!==send.seq)return;
+      showProviderMessage(refused?"":error.message,!refused);
+      if(refused)await onProviderUpdated?.({provider,agentRuntime:selectedAgent,refreshBootstrap:false});
+    }
+  }
+  async function clearProviderKey(){
+    showProviderMessage("Removing…");
+    try{
+      const result=await api("/api/providers",{method:"POST",body:{provider:selected,apiKey:""}});
+      setApiKey("");
+      setProviderInfo(result);
+      showProviderMessage("API key removed.");
+      await onProviderUpdated?.({provider:result.selected||selected,agentRuntime:result.agentRuntime||selectedAgent,catalog:result,refreshBootstrap:false});
+    }catch(error){showProviderMessage(error.message,true)}
+  }
+  async function refresh({
+    reportErrors=false,
+    includeRuntime=true,
+    includeDiagnostics=true,
+    includeStorage=true,
+    includeSnapshots=true,
+    includeBrowser=true,
+  }={}){
+    setLoading(true);if(reportErrors)setSettingsError("");
+    const checks=[];
+    if(includeDiagnostics)checks.push(["diagnostics",api("/api/diagnostics?path="+encodeURIComponent(projectPath||""))]);
+    if(includeStorage)checks.push(["storage",loadStorageInfo({strict:reportErrors})]);
+    if(includeRuntime)checks.push(["providers",loadProviders({strict:reportErrors})],["runtimes",loadAgentRuntimes({strict:reportErrors})]);
+    const results=await Promise.allSettled(checks.map(([,promise])=>promise));
+    const failures=results.filter(item=>item.status==="rejected").map(item=>item.reason);
+    results.forEach((result,index)=>{
+      const key=checks[index]?.[0];
+      if(key==="diagnostics"){
+        if(result.status==="fulfilled")setDiagnostics(result.value);
+        else if(!diagnostics)setDiagnostics({error:result.reason?.message||String(result.reason)});
+      }
+    });
+    if(reportErrors&&failures.length)setSettingsError("Could not refresh diagnostics: "+failures.map(error=>error?.message||String(error)).join(" · "));
+    setLoading(false);
+    if(includeSnapshots&&window.trebellDesktop?.snapshots)window.trebellDesktop.snapshots.get().then(info=>{setSnapshotInfo(info);setSnapshotMessage(current=>/^Could not load SnapShot settings:/.test(current)?"":current)}).catch(error=>setSnapshotMessage("Could not load SnapShot settings: "+(error?.message||String(error))));
+    if(includeBrowser&&window.trebellDesktop?.browser?.importSources)loadBrowserImportSources();
+    return failures.length===0;
+  }
+  async function loadStorageInfo({strict=false}={}){
+    try{
+      const info=await api("/api/storage-cleanup");
+      setStorageInfo(info);setStorageError("");return info;
+    }catch(error){
+      const detail=error?.message||String(error),action=storageInfo?"refresh":"read";
+      setStorageError(current=>(current?"Still could not ":"Could not ")+action+" storage use: "+detail);setStorageFailures(count=>count+1);
+      if(strict)throw error;
+      return storageInfo;
+    }
+  }
+  async function saveStorageRetention(key,input){
+    // Under 1 day means off, as the server and the worktree "After inactive days" field read it: clamping 0 (typed to mean off) or -5 up
+    // to 1 day made them the most aggressive cleanup. The field then shows what is saved: blank for off, 3650 for anything above it, and the
+    // old value after a failed save, so it never reads "off" while a cleanup is still set.
+    const text=String(input.value??"").trim(),days=text?Math.trunc(Number(text)):NaN;
+    const value=Number.isFinite(days)&&days>=1?Math.min(3650,days):null;
+    // The save names only this field (the server keeps the other as saved): one left while the other's save was still on its way sent
+    // the whole setting from the last render, with the other field's old value. A field left again before its own save answers is
+    // compared with the value on its way, not with the last render's.
+    const sending=retentionSendingRef.current,previous=sending.has(key)?sending.get(key).value:(settings.storageCleanup?.[key]??null);
+    if(value===previous){input.value=value??"";return}
+    const token={value};sending.set(key,token);
+    let saved;
+    try{saved=await saveSetting({storageCleanup:{[key]:value}})}
+    finally{if(sending.get(key)===token)sending.delete(key)}
+    input.value=(saved?saved.storageCleanup?.[key]:previous)??"";
+    if(saved)await loadStorageInfo();
+  }
+  async function runStorageCleanup(){
+    setStorageBusy(true);setStorageMessage({text:"Running safe cleanup…",error:false});
+    try{
+      const result=await api("/api/storage-cleanup",{method:"POST",body:{}});
+      const worktrees=Number(result.worktrees?.removed)||0,attachments=Number(result.attachments?.removed)||0,terminals=Number(result.terminalHistory?.removed)||0;
+      setStorageMessage({text:`Removed ${worktrees} managed worktree${worktrees===1?"":"s"}, ${attachments} attachment cache file${attachments===1?"":"s"}, and ${terminals} stopped terminal histor${terminals===1?"y":"ies"}.`,error:false});
+      await loadStorageInfo();
+    }catch(error){setStorageMessage({text:"Could not clean up storage: "+(error?.message||String(error)),error:true})}
+    finally{setStorageBusy(false)}
+  }
+  async function loadBrowserImportSources({strict=false}={}){
+    try{
+      const info=await window.trebellDesktop?.browser?.importSources?.();if(!info)return null;
+      setBrowserImport(info);const profiles=info.sources?.flatMap(source=>source.profiles||[])||[];
+      setBrowserImportProfile(current=>profiles.some(profile=>profile.id===current)?current:(profiles[0]?.id||""));
+      setBrowserImportMessage(current=>current.scanFailed?{text:"",error:false,scanFailed:false}:current);
+      return info;
+    }catch(error){
+      setBrowserImportMessage({text:"Could not scan browser profiles: "+(error?.message||String(error)),error:true,scanFailed:true});
+      if(strict)throw error;
+      return null;
+    }
+  }
+  async function importBrowserProfile(){
+    const source=browserImport.sources?.find(item=>item.profiles?.some(profile=>profile.id===browserImportProfile));if(!source||!browserImportProfile)return;
+    setBrowserImportBusy(true);setBrowserImportMessage({text:"Importing…",error:false,scanFailed:false});
+    try{
+      const result=await window.trebellDesktop.browser.importProfile(source.id,browserImportProfile);
+      setBrowserImportMessage({text:`Imported ${result.imported} cookie${result.imported===1?"":"s"}${result.skipped?` · ${result.skipped} encrypted/partitioned skipped`:""}${result.failed?` · ${result.failed} failed`:""}.`,error:Boolean(result.failed),scanFailed:false});
+      await loadBrowserImportSources();
+    }catch(error){
+      const primary=error?.message||String(error);
+      const refreshed=await loadBrowserImportSources();
+      setBrowserImportMessage(current=>({text:refreshed?primary:primary+" · Browser profile state could not be refreshed.",error:true,scanFailed:!refreshed&&current.scanFailed}));
+    }
+    finally{setBrowserImportBusy(false)}
+  }
+  async function configureSnapshots(patch){
+    if(!window.trebellDesktop?.snapshots)return;
+    setSnapshotMessage("Saving…");
+    try{
+      // A save sends its own change and the shortcut in the field, which the main process merges into the saved settings, one save at
+      // a time. A switch shows the saved state until its save answers, so the whole card as shown, sent with a second switch's change,
+      // turned the first switch back.
+      const next=await window.trebellDesktop.snapshots.configure({shortcut:snapshotInfo.shortcut,...patch});
+      setSnapshotInfo(next);setSnapshotMessage(next.enabled?"SnapShots ready.":"SnapShots disabled.");
+    }catch(error){
+      const primary=error?.message||String(error);
+      try{
+        const current=await window.trebellDesktop.snapshots.get();
+        if(current)setSnapshotInfo(current);
+        setSnapshotMessage(primary);
+      }catch(reloadError){
+        setSnapshotMessage(primary+" · Could not reload SnapShot settings: "+(reloadError?.message||String(reloadError)));
+      }
+    }
+  }
+  useEffect(()=>{
+    if(settingsSection==="general")refresh({includeRuntime:false,includeDiagnostics:false,includeStorage:false,includeSnapshots:false,includeBrowser:false});
+    else if(settingsSection==="workspace")refresh({includeRuntime:false,includeDiagnostics:false,includeSnapshots:false,includeBrowser:false});
+    else if(settingsSection==="diagnostics")refresh({includeRuntime:false,includeStorage:false,includeSnapshots:false,includeBrowser:false});
+    else if(settingsSection==="desktop")refresh({includeRuntime:false,includeDiagnostics:false,includeStorage:false});
+  },[projectPath,settingsSection]);
+  useEffect(()=>{if(settingsSection==="agents")loadProviders()},[settingsSection]);
+  useEffect(()=>{if(settingsSection==="agents"||settingsSection==="diagnostics")loadAgentRuntimes({kept:true})},[settingsSection]);
+  useEffect(()=>{
+    if(!settingsEntry?.nonce||settingsEntry.nonce===appliedSettingsEntryNonce)return;
+    appliedSettingsEntryNonce=settingsEntry.nonce;
+    if(settingsEntry.section)setSettingsSection(settingsEntry.section);
+    setSettingsSearch("");
+    if(settingsEntry.target)revealSettingTarget(settingsEntry.target,"",{focus:settingsEntry.focus});
+  },[settingsEntry?.nonce]);
+  useEffect(()=>()=>stopSettingFollow?.(),[]);
+  useEffect(()=>{
+    setInstanceDraft(null);
+    showCustomModelEditor(false);
+  },[selectedAgent]);
+  const selectedStatus=providerInfo?.providers?.find(p=>p.id===selected)||providerInfo?.status;
+  // A provider without a key shows that next step in the neutral status; it turns red once a key check or the provider itself
+  // fails. The server keeps a refused key check (keyCheck), so its reason is still here after leaving Settings; the catalog
+  // error that repeats it is not shown twice.
+  const keyCheck=providerSwitching?null:selectedStatus?.keyCheck||null;
+  const providerStatusText=providerSwitching?"switching provider…":keyCheck?"key check failed":selectedStatus?.hasKey?(modelError?"provider error":(providerInfo?.ready?"ready":"configured")):MISSING_PROVIDER_KEY;
+  const providerModelError=modelError&&modelError!==MISSING_PROVIDER_KEY&&modelError!==providerStatusText&&!(keyCheck&&modelError.endsWith(keyCheck.message))?modelError:"";
+  const selectedAgentStatus=runtimeStatusForKind(agentInfo,selectedAgent,{preferSelected:true});
+  // Diagnostics chips stay neutral until their answer arrives (the runtime poll, then the diagnostics read): an unknown
+  // state is not a warning. They used to show amber "not ready" for a provider that was ready but not yet read. A failed
+  // diagnostics read is no longer a check in progress: that chip stays neutral ("unknown") and its title names the failure.
+  // The harness answers through the runtime poll or the harness list (see harnessCheck), so a failing poll cannot leave it checking.
+  const harness=harnessCheck({runtime,status:selectedAgentStatus,listLoaded:agentInfo!==null,listLoading:agentInfoRefreshing,listError:agentInfoError||agentInfo?.error||""});
+  const runtimeChip=harness.state,selectedAgentName=selectedAgentStatus?.name||agentName(selectedAgent);
+  const providerChip=diagnostics?.runtime?(diagnostics.runtime.providerReady?"ok":"warn"):diagnostics?.error?"unknown":"pending";
+  const providerChipTitle=providerChip==="pending"?"Checking the provider":providerChip==="unknown"?"Could not check the provider: "+diagnostics.error:undefined;
+  const selectedAgentDefinition=(agentInfo?.definitions||[]).find(item=>item.id===selectedAgent)||null;
+  const agentMessageHarness=agentMessageTarget&&agentMessageTarget!==selectedAgent?((agentInfo?.definitions||[]).find(item=>item.id===agentMessageTarget)?.name||agentMessageTarget):"";
+  const agentMessageText=agentMessageHarness&&!agentMessage.includes(agentMessageHarness)?agentMessageHarness+": "+agentMessage:agentMessage;
+  const selectedAgentCapabilities=Object.keys(runtimeCapabilities||{}).length?runtimeCapabilities:(selectedAgentDefinition?.capabilities||(agentInfo?.selectedRuntime===selectedAgent?agentInfo?.capabilities:null)||{});
+  const desktopTools=desktopBridgeToolAvailability(window.trebellDesktop);
+  const selectedInstances=(agentInfo?.instances||[]).filter(item=>item.kind===selectedAgent);
+  const customModels=(settings.customModels||[]).filter(item=>item.runtime===selectedAgent&&(!selectedManagedInference||item.provider===selected));
+  const mcpEnvironmentId=settings.activeEnvironmentId||null;
+  const scopedMcpServers=(settings.mcpServers||[]).filter(item=>item.runtime===selectedAgent&&(item.environmentId||null)===mcpEnvironmentId);
+  const desktopAvailable=Boolean(window.trebellDesktop);
+  const reducedMotion=Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  const panelAnimationMs=panelAnimationDraft??Math.max(0,Math.min(400,Number(settings.panelAnimationMs)||0));
+  // The theme in use, as the app applies it: a published theme this environment follows wins over the user's own choice, so while
+  // one is followed none of the user's themes is marked chosen (their own is only outlined, as the one they go back to). The marks
+  // are pressed buttons, so assistive tech hears them too.
+  const followedTheme=(environmentThemes||[]).find(theme=>theme.publishedId===settings.environmentThemeSelections?.[environmentThemeCatalog?.environmentKey]);
+  const themeInUse=followedTheme?null:settings.appearance||"dark";
+  const choiceProps=(chosen,onClick,underneath=false)=>({className:chosen?"active":underneath?"underneath":"","aria-pressed":chosen,onClick});
+  const themeChoiceProps=value=>choiceProps(themeInUse===value,()=>selectTheme(value),Boolean(followedTheme)&&(settings.appearance||"dark")===value);
+  const settingsSections=[
+    ["general",Settings2,"General","Everyday behavior and notifications"],
+    ["agents",Bot,"Agents & models","Harnesses, providers and model configuration"],
+    ["workspace",HardDrive,"Workspace","Project defaults, storage and review lifecycle"],
+    ["appearance",Palette,"Appearance","Theme, color mode and motion"],
+    ...(desktopAvailable?[["desktop",MonitorCog,"Desktop","Computer use, browser profiles and SnapShots"]]:[]),
+    ["shortcuts",Keyboard,"Shortcuts","Keyboard commands and conditions"],
+    ["diagnostics",Activity,"Diagnostics","Runtime health and local logs"],
+  ];
+  const activeSettingsSection=settingsSections.find(item=>item[0]===settingsSection)||settingsSections[0];
+  // The workspace topbar names the open section (Settings › General).
+  const activeSettingsLabel=activeSettingsSection[2];
+  useEffect(()=>{onSectionChange?.(activeSettingsLabel)},[activeSettingsLabel,onSectionChange]);
+  const availableSettingsSections=new Set(settingsSections.map(item=>item[0]));
+  // The cards drawn only for some harnesses or only in the desktop app, by their search id, which the cards below are drawn by too:
+  // the search offers a card only where it is drawn, so Enter on it opens it. With Codex, Model provider and MCP servers were offered,
+  // and Enter on either opened Agents & models at its head. Trebell Native and Antigravity take no runtime profiles (the server's
+  // harness table), which is known before the harness list comes: until it came, both drew an empty Profiles block, and the search
+  // offered Runtime profiles, which went once it came.
+  const settingDrawn={
+    "general-notifications":Boolean(window.trebellDesktop?.notify),
+    "agents-profiles":selectedAgentDefinition?selectedAgentDefinition.multipleInstances!==false:!["native","antigravity"].includes(selectedAgent),
+    "agents-provider":selectedManagedInference,
+    "agents-models":["native","codex","claude","opencode","cursor","grok","antigravity","muse"].includes(selectedAgent),
+    // Muse Code's MCP servers once its sessions take them (its mcpInjection capability).
+    "agents-mcp":["native","claude","cursor","grok","antigravity"].includes(selectedAgent)||selectedAgent==="muse"&&selectedAgentCapabilities.mcpInjection===true,
+    "desktop-computer":Boolean(selectedAgentCapabilities.dynamicTools&&desktopTools.computer),
+    "desktop-browser":Boolean(window.trebellDesktop?.browser?.importSources),
+    "desktop-snapshot":Boolean(window.trebellDesktop?.snapshots),
+    "desktop-background":Boolean(window.trebellDesktop?.background),
+  };
+  const searchResults=searchSettings(settingsSearch,{keybindings:KEYBINDING_COMMANDS,projectScripts}).filter(item=>availableSettingsSections.has(item.section)&&settingDrawn[item.id]!==false).slice(0,18);
+  const settingsSectionLabels=Object.fromEntries(settingsSections.map(([id,,label])=>[id,label]));
+  const workspaceEnvironmentValue=workspaceScope.environmentId==="local"?null:workspaceScope.environmentId;
+  const workspaceProjects=workspaceScopeCatalog.projects.filter(project=>(project.environmentId||null)===(workspaceEnvironmentValue||null));
+  const workspaceEnvironment=workspaceScope.environmentId==="local"?null:(workspaceScopeCatalog.environmentData.profiles||[]).find(profile=>profile.id===workspaceScope.environmentId);
+  const workspaceProject=workspaceProjects.find(project=>project.id===workspaceScope.projectId)||null;
+  function targetProps(id){return {"data-setting-target":id}}
+  // focus names a field inside the target (its data-testid) that takes the keyboard once the target shows.
+  function revealSettingTarget(id,title="",{focus=""}={}){
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      const exact=document.querySelector(`[data-setting-target="${id}"]`);
+      const candidates=[...document.querySelectorAll(".settings-card,.settings-section-slot,.diagnostics-log,.keybinding-row")];
+      const wanted=String(title||"").trim().toLowerCase();
+      const fallback=wanted&&candidates.find(node=>{
+        const heading=node.querySelector("h3,strong");
+        return String(heading?.textContent||"").trim().toLowerCase()===wanted;
+      });
+      const target=exact||fallback||document.querySelector(".settings-section-head");
+      target?.scrollIntoView({block:settingBlock(target),behavior:"smooth"});
+      if(focus)exact?.querySelector(`[data-testid="${focus}"]`)?.focus({preventScroll:true});
+      // A repeat search for the same setting restarts its highlight instead of losing it to the earlier timer.
+      if(target){clearTimeout(target.__settingsHitTimer);target.classList.add("settings-search-hit");target.__settingsHitTimer=setTimeout(()=>target.classList.remove("settings-search-hit"),1600);followSettingTarget(target)}
+    }));
+  }
+  function openSearchResult(item){
+    setSettingsSection(item.section);setSettingsSearch("");
+    revealSettingTarget(item.id,item.title);
+  }
+  return <div className="settings-page redesigned-settings">
+    <aside className="settings-rail">
+      <label className="settings-search-box"><Search size={13}/><input aria-label="Search settings" value={settingsSearch} onChange={event=>setSettingsSearch(event.target.value)} onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();setSettingsSearch("")}else if(event.key==="Enter"&&settingsSearch.trim()&&searchResults[0]){event.preventDefault();openSearchResult(searchResults[0])}}} placeholder="Search settings…"/></label>
+      {/* Keyed by the query, the results list starts at its top for each query, so its first result, the one Enter opens, shows: it
+          kept the scroll of the query before, which could leave that result out of sight above. */}
+      {settingsSearch.trim()?<div key={settingsSearch.trim()} className="settings-search-results" data-testid="settings-search-results">
+        {searchResults.length?searchResults.map(item=><button key={item.id} type="button" onClick={event=>{openSearchResult(item);if(event.detail===1)swallowSecondClick()}}><strong>{item.title}</strong><span>{settingsSectionLabels[item.section]||item.section}</span>{item.description&&<small>{item.description}</small>}</button>):<p>No settings match “{settingsSearch.trim()}”.</p>}
+      </div>:<nav className="settings-nav" aria-label="Settings categories">
+        {settingsSections.map(([id,Icon,label,description])=><button key={id} type="button" className={settingsSection===id?"active":""} onClick={()=>setSettingsSection(id)} aria-current={settingsSection===id?"page":undefined}>
+          <Icon size={15}/><span><strong>{label}</strong><small>{description}</small></span>
+        </button>)}
+      </nav>}
+    </aside>
+    {/* A harness row the keyboard reaches shows whole, with the room its scroll margin keeps: the browser's own scroll to the focused
+        control moves only that control, which sits inside the row's border or is shorter than the row, and none at all when that
+        control already shows. Only for the keyboard (keyboardLast): a press of the mouse, also into a key field, moves no row. */}
+    <section className="settings-stage" onFocus={({target})=>{if(!target.closest(".settings-action-error"))lastFocusedRef.current=target;if(keyboardLast)target.closest(".agent-runtime-option")?.scrollIntoView({block:"nearest"})}}>
+      <div className="settings-section-head"><div><h2>{activeSettingsSection[2]}</h2><p>{activeSettingsSection[3]}</p></div><span>{settingsSections.findIndex(item=>item[0]===settingsSection)+1} / {settingsSections.length}</span></div>
+      {/* The alert stays in view while the page scrolls, so it can be dismissed instead of covering rows until the next action succeeds. */}
+      {settingsError&&<p className="settings-action-error" role="alert"><span>{settingsError}</span><button type="button" className="settings-action-error-dismiss" aria-label="Dismiss settings error" onClick={dismissSettingsError}><X size={13}/></button></p>}
+      {settingsSection==="workspace"&&<div className="settings-scope-sentence" data-testid="settings-scope-sentence">
+        <span>Settings below are for</span>
+        <select aria-label="Project scope" value={workspaceScope.projectId} onChange={event=>setWorkspaceScope(current=>({...current,projectId:event.target.value}))}>
+          <option value="">All projects</option>
+          {workspaceProjects.map(project=><option key={project.id} value={project.id}>{project.name}</option>)}
+        </select>
+        <span>on</span>
+        <select aria-label="Environment scope" value={workspaceScope.environmentId} onChange={event=>setWorkspaceScope({environmentId:event.target.value,projectId:""})}>
+          <option value="local">Local machine</option>
+          {(workspaceScopeCatalog.environmentData.profiles||[]).map(profile=><option key={profile.id} value={profile.id}>{profile.name} · {profile.type.toUpperCase()}</option>)}
+        </select>
+        {/* A long project path is cut at its start (rtl), so the project's own folder at its end shows; the whole path is its title. */}
+        {workspaceProject?<small dir="rtl" title={workspaceProject.path}><bdi dir="ltr">{workspaceProject.path}</bdi></small>:<small>{workspaceEnvironment?workspaceEnvironment.name+" defaults":"Local environment defaults"}</small>}
+      </div>}
+      <div className="settings-grid">
+      {settingsSection==="general"&&<div className="settings-card about-card" {...targetProps("general-about")}>
+        <div className="about-brand"><img src="/trebell-code-icon.svg" alt="" aria-hidden="true"/><div><h3>Trebell Code</h3><p>{desktopAvailable?"Desktop coding-agent harness":"Coding-agent workspace"}</p></div></div>
+      </div>}
+      {settingsSection==="agents"&&<div className="settings-card agent-runtime-settings" {...targetProps("agents-harness")}>
+        <h3><Bot size={14} aria-hidden="true"/> Agent harness{agentInfo&&agentInfoRefreshing&&<small data-testid="agent-runtime-refreshing" role="status" style={{marginLeft:8,fontSize:"0.7em",fontWeight:400,opacity:.7,display:"inline-flex",alignItems:"center",gap:4,verticalAlign:"middle"}}><RefreshCw size={10} style={reducedMotion?undefined:{animation:"trebell-spin .9s linear infinite"}}/>Refreshing…</small>}</h3>
+        <p>Choose the coding-agent runtime. Trebell Native owns its model/tool loop and calls APIs directly; Codex, Claude Code, OpenCode, Cursor, Grok Build, Antigravity and Muse Code run as their real harnesses. Saved chats stay owned by the harness that created them, and opening one switches back to that harness automatically.</p>
+        <div className="agent-runtime-list" aria-busy={agentInfo===null||agentInfoRefreshing?"true":"false"}>{agentInfo===null?AGENT_RUNTIME_SKELETON_ROWS.map((name,index)=><div className="agent-runtime-option agent-runtime-skeleton" key={"skeleton-"+index} data-testid="agent-runtime-skeleton" aria-hidden="true"><button type="button" disabled tabIndex={-1}><Bot size={14}/><span><strong>{name}</strong></span><em className="agent-runtime-checking">Checking…</em></button></div>):(agentInfo?.definitions||[]).map(def=>{
+          const status=runtimeStatusForKind(agentInfo,def.id,{preferSelected:selectedAgent===def.id});
+          const active=selectedAgent===def.id;
+          const compatibility=status?.compatibility;const incompatible=["broken","unsupported"].includes(compatibility?.status);
+          const noSignIn=saysNothingOfSignIn(status,def.id);
+          const unverified=!noSignIn&&status?.authenticated==null&&["cursor","grok","opencode"].includes(def.id)&&status?.message;
+          // A harness on its API key says so beside its version, as an Antigravity says its own sign-in (no check before a chat tells
+          // whether the provider takes the key); one on Sign in offers its own sign-in.
+          const profile=(agentInfo?.instances||[]).find(item=>item.id===(status?.id||def.id+"-default")),onKey=profile?.signIn?.method==="api-key";
+          const keySaved=(onKey||def.id==="antigravity")&&Boolean(status?.available)&&status.message;
+          const statusText=incompatible?(compatibility.message||"Incompatible runtime version"):noSignIn||unverified?status.message:status?.available?[status?.version,keySaved].filter(Boolean).join(" · ")||status?.message||"Ready":status?.message||"Unavailable";
+          const actionText=active?(incompatible||unverified?"Needs setup":"Active"):status?.available?(incompatible||unverified?"Needs setup":"Switch"):status?.installed?"Not ready":"Not installed";
+          const installing=installs.running.includes(def.id),installNote=installs.note?.kind===def.id?installs.note:null;
+          // Install for a harness that is not there. Update only for a newer release that Trebell installs itself (the status's update
+          // reading), else the update's note says how; a harness with no update reading (Antigravity's runtime) offers it as before.
+          const update=status?.update,verb=status?.installed?(update?update.canUpdate&&update.newer:def.installable)&&"Update":def.installable&&"Install";
+          return <div className="agent-runtime-option" key={def.id}><button className={active?"active":""} disabled={(switchingAgent&&!active)||(!active&&!status?.available)} onClick={()=>!active&&!switchingAgent&&status?.available&&selectAgentRuntime(def.id,status.id)}>
+            <Bot size={14}/><span><strong>{def.name}</strong><small>{withCommands(statusText)}</small></span><em className={"is-"+String(actionText).toLowerCase().replace(/\s+/g,"-")}>{actionText}</em>
+          </button>{def.canAuthenticate&&!onKey&&status?.installed&&status?.authenticated!==true&&!noSignIn&&<button className="agent-runtime-install" disabled={!!authenticatingAgent} onClick={()=>authenticateAgentRuntime(def.id,status?.id)}>{authenticatingAgent===(status?.id||def.id)?"Opening…":"Sign in"}</button>}{(verb||installing)&&<button className="agent-runtime-install" disabled={installing} onClick={()=>installAgentRuntime(def.id,verb,status)}>{installing?"Installing…":verb}</button>}{switchRefusal&&!switchRefusal.profile&&switchRefusal.kind===def.id&&!active&&<p className="agent-runtime-option-error" role="alert">{withCommands(switchRefusal.text)}</p>}{update?.message&&<p className="agent-runtime-option-note">{withCommands(update.message)}</p>}{installNote&&<p ref={installNoteRef} className={installNote.error?"agent-runtime-option-error":"agent-runtime-option-note"} role={installNote.error?"alert":"status"}>{withCommands(installNote.text)}</p>}{def.apiKey&&status&&<HarnessSignIn def={def} profile={profile} busy={harnessAuthBusy} onMethod={setHarnessMethod} onKey={saveHarnessKey}/>}</div>;
+        })}</div>
+        {settingDrawn["agents-profiles"]&&<div className="runtime-profiles" {...targetProps("agents-profiles")}>
+          <div className="runtime-profiles-head"><strong>Profiles</strong><button onClick={()=>editInstance()} disabled={!selectedAgentDefinition||selectedAgentDefinition.multipleInstances===false||selectedAgent==="antigravity"}>Add profile</button></div>
+          {selectedInstances.map(instance=>{
+            const status=agentInfo?.statuses?.find(item=>item.id===instance.id);const active=activeInstanceId===instance.id;
+            // Its answer reads as the harness rows' do: one that says nothing of a sign-in shows what was found, with no Sign in.
+            const noSignIn=saysNothingOfSignIn(status,instance.kind);
+            return <div className="runtime-profile-row" key={instance.id}>
+              <button className={active?"active":""} disabled={(switchingAgent&&!active)||(!active&&!status?.available)} onClick={()=>!active&&!switchingAgent&&status?.available&&selectAgentRuntime(instance.kind,instance.id)}><span><strong>{instance.displayName||instance.id}</strong><small>{withCommands(noSignIn?status.message:status?.available?status.version||"Ready":status?.message||"Unavailable")}</small></span><em>{active?"Active":"Use"}</em></button>
+              {(agentInfo?.definitions||[]).find(item=>item.id===instance.kind)?.canAuthenticate&&instance.signIn?.method!=="api-key"&&status?.installed&&status?.authenticated!==true&&!noSignIn&&<button onClick={()=>authenticateAgentRuntime(instance.kind,instance.id)} disabled={!!authenticatingAgent}>{authenticatingAgent===instance.id?"Opening…":"Sign in"}</button>}
+              {selectedAgentDefinition?.multipleInstances!==false&&<button onClick={()=>editInstance(instance)}>Edit</button>}
+              {instance.id!==`${instance.kind}-default`&&<button onClick={()=>removeInstance(instance)}>Remove</button>}
+              {switchRefusal?.profile&&switchRefusal.instanceId===instance.id&&!active&&<p className="agent-runtime-option-error" role="alert">{withCommands(switchRefusal.text)}</p>}
+            </div>;
+          })}
+        </div>}
+        {instanceDraft&&<div className="runtime-profile-editor">
+          <label>Profile name<input value={instanceDraft.displayName||""} onChange={e=>setInstanceDraft({...instanceDraft,displayName:e.target.value})}/></label>
+          <label>Executable path<input value={instanceDraft.binaryPath||""} onChange={e=>setInstanceDraft({...instanceDraft,binaryPath:e.target.value})} placeholder="Leave blank to use the detected CLI"/></label>
+          {(instanceDraft.kind==="codex"||instanceDraft.kind==="claude")&&<label>{instanceDraft.kind==="codex"?"CODEX_HOME":"Claude config directory"}<input value={instanceDraft.homePath||""} onChange={e=>setInstanceDraft({...instanceDraft,homePath:e.target.value})} placeholder={instanceDraft.kind==="codex"?"Leave blank to use your normal ~/.codex profile":"Leave blank for the default Claude profile"}/></label>}
+          {instanceDraft.kind==="codex"&&<><label>Sign-in home for this account<input value={instanceDraft.shadowHomePath||""} onChange={e=>setInstanceDraft({...instanceDraft,shadowHomePath:e.target.value})} placeholder="Optional, for example ~/.codex-work"/></label><p>Optional. This account keeps its own <code>auth.json</code> in this folder, while its sessions, config, skills, plugins and worktrees come from the CODEX_HOME above. Accounts that should share those use the same CODEX_HOME.</p></>}
+          {instanceDraft.kind==="claude"&&<><label>Compaction threshold<input type="number" min="100000" max="1000000" step="1000" value={instanceDraft.autoCompactWindow??""} onChange={e=>setInstanceDraft({...instanceDraft,autoCompactWindow:e.target.value})} placeholder="Left to Claude Code"/></label><p>Optional, 100,000 to 1,000,000 tokens. Claude Code compacts the conversation once it holds this many; left blank, Claude Code keeps its own threshold.</p></>}
+          {(agentInfo?.definitions||[]).find(item=>item.id===instanceDraft.kind)?.apiKey&&<label>Signs in with<select value={instanceDraft.auth||"sign-in"} onChange={e=>setInstanceDraft({...instanceDraft,auth:e.target.value})}><option value="sign-in">Its own sign-in</option><option value="api-key">Its provider's API key</option></select></label>}
+          {instanceDraft.kind==="opencode"&&<label>Existing OpenCode server URL<input value={instanceDraft.serverUrl||""} onChange={e=>setInstanceDraft({...instanceDraft,serverUrl:e.target.value})} placeholder="Optional, e.g. http://127.0.0.1:4096"/></label>}
+          <label>Approved inherited environment variables<textarea value={environmentKeysText??(instanceDraft.approvedEnvironmentKeys||[]).join("\n")} onChange={e=>{setEnvironmentKeysText(e.target.value);setInstanceDraft({...instanceDraft,approvedEnvironmentKeys:e.target.value.split(/\r?\n|,/).map(value=>value.trim()).filter(Boolean)})}} onBlur={e=>{if(document.activeElement!==e.target)setEnvironmentKeysText(null)}} placeholder={"One variable name per line\nExample: HTTPS_PROXY"}/></label>
+          <p>Trebell passes only a safe OS baseline, this runtime's own settings (its home, config and endpoint) and the names listed here, and to a harness on this computer (not on an SSH or WSL environment) also your proxy and toolchain variables (HTTPS_PROXY, JAVA_HOME and the like). A proxy or toolchain value that holds a password or token passes only when its name is listed, as does mise's __MISE_DIFF, which can hold mise's secrets and which a CLI started through a mise x wrapper needs. No API key or sign-in token passes, listed or not: a harness signs in with its own login or, set to API key, its provider's key. Values are read from the parent process at launch time and are not stored in the profile.</p>
+          <div className="provider-key-actions"><button className="setting-action" onClick={saveInstance} disabled={savingInstance} aria-busy={savingInstance?"true":undefined}>{savingInstance&&<RefreshCw size={12} className="spin" aria-hidden="true"/>}Save profile</button><button onClick={()=>setInstanceDraft(null)}>Cancel</button></div>
+          {instanceRefusal&&<p ref={instanceRefusalRef} className="provider-status-error" role="alert">{instanceRefusal}</p>}
+        </div>}
+        <p className={!agentInfoError&&(agentInfo===null||selectedAgentStatus?.available)?"provider-note":"provider-status-error"}><strong>{selectedAgentStatus?.name||selectedAgent}</strong> · {agentInfo===null?"checking…":selectedAgentStatus?.authenticated==null&&selectedAgentStatus?.message?selectedAgentStatus.message:selectedAgentStatus?.available?"ready":selectedAgentStatus?.message||agentInfo?.error||"setup required"}{agentInfoError&&<span data-testid="agent-runtime-refresh-error" role="alert"> · Could not refresh harness status ({agentInfoError}); showing the last known list</span>}{agentMessage&&<span className={"agent-runtime-message"+(agentMessageError?" error":"")} data-testid="agent-runtime-message" role={agentMessageError?"alert":undefined}>{" · "+agentMessageText}</span>} <button onClick={()=>loadAgentRuntimes()} disabled={!!authenticatingAgent}><RefreshCw size={11}/> Refresh</button></p>
+      </div>}
+      {settingsSection==="agents"&&settingDrawn["agents-provider"]&&<div className="settings-card provider-settings-card" {...targetProps("agents-provider")} data-testid="provider-settings-card" aria-busy={providerSwitching?"true":"false"}>
+        <h3><Cloud size={14} aria-hidden="true"/> Model provider</h3>
+        <p>Choose the API that Trebell Native calls directly. This changes model inference, not the harness: Trebell Native still owns the thread, tools and agent loop.</p>
+        <label>Provider
+          <select data-testid="provider-selector" value={selected} disabled={providerSwitching} onChange={e=>saveSetting({modelProvider:e.target.value})}>
+            {providerOptions.map(item=><option key={item.id} value={item.id}>{item.name}{item.official?" · official":""}</option>)}
+          </select>
+        </label>
+        <label>API key
+          <input data-testid="provider-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&apiKey.trim()){e.preventDefault();if(!e.repeat)saveProviderKey()}}} placeholder={selectedStatus?.hasKey?"Saved key ••••••••":"Paste API key"}/>
+        </label>
+        <div className="provider-key-actions">
+          <button data-testid="save-provider-key" className="setting-action" onClick={e=>{if(e.detail<2)saveProviderKey()}} onKeyDown={e=>{if(e.repeat&&e.key==="Enter")e.preventDefault()}} disabled={!apiKey.trim()}>Save API key</button>
+          {selectedStatus?.hasKey&&<button onClick={clearProviderKey}>Remove key</button>}
+        </div>
+        <p className="provider-note">{PROVIDER_NOTES[selected]||"Models are loaded from the selected provider when its API supports discovery."}</p>
+        <p data-testid="provider-status" className={keyCheck||providerModelError||providerMessageError?"provider-status-error":""}><strong>{MODEL_PROVIDER_LABELS[selected]||selectedStatus?.name||selected}</strong> · {providerStatusText}{keyCheck?" · "+keyCheck.message:""}{providerMessage?" · "+providerMessage:""}{providerModelError?" · "+providerModelError:""}</p>
+      </div>}
+      {settingsSection==="agents"&&settingDrawn["agents-models"]&&<div className="settings-card custom-model-settings" {...targetProps("agents-models")}>
+        <h3><Boxes size={14} aria-hidden="true"/> Custom models</h3>
+        <p>{selectedAgent==="native"?`Prices for ${modelProviderLabel(selected)} models, in USD per million tokens, give Trebell Native's turns on them an estimated cost on the Usage page and in the composer. Pick a model from the provider's list, or add one it leaves out.`:"For a model this harness or provider runs that its model list leaves out. Prices are optional estimates, in USD per million tokens."}</p>
+        <div className="custom-model-list">{customModels.map(item=><div key={`${item.runtime}:${item.provider||""}:${item.id}`}><span><strong>{item.name||item.id}</strong><small>{item.id}{item.effort?` · ${item.effort}`:""}{item.serviceTier?` · ${item.serviceTier}`:""}</small></span><button onClick={()=>removeCustomModel(item)}>Remove</button></div>)}</div>
+        {!customModelEditorOpen?<button className="setting-action" onClick={()=>showCustomModelEditor(true)}>Add a model by ID</button>:<div className="custom-model-editor">
+          <label>Model ID<input list="custom-model-ids" value={modelDraft.id} onChange={e=>setModelDraft({...modelDraft,id:e.target.value})} placeholder={selectedAgent==="opencode"?"provider/model-id":"model-id"}/><datalist id="custom-model-ids">{models.map(id=><option key={id} value={id}/>)}</datalist></label>
+          <label>Display name<input value={modelDraft.name} onChange={e=>setModelDraft({...modelDraft,name:e.target.value})} placeholder="Optional friendly name"/></label>
+          {selectedAgent==="codex"&&<div className="environment-two"><label>Reasoning effort<select value={modelDraft.effort} onChange={e=>setModelDraft({...modelDraft,effort:e.target.value})}><option value="">Provider default</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label><label>Service tier<input value={modelDraft.serviceTier} onChange={e=>setModelDraft({...modelDraft,serviceTier:e.target.value})} placeholder="default / priority / flex"/></label></div>}
+          <div className="custom-price-grid"><label>Input / 1M<input type="number" step="0.001" min="0" value={modelDraft.inputPrice} onChange={e=>setModelDraft({...modelDraft,inputPrice:e.target.value})}/></label><label>Output / 1M<input type="number" step="0.001" min="0" value={modelDraft.outputPrice} onChange={e=>setModelDraft({...modelDraft,outputPrice:e.target.value})}/></label><label>Cache read / 1M<input type="number" step="0.001" min="0" value={modelDraft.cacheReadPrice} onChange={e=>setModelDraft({...modelDraft,cacheReadPrice:e.target.value})}/></label><label>Cache write / 1M<input type="number" step="0.001" min="0" value={modelDraft.cacheWritePrice} onChange={e=>setModelDraft({...modelDraft,cacheWritePrice:e.target.value})}/></label></div>
+          <div className="provider-key-actions"><button className="setting-action" onClick={addCustomModel} disabled={!modelDraft.id.trim()}>Save custom model</button><button onClick={()=>showCustomModelEditor(false)}>Cancel</button></div>
+        </div>}
+        {customModelMessage.text&&<p ref={customModelMessageRef} className={customModelMessage.error?"provider-status-error":"provider-note"} role={customModelMessage.error?"alert":"status"}>{customModelMessage.text}</p>}
+      </div>}
+      {settingsSection==="agents"&&settingDrawn["agents-mcp"]&&<div className="settings-card custom-model-settings" {...targetProps("agents-mcp")}>
+        <h3><PlugZap size={14}/> MCP servers</h3>
+        <p>{selectedAgent==="native"&&!mcpEnvironmentId?"Connect local stdio or Streamable HTTP MCP servers directly to Trebell Native":selectedAgent==="native"?"Connect stdio MCP servers directly inside the active remote environment":`Inject stdio MCP servers into ${selectedAgentName} sessions`} on <strong>{mcpEnvironmentId?"the active remote environment":"Local machine"}</strong>. Trebell strips secret-looking stored arguments and values. HTTP bearer auth stores only an approved runtime environment-variable name, never the token.</p>
+        <div className="custom-model-list">{scopedMcpServers.map(server=><div key={server.id}><span><strong>{server.name}</strong><small>{server.type==="http"?`${server.url}${server.bearerTokenEnv?` · bearer from ${server.bearerTokenEnv}`:""}`:`${server.command}${server.args?.length?" · "+server.args.join(" "):""}`}</small></span><button onClick={()=>toggleMcpServer(server)}>{server.enabled===false?"Enable":"Disable"}</button><button onClick={()=>removeMcpServer(server)}>Remove</button></div>)}</div>
+        {!mcpDraft?<button className="setting-action" onClick={()=>{setMcpDraft({name:"",type:"stdio",command:"",argsText:"",url:"",bearerTokenEnv:""});setMcpMessage("")}}>Add MCP server</button>:<div className="custom-model-editor">
+          <label>Name<input aria-label="MCP server name" value={mcpDraft.name||""} onChange={e=>setMcpDraft({...mcpDraft,name:e.target.value})} placeholder="Workspace tools"/></label>
+          {selectedAgent==="native"&&!mcpEnvironmentId&&<label>Transport<select aria-label="MCP server transport" value={mcpDraft.type||"stdio"} onChange={e=>setMcpDraft({...mcpDraft,type:e.target.value})}><option value="stdio">Local process (stdio)</option><option value="http">Streamable HTTP</option></select></label>}
+          {(mcpDraft.type||"stdio")==="http"?<>
+            <label>Server URL<input aria-label="MCP server URL" value={mcpDraft.url||""} onChange={e=>setMcpDraft({...mcpDraft,url:e.target.value})} placeholder="https://mcp.example.com/mcp"/></label>
+            <label>Bearer token environment variable · optional<input aria-label="MCP bearer token environment variable" value={mcpDraft.bearerTokenEnv||""} onChange={e=>setMcpDraft({...mcpDraft,bearerTokenEnv:e.target.value})} placeholder="MCP_ACCESS_TOKEN"/></label>
+            <p className="provider-note">For bearer auth, add this variable to the Native runtime profile's approved environment keys and provide its value in the runtime environment. Trebell stores only the variable name.</p>
+          </>:<>
+            <label>Executable<input aria-label="MCP server executable" value={mcpDraft.command||""} onChange={e=>setMcpDraft({...mcpDraft,command:e.target.value})} placeholder={mcpEnvironmentId?"/usr/local/bin/my-mcp":"Absolute executable path"}/></label>
+            <label>Arguments · one per line<textarea aria-label="MCP server arguments" value={mcpDraft.argsText||""} onChange={e=>setMcpDraft({...mcpDraft,argsText:e.target.value})} placeholder={"--stdio\n--workspace"}/></label>
+          </>}
+          <div className="provider-key-actions"><button className="setting-action" onClick={addMcpServer} disabled={!mcpDraft.name?.trim()||((mcpDraft.type||"stdio")==="http"?!mcpDraft.url?.trim():!mcpDraft.command?.trim())}>Save MCP server</button><button onClick={()=>setMcpDraft(null)}>Cancel</button></div>
+        </div>}
+        {!scopedMcpServers.length&&!mcpDraft&&<p className="provider-note">No Trebell-managed MCP servers are configured for this runtime and environment.</p>}
+        {mcpMessage&&<p className={/failed|error/i.test(mcpMessage)?"provider-status-error":"provider-note"}>{mcpMessage}</p>}
+      </div>}
+      {settingsSection==="agents"&&<div className="settings-card" {...targetProps("agents-runtime")}><h3><Server size={14} aria-hidden="true"/> Runtime</h3><p>Harness connection: <strong>{rpcStatus}</strong><br/>Agent: <strong>{selectedAgentName}</strong><br/>Agent runtime: <strong title={harnessStateTitle(harness)}>{harnessStateText(harness)}</strong>{selectedManagedInference&&<><br/>{selectedAgent==="codex"&&<>Codex app-server: <strong>{runtime?.appServerReady?"ready":"not ready"}</strong><br/></>}Inference: <strong>{modelProviderLabel(runtime?.provider||selected)}</strong></>}</p><button onClick={()=>refresh({reportErrors:true})} disabled={loading}><RefreshCw size={13}/> {loading?"Refreshing…":"Refresh diagnostics"}</button></div>}
+      {settingsSection==="general"&&<div className="settings-card" {...targetProps("general-followups")}><h3><MessageSquareText size={14} aria-hidden="true"/> Messages sent during a turn</h3>{selectedAgentCapabilities.steering?<label>While the agent is working<select value={settings.followUpMode||"queue"} onChange={e=>saveSetting({followUpMode:e.target.value})}><option value="queue">Queue after current turn</option><option value="steer">{selectedAgent==="native"?"Steer current turn at the next safe boundary":"Steer current turn immediately"}</option></select></label>:<p>Follow-ups are queued until the current {selectedAgentStatus?.name||selectedAgent} turn finishes. This runtime does not expose in-flight steering.</p>}</div>}
+      {settingsSection==="general"&&<div className="settings-card" {...targetProps("general-context-management")}>
+        <h3><Layers size={14} aria-hidden="true"/> Context management</h3>
+        <p>When the selected harness supports compaction, Trebell can compact an existing thread just before sending the next message. It waits for compaction to finish before the new turn starts.</p>
+        <label className="check-row"><input type="checkbox" checked={settings.autoCompactContext===true} onChange={e=>saveSetting({autoCompactContext:e.target.checked})}/><span><strong>Compact long threads automatically</strong><small>Prevents a nearly-full context window from crowding out the next response.</small></span></label>
+        <label>Compact when context reaches
+          <select value={String(settings.autoCompactThresholdPercent??85)} disabled={settings.autoCompactContext!==true} onChange={e=>saveSetting({autoCompactThresholdPercent:Number(e.target.value)})}>
+            <option value="80">80%</option><option value="85">85%</option><option value="90">90%</option><option value="95">95%</option>
+          </select>
+        </label>
+      </div>}
+      {settingsSection==="workspace"&&<div className="settings-section-slot" {...targetProps("workspace-defaults")}><ScopedSettingsCard settings={settings} models={models} currentModel={model} modelDefault={modelDefault} onChanged={onScopedSettingsChanged} scopeEnvironmentId={workspaceScope.environmentId} scopeProjectId={workspaceScope.projectId} onScopeChange={setWorkspaceScope} onCatalog={setWorkspaceScopeCatalog} showScopeTargets={false}/></div>}
+      {settingsSection==="workspace"&&<div className="settings-card storage-settings" {...targetProps("workspace-storage")}>
+        <h3><HardDrive size={14} aria-hidden="true"/> Storage cleanup</h3>
+        <p>Automatic cleanup is opt-in. Trebell only removes its own local attachment cache, stopped terminal history, and managed worktrees that already pass the safe worktree cleanup rules. User project files and Git branches are never deleted by these retention fields.</p>
+        <div className="environment-two">
+          <label>Attachment cache retention
+            <input key={"attachment-retention-"+(settings.storageCleanup?.attachmentsAfterDays??"off")} type="number" min="1" max="3650" defaultValue={settings.storageCleanup?.attachmentsAfterDays??""} placeholder="Off" onBlur={event=>saveStorageRetention("attachmentsAfterDays",event.target)}/>
+            <small>Days · blank or 0 means off</small>
+          </label>
+          <label>Stopped terminal history
+            <input key={"terminal-retention-"+(settings.storageCleanup?.terminalHistoryAfterDays??"off")} type="number" min="1" max="3650" defaultValue={settings.storageCleanup?.terminalHistoryAfterDays??""} placeholder="Off" onBlur={event=>saveStorageRetention("terminalHistoryAfterDays",event.target)}/>
+            <small>Days · running terminals are never pruned</small>
+          </label>
+        </div>
+        {storageInfo?<p className="provider-note">{`${storageInfo.attachments?.count??0} cached attachment${storageInfo.attachments?.count===1?"":"s"} · ${formatBytes(storageInfo.attachments?.bytes||0)} · ${storageInfo.terminalHistory?.count??0} stopped terminal histor${storageInfo.terminalHistory?.count===1?"y":"ies"} · ${storageInfo.worktrees?.managed??0} live managed worktree${storageInfo.worktrees?.managed===1?"":"s"}`}</p>:!storageError&&<p className="provider-note">Reading storage use…</p>}
+        {storageError&&<p key={storageFailures} className="provider-status-error" role="alert">{storageError}</p>}
+        <div className="provider-key-actions"><button className="setting-action" onClick={runStorageCleanup} disabled={storageBusy}>{storageBusy?"Cleaning…":"Clean up storage now"}</button><button onClick={()=>loadStorageInfo()} disabled={storageBusy}><RefreshCw size={12}/> Refresh storage</button></div>
+        {storageMessage.text&&<p className={storageMessage.error?"provider-status-error":"provider-note"} role={storageMessage.error?"alert":"status"}>{storageMessage.text}</p>}
+      </div>}
+      {settingsSection==="desktop"&&settingDrawn["desktop-computer"]&&<div className="settings-card"><h3><MonitorCog size={14} aria-hidden="true"/> Computer use</h3><p>The active runtime can use Trebell's Windows desktop tools. Screenshots are read-only; mouse and keyboard control are exposed only when the current thread is in <strong>Full access</strong> mode. This keeps desktop automation explicit instead of silently escalating permissions.</p></div>}
+      {settingsSection==="appearance"&&<div className="settings-card theme-settings" {...targetProps("appearance-theme")}><h3><Palette size={14} aria-hidden="true"/> Appearance</h3><p>Appearance controls light/dark behavior. Theme controls the palette independently. Trebell themes and VS Code color-theme JSON can be imported.</p><div className="settings-field" role="group" aria-label="Mode"><span aria-hidden="true">Mode</span><div className="appearance-options">{["system","light","dark"].map(v=><button key={v} {...choiceProps((settings.appearanceMode||"dark")===v,()=>saveSetting({appearanceMode:v}))}>{v}</button>)}</div></div><label>Panel motion <span>{panelAnimationMs} ms</span><input aria-label="Panel motion" type="range" min="0" max="400" step="25" style={{"--fill":panelAnimationMs/4+"%"}} value={panelAnimationMs} onChange={e=>dragPanelAnimation(Number(e.target.value))}/></label><p>Sidebar, right panel and terminal movement uses this duration. Operating-system reduced motion always disables it.</p><div className="settings-field" role="group" aria-label="Theme"><span aria-hidden="true">Theme</span><div className="appearance-options">{[["dark","Trebell"],["midnight","Midnight"],["black","Black"]].map(([value,label])=><button key={value} {...themeChoiceProps(value)}>{label}</button>)}{(settings.customThemes||[]).map(theme=><button key={theme.id} {...themeChoiceProps(theme.id)}>{theme.name}</button>)}</div></div><div className="theme-actions"><button onClick={createTheme}>Create theme</button><button onClick={()=>themeImportRef.current?.click()}>Import JSON</button>{(settings.customThemes||[]).find(theme=>theme.id===settings.appearance)&&<><button onClick={()=>setThemeDraft((settings.customThemes||[]).find(theme=>theme.id===settings.appearance))}>Edit selected</button><button onClick={()=>exportTheme((settings.customThemes||[]).find(theme=>theme.id===settings.appearance))}>Export selected</button><button onClick={()=>removeTheme((settings.customThemes||[]).find(theme=>theme.id===settings.appearance))}>Delete selected</button></>}<input ref={themeImportRef} type="file" accept=".json,.jsonc,application/json" hidden onChange={importThemeFile}/></div>{themeMessage&&<p key={themeNote.said} ref={themeMessageRef} className={themeMessageError?"provider-status-error":"provider-note"} role={themeMessageError?"alert":"status"}>{themeMessage}</p>}{themeDraft&&<div className="theme-editor"><label>Name<input value={themeDraft.name||""} onChange={e=>setThemeDraft({...themeDraft,name:e.target.value})}/></label><div className="theme-editor-grid"><label>Base appearance<select value={themeDraft.appearance||"dark"} onChange={e=>setThemeDraft({...themeDraft,appearance:e.target.value})}><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Canvas<input type="color" value={themeDraft.canvas||"#0c0f16"} onChange={e=>setThemeDraft({...themeDraft,canvas:e.target.value})}/></label><label>Accent<input type="color" value={themeDraft.accent||"#9c6cff"} onChange={e=>setThemeDraft({...themeDraft,accent:e.target.value})}/></label></div><div className="theme-editor-actions"><button className="setting-action" onClick={saveTheme}>Save & apply</button><button onClick={()=>setThemeDraft(null)}>Close editor</button></div></div>}</div>}
+      {settingsSection==="appearance"&&<div className="settings-card environment-theme-settings" {...targetProps("appearance-environment")}>
+        <h3><Paintbrush size={14} aria-hidden="true"/> Environment themes</h3>
+        <p><strong>{environmentThemeCatalog.environmentName||"Local machine"}</strong> can publish theme JSON files from <code>{environmentThemeCatalog.directory||"the environment theme directory"}</code>. Published themes stay owned by that environment, so edits on the machine can flow into Trebell after refresh.</p>
+        <div className="appearance-options">
+          {(environmentThemes||[]).map(theme=><button key={theme.id} {...choiceProps(followedTheme===theme,()=>selectEnvironmentTheme(theme))}>{theme.name}</button>)}
+        </div>
+        {!environmentThemes?.length&&<p className="provider-note">No valid published themes found. Theme files are bounded to 32 KB each and must define a canvas color (or VS Code editor background).</p>}
+        <div className="theme-actions">
+          <button onClick={refreshPublishedThemes} disabled={environmentThemeRefreshing}><RefreshCw size={12}/> {environmentThemeRefreshing?"Refreshing…":"Refresh published themes"}</button>
+          {settings.environmentThemeSelections?.[environmentThemeCatalog.environmentKey]&&<button onClick={stopFollowingEnvironmentTheme}>Use my normal theme</button>}
+          {environmentThemes.find(theme=>theme.publishedId===settings.environmentThemeSelections?.[environmentThemeCatalog.environmentKey])&&<button onClick={()=>duplicateEnvironmentTheme(environmentThemes.find(theme=>theme.publishedId===settings.environmentThemeSelections?.[environmentThemeCatalog.environmentKey]))}>Duplicate as editable</button>}
+        </div>
+      </div>}
+      {settingsSection==="general"&&settingDrawn["general-notifications"]&&<div className="settings-card"><h3><Bell size={14} aria-hidden="true"/> Desktop notifications</h3><label className="toggle-line"><input type="checkbox" checked={settings.notifications!==false} onChange={e=>saveSetting({notifications:e.target.checked})}/> Notify when turns finish or need attention</label><label className="toggle-line"><input type="checkbox" checked={Boolean(settings.notificationSound)} onChange={e=>saveSetting({notificationSound:e.target.checked})}/> Allow notification sound</label></div>}
+      {settingsSection==="workspace"&&<div className="settings-card"><h3><GitPullRequest size={14} aria-hidden="true"/> Pull request lifecycle</h3><p>When every pull request linked to a thread has a fresh synced terminal state (merged or closed), move the idle thread to Settled. Open, unsynced, running, and archived threads are never auto-settled.</p><label className="toggle-line"><input type="checkbox" checked={Boolean(settings.autoSettleMergedThreads)} onChange={e=>saveSetting({autoSettleMergedThreads:e.target.checked})}/> Auto-settle threads after all linked reviews finish</label></div>}
+      {settingsSection==="general"&&<div className="settings-card"><h3><RotateCcw size={14} aria-hidden="true"/> Restart recovery</h3><p>When Trebell restarts during active work, reconnect saved provider sessions and continue the interrupted turn. Codex uses native promptless continuation; other supported harnesses resume their saved session and continue from there. Off by default to avoid unexpected background work after a restart.</p><label className="toggle-line"><input type="checkbox" checked={Boolean(settings.continueThreadsAfterRestart)} onChange={e=>saveSetting({continueThreadsAfterRestart:e.target.checked})}/> Continue supported active threads after restarts</label></div>}
+      {settingsSection==="desktop"&&settingDrawn["desktop-browser"]&&<div className="settings-card browser-profile-settings"><h3><Globe2 size={14} aria-hidden="true"/> Browser profiles</h3><p>Copy a supported browser session into Trebell Agent Browser. This is a one-time local copy; the source browser and Trebell stay separate afterward.</p>{browserImport.sources?.length?<>{browserImport.sources.map(source=><div className="browser-import-source" key={source.id}><div><strong>{source.name}</strong><span>{source.profiles?.length||0} profile{source.profiles?.length===1?"":"s"}{source.running?" · running":""}</span></div>{source.running&&<em>Close {source.name} before importing</em>}</div>)}<label>Profile<select value={browserImportProfile} onChange={e=>setBrowserImportProfile(e.target.value)}>{browserImport.sources.flatMap(source=>(source.profiles||[]).map(profile=><option key={profile.id} value={profile.id}>{source.name} · {profile.name}</option>))}</select></label><div className="provider-key-actions"><button className="setting-action" onClick={importBrowserProfile} disabled={browserImportBusy||!browserImportProfile||browserImport.sources.some(source=>source.running&&source.profiles?.some(profile=>profile.id===browserImportProfile))}>{browserImportBusy?"Importing…":"Import selected profile"}</button><button onClick={()=>loadBrowserImportSources()} disabled={browserImportBusy}><RefreshCw size={12}/> Rescan</button></div></>:<>{!browserImportMessage.scanFailed&&<p className="provider-note">No directly importable browser profile was found. On Windows, Trebell supports Firefox and Helium. Other Chromium browsers use app-bound encryption and are intentionally not imported; JSON cookie import remains available in Agent Browser.</p>}<div className="provider-key-actions"><button onClick={()=>loadBrowserImportSources()} disabled={browserImportBusy}><RefreshCw size={12}/> Rescan</button></div></>}{browserImportMessage.text&&<p className={browserImportMessage.error?"provider-status-error":"provider-note"} role={browserImportMessage.error?"alert":undefined}>{browserImportMessage.text}</p>}</div>}
+      {settingsSection==="desktop"&&settingDrawn["desktop-snapshot"]&&<div className="settings-card snapshot-settings"><h3><Camera size={14} aria-hidden="true"/> SnapShots</h3><p>Capture the foreground window from anywhere and attach it to the current draft. Captures are stored locally until Trebell successfully attaches them.</p><label className="toggle-line"><input type="checkbox" checked={Boolean(snapshotInfo.enabled)} onChange={e=>configureSnapshots({enabled:e.target.checked})}/> Enable global SnapShot shortcut</label><label>Shortcut<input value={snapshotInfo.shortcut||""} onChange={e=>setSnapshotInfo(info=>({...info,shortcut:e.target.value}))} onBlur={()=>snapshotInfo.enabled&&configureSnapshots({shortcut:snapshotInfo.shortcut})} placeholder="CommandOrControl+Shift+S"/></label><label className="toggle-line"><input type="checkbox" checked={Boolean(snapshotInfo.includeText)} onChange={e=>configureSnapshots({includeText:e.target.checked})}/> Include accessibility text and control positions</label><label className="toggle-line"><input type="checkbox" checked={snapshotInfo.playSound!==false} onChange={e=>configureSnapshots({playSound:e.target.checked})}/> Play capture sound</label>{snapshotInfo.playSound!==false&&<label>Capture sound<select value={snapshotInfo.sound||"soft-pop"} onChange={e=>configureSnapshots({sound:e.target.value})}><option value="soft-pop">Soft pop</option><option value="camera-shutter">Camera shutter</option></select></label>}<label className="toggle-line"><input type="checkbox" checked={snapshotInfo.flash!==false} onChange={e=>configureSnapshots({flash:e.target.checked})}/> Light up the window on capture</label><label className="toggle-line"><input type="checkbox" checked={snapshotInfo.animations!==false} onChange={e=>configureSnapshots({animations:e.target.checked})}/> Animate capture feedback</label><p className="provider-note">App text is off by default because visible UI can contain sensitive information. Sound, flash and animation are local capture feedback only. {snapshotInfo.pending?`${snapshotInfo.pending} capture${snapshotInfo.pending===1?"":"s"} waiting to attach. `:""}</p>{snapshotMessage&&<p className={["Saving…","SnapShots ready.","SnapShots disabled."].includes(snapshotMessage)?"provider-note":"provider-status-error"}>{snapshotMessage}</p>}<div className="provider-key-actions"><button onClick={captureSnapshot} aria-disabled={snapshotCapturing||undefined}>{snapshotCapturing?"Capturing…":"Capture now"}</button><button onClick={()=>configureSnapshots({shortcut:snapshotInfo.shortcut})} disabled={!snapshotInfo.enabled}>Save shortcut</button></div></div>}
+      {settingsSection==="desktop"&&settingDrawn["desktop-background"]&&<div className="settings-card"><h3><Power size={14} aria-hidden="true"/> Background mode</h3><p>Keep Trebell's local harness running in the system tray after the window closes, and start it automatically when you sign in.</p><label className="toggle-line"><input type="checkbox" checked={Boolean(settings.backgroundMode)} onChange={e=>setBackgroundMode(e.target.checked)}/> Keep Trebell running in background</label></div>}
+      <div className="settings-card keybindings-settings" hidden={settingsSection!=="shortcuts"}><h3><Keyboard size={14} aria-hidden="true"/> Keyboard shortcuts</h3><p>Shortcuts can be conditional. For example, <code>threadOpen && !modalOpen</code> means “only when a thread is open and no dialog is covering the app.”</p>{settingsSection==="shortcuts"&&KEYBINDING_COMMANDS.map(command=><KeybindingRow key={command.id} id={command.id} label={command.label} rule={keybindingRules.find(item=>item.command===command.id)} note={keybindingNotes.get(command.id)} onUpdate={patch=>updateKeybinding(command.id,patch)}/>)}{settingsSection==="shortcuts"&&projectScripts.length>0&&<><h4>Saved actions</h4>{projectScripts.map(script=>{const command="script."+script.id+".run";return <KeybindingRow key={command} id={command} label={"Run "+script.name} rule={keybindingRules.find(item=>item.command===command)} defaultWhen="projectOpen && !modalOpen" note={keybindingNotes.get(command)} onUpdate={patch=>updateKeybinding(command,patch)}/>})}</>}<p className="provider-note">Available contexts: {KEYBINDING_CONTEXTS.join(", ")}. Combine them with <code>!</code>, <code>&&</code>, <code>||</code> and parentheses. Blank shortcuts stay unbound until you assign one.</p></div>
+      <div className="settings-card" hidden={settingsSection!=="diagnostics"}><h3><Stethoscope size={14} aria-hidden="true"/> Diagnostics</h3><p>Runtime and project diagnostics are local to this machine.</p><div className="diag-badges" aria-busy={runtimeChip==="pending"||(selectedManagedInference&&providerChip==="pending")}><span className={runtimeChip} title={harnessStateTitle(harness)}><Activity size={12}/> {selectedAgentName}</span>{selectedManagedInference&&<span className={providerChip} title={providerChipTitle}><ShieldCheck size={12}/> {MODEL_PROVIDER_LABELS[diagnostics?.runtime?.provider||selected]||"Provider"}</span>}</div></div>
+    </div>
+    <div className="diagnostics-log" hidden={settingsSection!=="diagnostics"}><div><strong>Runtime log</strong><button aria-label="Refresh diagnostics" onClick={()=>refresh({reportErrors:true})} disabled={loading}><RefreshCw size={12}/></button></div>{settingsSection==="diagnostics"&&diagnostics?.logs?.length?<pre>{diagnostics.logs.map(x=>"["+new Date(x.at).toLocaleTimeString()+"] "+x.stream+": "+x.text).join("")}</pre>:!diagnostics?<div className="diagnostics-empty" aria-busy="true"><Activity size={22}/><strong>Loading runtime log…</strong><span>Reading provider and harness diagnostics from this machine.</span></div>:diagnostics.error&&!diagnostics.runtime?<div className="diagnostics-empty"><Activity size={22}/><strong>Runtime log unavailable</strong><span>{diagnostics.error}</span></div>:<div className="diagnostics-empty"><Activity size={22}/><strong>No runtime activity yet</strong><span>Provider and harness diagnostics will appear here when Trebell has something useful to report.</span></div>}</div>
+    </section>
+  </div>;
+}

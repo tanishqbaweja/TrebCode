@@ -1,0 +1,942 @@
+/* App shell: frame, sidebar, topbar, empty-state hero, conversation and composer.
+   Built on the tokens in ../theme.css and loaded after the legacy sheets (styles.css, workspace-overlay.css), so
+   plain rules here win by source order and parent-scoped specificity. Light and dark come from the tokens.
+   The last section re-asserts the same token values with !important where legacy light-mode and custom-theme
+   rules force hard-coded colors; delete that section together with those legacy rules in the cleanup step. */
+
+/* ============ Frame ============ */
+html[data-theme] body{background:var(--bg0)}
+html[data-theme] .app-shell,.app-shell{background:var(--bg0)}
+.workspace-shell,.main-frame{background:var(--bg0)}
+/* Clipped, never scrolled: a hidden overflow is still a scroll container, and the 720px glow below is wider than a narrow main
+   column, so scrolling a control into view (focus, a test's click) could slide the whole column sideways. */
+.main-frame{overflow:clip}
+.main-frame::before{content:"";position:absolute;top:-150px;left:50%;width:720px;height:340px;transform:translateX(-50%);background:radial-gradient(closest-side,var(--acglow),transparent 70%);opacity:var(--glow-opacity);filter:blur(30px);pointer-events:none;z-index:0}
+.main-frame>.window-bar{position:relative;z-index:1;background:var(--bg0);border-bottom-color:var(--line)}
+.window-bar .window-controls button{color:var(--tx2)}
+.window-bar .window-controls button:hover{background:var(--bg3);color:var(--tx0)}
+.window-bar .window-controls .window-close:hover{background:#c42b3b;color:#fff}
+.app-shell>.window-controls-pinned{position:fixed;top:0;right:0;z-index:200;height:32px;display:flex;-webkit-app-region:no-drag}
+.app-shell>.window-controls-pinned button{width:42px;height:32px;border:0;border-radius:0;background:transparent;color:var(--tx2);font-size:12px;cursor:default}
+.app-shell>.window-controls-pinned button:hover{background:var(--bg3);color:var(--tx0)}
+.app-shell>.window-controls-pinned .window-close:hover{background:#c42b3b;color:#fff}
+/* Keyboard-focused separators show the same accent line as a drag. */
+.layout-resizer:focus{outline:none}
+.layout-resizer:focus-visible::after{opacity:.8;background:var(--ac)}
+.layout-resizer::after{background:var(--line2)}
+.layout-resizer:hover::after,.layout-resizing .layout-resizer::after{background:var(--ac)}
+
+/* ============ Sidebar ============ */
+.app-shell>.sidebar{background:var(--bg1);border-right:1px solid var(--line);color:var(--tx0);container:tbsidebar/inline-size}
+.sidebar .sidebar-titlebar{height:var(--top);padding:0 10px 0 10px;gap:6px}
+.sidebar .sidebar-brand{min-width:0;gap:9px;padding:4px;border-radius:var(--r-s);color:var(--tx0);background:transparent}
+.sidebar .sidebar-brand .brand-mark{width:26px;height:26px;flex:none;filter:drop-shadow(0 2px 8px var(--acglow))}
+.sidebar .sidebar-brand strong{font-size:13.5px;font-weight:650;letter-spacing:-.02em;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.sidebar .sidebar-brand em{color:var(--tx2);font-weight:500}
+.sidebar .sidebar-title-actions{gap:2px;flex:none}
+.sidebar .sidebar-new-thread,.sidebar .sidebar-bulk-toggle{width:28px;height:28px;border:0;border-radius:var(--r-s);display:grid;place-items:center;background:transparent;color:var(--tx2);transition:background .15s,color .15s}
+.sidebar .sidebar-new-thread:hover,.sidebar .sidebar-bulk-toggle:hover{background:var(--bg3);color:var(--tx0)}
+
+/* "Search or jump to…" opens the command palette (threads, projects, commands); the field below only filters threads. */
+.sidebar .sidebar-palette-button{width:calc(100% - 24px);height:34px;flex:none;margin:2px 12px 6px;display:flex;align-items:center;gap:8px;padding:0 6px 0 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg2);color:var(--tx2);font-size:12.5px;text-align:left;cursor:pointer;transition:border-color .15s,color .15s}
+.sidebar .sidebar-palette-button:hover{border-color:var(--line2);color:var(--tx1)}
+.sidebar .sidebar-palette-button svg{flex:none}
+.sidebar .sidebar-palette-button span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar .sidebar-palette-button kbd{flex:none}
+.sidebar .sidebar-thread-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 6px;padding:2px 10px 8px 12px}
+.sidebar .sidebar-threads-label{grid-column:1;grid-row:1;min-width:0;margin:0;padding:6px 4px 2px;display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;line-height:16px;letter-spacing:.09em;text-transform:uppercase;color:var(--tx2)}
+.sidebar .sidebar-threads-count{font-weight:500;letter-spacing:.04em;color:var(--tx3)}
+.sidebar .sidebar-thread-tools .search-box{grid-column:1/-1;grid-row:2;height:30px;gap:7px;padding:0 8px}
+.sidebar .sidebar-thread-tools .search-box input{font-size:12px}
+.sidebar .sidebar-thread-tools .sidebar-bulk-toggle{grid-column:2;grid-row:1;width:24px;height:24px;margin-top:4px;border-radius:7px}
+.sidebar .search-box{height:34px;flex:1;min-width:0;gap:8px;padding:0 9px;border:1px solid var(--line);border-radius:9px;background:var(--bg2);color:var(--tx2);transition:border-color .15s,box-shadow .15s,color .15s}
+.sidebar .search-box:hover{border-color:var(--line2);background:var(--bg2);color:var(--tx1)}
+.sidebar .search-box:focus-within{border-color:color-mix(in srgb,var(--ac) 45%,var(--line2));background:var(--bg2);box-shadow:0 0 0 3px var(--acsoft);color:var(--tx1)}
+.sidebar .search-box svg{flex:none}
+.sidebar .search-box input{flex:1;min-width:0;height:100%;padding:0;font-size:12.5px;color:var(--tx0);background:transparent}
+.sidebar .search-box input::placeholder{color:var(--tx2)}
+.sidebar .search-box button{width:20px;height:20px;flex:none;display:grid;place-items:center;border-radius:6px;color:var(--tx3);font-size:15px;line-height:1}
+.sidebar .search-box button:hover{background:var(--bg3);color:var(--tx0)}
+.sidebar .sidebar-bulk-toggle{width:30px;height:30px;flex:none}
+
+.sidebar .sidebar-action-error{margin:0 12px 8px;border:1px solid var(--errb);background:var(--errt);color:var(--err);border-radius:9px;padding:8px 10px;font-size:11.5px;line-height:1.45}
+.sidebar .bulk-bar{margin:0 12px 8px;padding:5px;gap:3px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.sidebar .bulk-bar span{font-size:11px;color:var(--tx2);padding-left:4px}
+.sidebar .bulk-bar button{height:26px;border:0;border-radius:7px;background:transparent;color:var(--tx1);font-size:11.5px;padding:0 7px}
+.sidebar .bulk-bar button:hover{background:var(--bg3);color:var(--tx0)}
+
+/* Rows scroll under a short fade at both edges instead of being cut by a hard line; the bottom padding keeps the last row off
+   the destinations divider. */
+.sidebar .thread-sections{display:flex;flex-direction:column;gap:6px;padding:4px 8px 14px;scrollbar-width:auto;scrollbar-color:auto;-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 10px,#000 calc(100% - 12px),transparent);mask-image:linear-gradient(180deg,transparent 0,#000 10px,#000 calc(100% - 12px),transparent)}
+.sidebar .thread-sections section{margin:0}
+.sidebar .thread-sections h4{height:auto;margin:0;padding:8px 8px 6px;display:flex;align-items:center;justify-content:flex-start;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--tx3)}
+.sidebar .thread-sections h4 span{font-size:10.5px;font-weight:500;letter-spacing:.04em;color:var(--tx3)}
+/* A row drawn is as tall as one not yet drawn (its contain-intrinsic-size, 48px, with the 3px padding): drawn, its two lines with that
+   padding came to 53.7px, so a chunk of a long list grew as it went back to its placeholder after its rows were drawn, and End
+   stopped short of the last thread. */
+.sidebar .thread-row{min-height:54px;margin-bottom:1px;border:0;border-radius:9px;background:transparent;color:var(--tx1);contain-intrinsic-size:auto 48px;transition:background .14s}
+.sidebar .thread-row:hover{background:var(--bg2)}
+.sidebar .thread-row.active{background:var(--acsoft);color:var(--tx0)}
+.sidebar .thread-row.active::before{content:"";position:absolute;left:2px;top:9px;bottom:9px;width:2.5px;border-radius:2px;background:var(--ac)}
+.sidebar .thread-select{margin-left:10px;accent-color:var(--ac)}
+.sidebar .thread-main{height:auto;min-height:0;display:block;padding:7px 10px 7px 12px;gap:0;border-radius:9px;color:inherit}
+.sidebar .thread-main:focus-visible{outline-offset:-2px}
+.sidebar .thread-status-dot{display:none}
+.sidebar .thread-main strong{font-size:12.5px;font-weight:550;letter-spacing:0;line-height:1.35;color:var(--tx1)}
+.sidebar .thread-row.active .thread-main strong{color:var(--tx0)}
+.sidebar .thread-main>div>span{display:block;margin-top:2px;font-size:11px;line-height:1.35;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar .thread-main .thread-title-line{gap:6px}
+.sidebar :is(.thread-runtime-chip,.thread-pr-chip){height:17px;padding:0 6px;gap:3px;border-radius:99px;border:1px solid var(--line2);background:var(--bg3);color:var(--tx2);font:600 10px/15px var(--mono)}
+.sidebar .thread-pr-chip.linked{color:var(--ac);border-color:color-mix(in srgb,var(--ac) 35%,transparent);background:var(--acsoft)}
+.sidebar .thread-pr-chip.detected{color:var(--tx2)}
+/* Fade the row text under the hover menu instead of shifting it. */
+/* The hover menu covers the right end of the row: the title line keeps its width free (the title ellipsizes and the runtime
+   and PR chips stay whole), and only the meta line fades under it. */
+.sidebar .thread-row:is(:hover,:focus-within,:has(.thread-menu[open])) .thread-main .thread-title-line{padding-right:28px}
+.sidebar .thread-row:is(:hover,:focus-within,:has(.thread-menu[open])) .thread-main>div>span{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 40px),transparent calc(100% - 20px));mask-image:linear-gradient(90deg,#000 calc(100% - 40px),transparent calc(100% - 20px))}
+.sidebar .thread-menu{right:6px;top:50%;margin-top:-13px}
+.sidebar .thread-menu>summary{width:26px;height:26px;border-radius:7px;color:var(--tx2)}
+.sidebar .thread-row:focus-within .thread-menu>summary{display:grid}
+.sidebar .thread-menu>summary:hover,.sidebar .thread-menu[open]>summary{background:var(--bg3);color:var(--tx0)}
+.sidebar .thread-menu-popover{top:30px;width:164px;padding:5px;gap:1px;border:1px solid var(--line2);border-radius:11px;background:var(--panel);box-shadow:var(--shbig)}
+.sidebar .thread-menu-popover button{height:30px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--tx1);font-size:12px;text-align:left}
+.sidebar .thread-menu-popover button:hover:not(:disabled){background:var(--bg3);color:var(--tx0)}
+.sidebar .thread-menu-popover button:disabled{color:var(--tx3);cursor:default}
+.sidebar .thread-menu-popover button.danger{color:var(--err)}
+.sidebar .thread-menu-popover button.danger:hover{background:var(--errt);color:var(--err)}
+/* A thread list that failed to load says so in the list, with Retry, instead of the "No threads yet" empty state. The top margin
+   keeps it below the list's edge fade. */
+.sidebar .sidebar-list-error{margin:6px 4px 4px;display:grid;gap:3px;padding:10px 12px;border:1px solid var(--errb);border-radius:10px;background:var(--errt);color:var(--tx2);font-size:11.5px;line-height:1.45}
+.sidebar .sidebar-list-error strong{color:var(--err);font-size:12px;font-weight:600}
+.sidebar .sidebar-list-error span{overflow-wrap:anywhere}
+.sidebar .sidebar-list-error button{justify-self:start;margin-top:6px}
+/* A running thread's row leads its title with the live dot (theme .tb-dot); the label carries the state for screen readers. A listing
+   can leave a thread marked active, so the pulse stops after a minute and the dot stays. */
+.sidebar .thread-main .thread-running-dot{margin:0 2px 0 1px;animation-iteration-count:23}
+.sidebar .sidebar-empty{padding:26px 14px;color:var(--tx3);font-size:12px;line-height:1.7;text-align:center}
+.sidebar .sidebar-empty::before{content:"";display:block;width:20px;height:20px;margin:0 auto 8px;background:currentColor;opacity:.6;-webkit-mask:var(--tb-empty-icon) center/contain no-repeat;mask:var(--tb-empty-icon) center/contain no-repeat}
+.sidebar{--tb-empty-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E")}
+
+/* Destinations: a labelled list (the labels are already in the DOM, previously hidden). */
+.sidebar .sidebar-footer{padding:0;border-top:1px solid var(--line)}
+.sidebar .sidebar-utilities{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px;border-bottom:1px solid var(--line)}
+.sidebar .sidebar-nav-primary{display:flex;flex-direction:column;gap:1px}
+/* Secondary destinations: a compact two-column grid; their shortcuts stay in the tooltip. */
+/* Two columns at the default width; a sidebar too narrow for "Environments" in a half-width cell gets one column, and a
+   very wide one gets three. ThreadSidebar measures the longest name into --tb-destination-min, in the font that renders. */
+.sidebar .sidebar-nav-secondary{display:grid;grid-template-columns:repeat(auto-fit,minmax(var(--tb-destination-min,122px),1fr));gap:1px 2px;padding-top:6px;border-top:1px solid var(--line)}
+/* Same left inset and icon gap as the primary destinations, so the icons line up in one column. */
+.sidebar .sidebar-nav-secondary .sidebar-utility{min-height:30px;padding:6px 4px 6px 10px;gap:9px}
+.sidebar .sidebar-nav-secondary .sidebar-utility span{font-size:12.5px}
+.sidebar .sidebar-nav-secondary .sidebar-utility-kbd{display:none}
+.sidebar .sidebar-utility{width:100%;height:auto;min-height:32px;display:flex;align-items:center;justify-content:flex-start;gap:10px;padding:7px 10px;border:0;border-radius:9px;background:transparent;color:var(--tx1);font-size:13px;font-weight:500;text-align:left;transition:background .14s,color .14s}
+.sidebar .sidebar-utility svg{width:16px;height:16px;flex:none;color:var(--tx2);transition:color .14s}
+.sidebar .sidebar-utility span{display:block;min-width:0;font-size:13px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar .sidebar-utility:hover{background:var(--bg2);color:var(--tx0)}
+.sidebar .sidebar-utility:hover svg{color:var(--tx1)}
+.sidebar .sidebar-utility.active{background:var(--bg3);color:var(--tx0)}
+.sidebar .sidebar-utility.active svg{color:var(--ac)}
+.sidebar .sidebar-utility .sidebar-utility-kbd{margin-left:auto;flex:none}
+/* Browser and Agents open inspector tabs: "open" is an outline with a dot, so it never reads as a second current page. */
+.sidebar .sidebar-utility.panel-open{position:relative;background:transparent;box-shadow:none;color:var(--tx0)}
+.sidebar .sidebar-utility.panel-open svg{color:var(--ac)}
+.sidebar .sidebar-utility.panel-open:hover{background:var(--bg2)}
+.sidebar .sidebar-utility.panel-open::after{content:"";width:5px;height:5px;margin-left:auto;flex:none;border-radius:50%;background:var(--ac);box-shadow:none}
+@media (max-height:720px){
+  .sidebar .sidebar-utilities{gap:4px;padding:6px 8px}
+  .sidebar .sidebar-utility{min-height:30px;padding:6px 9px;gap:8px}
+  .sidebar .sidebar-utility span{font-size:12.5px}
+  .sidebar .sidebar-nav-primary{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:1px 2px}
+  .sidebar .sidebar-nav-primary .sidebar-utility-kbd{display:none}
+}
+/* Narrow sidebars (small windows, or dragged near the 210px minimum): the shortcut hints give their room to the labels;
+   the shortcuts stay in aria-keyshortcuts and in the nav buttons' tooltips. */
+@container tbsidebar (max-width:236px){
+  .sidebar .sidebar-palette-button kbd,.sidebar .sidebar-nav-primary .sidebar-utility-kbd{display:none}
+}
+
+/* Harness / provider card */
+.sidebar .sidebar-provider{width:calc(100% - 20px);height:auto;min-height:0;margin:10px;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg2);color:var(--tx0);text-align:left;transition:border-color .15s,background .15s}
+.sidebar .sidebar-provider:hover{border-color:var(--line2);background:var(--bg3)}
+/* The dot holds still in every steady state: an animation that never ends has the compositor draw a frame every vsync all day.
+   It pulses while the harness starts, a few times only, so a start that hangs does not keep it going. */
+.sidebar .sidebar-provider .provider-dot{width:7px;height:7px;margin:0 1px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--okt)}
+.sidebar .sidebar-provider .provider-dot.starting{animation:tb-pulse 2.6s 4}
+.sidebar .sidebar-provider .provider-dot.tone-warn{background:var(--warn);box-shadow:0 0 0 3px var(--warnt)}
+.sidebar .sidebar-provider .provider-dot.tone-err{background:var(--err);box-shadow:0 0 0 3px var(--errt)}
+.sidebar .sidebar-provider .provider-dot.tone-off{background:var(--tx3);box-shadow:0 0 0 3px color-mix(in srgb,var(--tx3) 18%,transparent)}
+.sidebar .sidebar-provider>div{min-width:0}
+.sidebar .sidebar-provider strong{display:block;font-size:12px;font-weight:600;color:var(--tx0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar .sidebar-provider>div>span{display:block;margin-top:1px;font-size:10.5px;color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar .sidebar-provider svg{color:var(--tx3)}
+
+/* ============ Topbar ============ */
+.chat-workspace .workspace-header{position:relative;z-index:5;height:var(--top);gap:12px;padding:0 12px 0 14px;border-bottom:1px solid var(--line);background:var(--bgtop);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.workspace-header .workspace-breadcrumb{min-width:0;gap:2px;color:var(--tx3);font-size:12px}
+.workspace-header .workspace-breadcrumb>span{flex:none;padding:0 3px;color:var(--tx3);font-size:12px}
+.workspace-header :is(.project-crumb,.thread-title-button){height:30px;min-width:0;gap:7px;padding:0 9px;border:0;border-radius:var(--r-s);background:transparent;color:var(--tx1);font-size:12.5px;font-weight:550;transition:background .14s,color .14s}
+.workspace-header :is(.project-crumb,.thread-title-button):hover{background:var(--bg3);color:var(--tx0)}
+.workspace-header .project-crumb svg{flex:none;color:var(--tx2)}
+.workspace-header .project-crumb span{max-width:min(220px,22vw)}
+.workspace-header .thread-title-button strong{max-width:min(360px,30vw);font-size:12.5px;font-weight:600;color:var(--tx0)}
+.workspace-header .thread-title-button svg{flex:none;color:var(--tx3)}
+.workspace-header .thread-title-button:disabled{cursor:default}
+.workspace-header .thread-title-button:disabled:hover{background:transparent;color:var(--tx1)}
+.workspace-header .project-crumb.sidebar-reopen{width:30px;flex:none;padding:0;justify-content:center;margin-right:10px;position:relative}
+.workspace-header .project-crumb.sidebar-reopen::after{content:"";position:absolute;right:-7px;top:7px;bottom:7px;width:1px;background:var(--line)}
+.workspace-header .header-pr{height:24px;flex:none;margin-left:6px;padding:0 8px;gap:5px;border:1px solid color-mix(in srgb,var(--ac) 35%,transparent);border-radius:99px;background:var(--acsoft);color:var(--ac);font:600 10.5px var(--mono)}
+.workspace-header .header-pr:hover{background:color-mix(in srgb,var(--ac) 22%,transparent);color:var(--ac)}
+
+.workspace-header .workspace-header-actions{gap:4px}
+.workspace-header .header-control{height:30px;gap:6px;padding:0 9px;border:0;border-radius:var(--r-s);background:transparent;color:var(--tx2);font-size:12.5px;font-weight:550;transition:background .14s,color .14s,border-color .14s}
+.workspace-header .header-control:hover{background:var(--bg3);color:var(--tx0)}
+.workspace-header .header-control.active{background:var(--acsoft);color:var(--ac)}
+.workspace-header .header-control.icon-only{width:30px;padding:0;justify-content:center}
+.workspace-header .header-control.branch-control{height:28px;padding:0 10px;border:1px solid var(--line);border-radius:99px;background:var(--bg2);color:var(--tx1);font:500 11.5px var(--mono)}
+.workspace-header .header-control.branch-control svg{color:var(--ac)}
+.workspace-header .header-control.branch-control:hover{border-color:var(--line2);background:var(--bg2);color:var(--tx0)}
+.workspace-header .header-control.branch-control span{max-width:140px}
+.workspace-header .header-control.stop-control{color:var(--err)}
+.workspace-header .header-control.stop-control:hover{background:var(--errt);color:var(--err)}
+/* A project action that runs shows a live dot in its button, which then shows its terminal, and a Stop beside it. */
+.workspace-header .header-control.script-control.running{color:var(--tx0)}
+.workspace-header .script-running-dot{flex:none;width:7px;height:7px;margin:0 3px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--okt)}
+.workspace-header .header-control.script-stop-control{color:var(--err)}
+.workspace-header .header-control.script-stop-control:hover{background:var(--errt);color:var(--err)}
+/* A Browser recording going on marks the panel button in its corner, as it does the panel's Browser tab. */
+.workspace-header .header-control:has(>.recording-mark){position:relative}
+.workspace-header .header-control>.recording-mark{position:absolute;top:4px;right:4px;width:7px;height:7px;border-radius:50%;background:var(--err);box-shadow:0 0 0 2px var(--bg1)}
+/* A held control (Review during a turn) fades as well: the muted text colour alone is hardly lighter than an enabled control's in
+   light mode. */
+.workspace-header .header-control:is(:disabled,:disabled:hover){background:transparent;color:var(--tx3);cursor:default;opacity:.65}
+/* A Stop that was pressed waits for the turn to end: it reads quieter and takes no second press. */
+.workspace-header .header-control.stop-control.stopping,.workspace-header .header-control.stop-control.stopping:hover{background:transparent;color:var(--tx2);cursor:default}
+/* A line parts the labelled actions from the icon toggles: it goes before the first toggle the row shows, when a labelled action
+   shows before it. Folded actions (data-folded, see the narrow-header rules below) count as neither. */
+.workspace-header .workspace-header-actions>:is(.header-control:not(.icon-only),.open-in-wrap):not([data-folded])~.header-control.icon-only:not([data-folded]):not(.header-control.icon-only:not([data-folded])~*){position:relative;margin-left:9px}
+.workspace-header .workspace-header-actions>:is(.header-control:not(.icon-only),.open-in-wrap):not([data-folded])~.header-control.icon-only:not([data-folded]):not(.header-control.icon-only:not([data-folded])~*)::before{content:"";position:absolute;left:-7px;top:6px;bottom:6px;width:1px;background:var(--line)}
+.workspace-header .open-in-picker{height:28px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--bg2)}
+.workspace-header .open-in-picker>button{gap:6px;padding:0 9px;color:var(--tx1);font-size:11.5px}
+.workspace-header .open-in-picker>button:hover{background:var(--bg3);color:var(--tx0)}
+/* The editor select draws the theme's chevron like every other select (.tb-select), not the native arrow. */
+.workspace-header .open-in-picker>select{border-left:1px solid var(--line);appearance:none;-webkit-appearance:none;padding:0 24px 0 9px;background:var(--bg2) var(--chev) right 8px center/10px no-repeat;color:var(--tx2);font-size:11.5px;cursor:pointer}
+.workspace-header .open-in-picker>select:hover{background-color:var(--bg3);color:var(--tx0)}
+.workspace-header .open-in-picker>select:focus-visible{outline:none;box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--ac) 55%,transparent)}
+.workspace-header .open-in-picker>select option{color:var(--tx0);background:var(--bg2)}
+.workspace-header .open-in-error{border-color:var(--errb);background:var(--panel);color:var(--err);border-radius:9px;font-size:11.5px;box-shadow:var(--shadow)}
+
+/* Find in thread */
+.chat-workspace .thread-find-bar{top:calc(var(--top) + 10px);gap:6px;padding:6px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:var(--shadow)}
+.chat-workspace .thread-find-bar>svg{color:var(--tx3)}
+.chat-workspace .thread-find-bar input{height:28px;color:var(--tx0);font-size:12.5px}
+.chat-workspace .thread-find-bar input::placeholder{color:var(--tx3)}
+.chat-workspace .thread-find-count{font:10.5px var(--mono);color:var(--tx3)}
+.chat-workspace .thread-find-bar button{width:28px;height:28px;border-radius:7px;color:var(--tx2);font-size:13px}
+.chat-workspace .thread-find-bar button:hover:not(:disabled,[aria-disabled="true"]){background:var(--bg3);color:var(--tx0)}
+.chat-workspace .thread-find-snippet{padding:6px 9px;border-radius:8px;background:var(--bg2);color:var(--tx2);font-size:11.5px}
+.chat-workspace .thread-find-snippet mark{background:color-mix(in srgb,var(--ac) 30%,transparent);color:var(--tx0)}
+
+/* ============ Conversation ============ */
+/* --thread-find-reserve: while find is open the strip under its floating bar stays clear (App measures the bar and sets it, moving
+   the scroll position with it so the rows in view stay put): the first rows start below it and a jump to a match lands below it.
+   --history-hold: when an older page lands above a newest page too short to fill the view, the column keeps the height that holds
+   the rows in view where they were; rows arriving below fill it, and App lowers it as the view scrolls up.
+   --composer-reach: how far the composer stands above its foot: its height (--composer-height, which the composer measures) and the
+   attachment chips on the shelf above it (--composer-shelf, which it measures too: a row is 32px, and the rows go up from there). The
+   conversation, and the opening state over it, end there, so a draft of several lines, a second row of controls or the chips never
+   cover the end of the last reply: App keeps a view at its end there as the view shrinks, and a view scrolled up keeps its rows in
+   place. The welcome is sized to the window and keeps its place as a draft grows, less the attachment chips: the rows of them in the
+   composer (--composer-chips, which it measures too) and the shelf's, so a dozen of them beside the open panel no longer cover its
+   suggestions.
+   App names what the workspace holds in its classes (with-shelf-chips, with-clone-banner, with-clone-error), never a :has() on the
+   workspace: Chrome restyles everything inside an element a :has() rule tests whenever something under it may change the rule's
+   match, and React rewrites the composer's text on every key, so each key restyled the whole conversation (2.7 s of style work per
+   200 keys on a 1000-turn thread). */
+.chat-workspace{--composer-reach:calc(var(--composer-height,115px) + 1px)}
+.chat-workspace.with-shelf-chips{--composer-reach:calc(var(--composer-height,115px) + max(32px,var(--composer-shelf,0px)))}
+.chat-workspace .conversation-scroll:has(>.conversation-column>.welcome){--composer-reach:calc(116px + var(--composer-chips,0px))}
+.chat-workspace.with-shelf-chips .conversation-scroll:has(>.conversation-column>.welcome){--composer-reach:calc(115px + max(32px,var(--composer-shelf,0px)) + var(--composer-chips,0px))}
+.chat-workspace .conversation-scroll{top:var(--top);bottom:calc(16px + var(--composer-reach));padding:max(34px,var(--thread-find-reserve,0px)) 28px 72px;scroll-padding-top:var(--thread-find-reserve,0px);scrollbar-width:auto;scrollbar-color:auto}
+.main-frame.terminal-open .chat-workspace .conversation-scroll{bottom:calc(var(--terminal-height,330px) + 12px + var(--composer-reach))}
+/* A thread that takes more than a moment to open (App: OPENING_COVER_DELAY_MS) names itself in the conversation area with a quiet
+   spinner. What it covers only hides, so a failed open puts that view back with its layout and scroll position as they were; a
+   page it was opened from (History, Projects…) hides the same way under the chat view, and so does the left thread's find bar. The
+   left thread's goal panel gives its place to the opening state's own, without unmounting. */
+.chat-workspace :is(.conversation-scroll,.thread-find-bar).opening-covered,.main-frame.opening-over-page>:is(.page-topbar,.secondary-page){visibility:hidden}
+:root:root .context-panel .goal-panel.opening-covered{display:none}
+.chat-workspace .thread-opening{position:absolute;left:0;right:0;top:var(--top);bottom:calc(16px + var(--composer-reach));display:flex;align-items:center;justify-content:center;padding:34px 28px 72px;pointer-events:none;animation:tb-fade .24s ease-out}
+.main-frame.terminal-open .chat-workspace .thread-opening{bottom:calc(var(--terminal-height,330px) + 12px + var(--composer-reach))}
+.thread-opening-body{min-width:0;max-width:min(100%,764px);display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center}
+.thread-opening-body strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx0);font-size:15px;font-weight:600;letter-spacing:-.01em}
+.thread-opening-body span{display:inline-flex;align-items:center;gap:8px;color:var(--tx2);font-size:12.5px}
+.thread-opening-spinner{flex:none;width:12px;height:12px;border:1.5px solid color-mix(in srgb,var(--ac) 30%,transparent);border-top-color:var(--ac);border-radius:50%;animation:tb-spin .8s linear infinite}
+.chat-workspace .conversation-column{width:min(100%,764px);min-height:var(--history-hold,0px)}
+.conversation-column .conversation-history{gap:0}
+
+.conversation-column .user-row{margin:0 0 22px}
+.conversation-column .user-bubble{max-width:min(76%,620px);padding:10px 15px;border:1px solid color-mix(in srgb,var(--ac) 22%,var(--line2));border-radius:14px 14px 4px 14px;background:linear-gradient(135deg,var(--bub1),var(--bub2));box-shadow:var(--sh1)}
+/* A user message shows exactly as it was typed: its line breaks, blank lines and indentation stay. */
+.conversation-column .user-bubble p{margin:0;font-size:13.5px;line-height:1.55;color:var(--tx0);white-space:pre-wrap;overflow-wrap:anywhere}
+/* The files sent with a message, under its text, as the composer's chips showed them. */
+.conversation-column .user-bubble .user-attachments{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.conversation-column .user-bubble .user-attachments>span{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;height:24px;margin:0;padding:0 8px;border:1px solid var(--line2);border-radius:var(--r-s);background:var(--bg2);color:var(--tx1);font-size:11px;text-align:left}
+.conversation-column .user-bubble .user-attachments svg{flex:none;color:var(--tx3)}
+.conversation-column .user-bubble .user-attachments bdi{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.conversation-column .user-bubble .message-action{display:block;margin:6px 0 0 auto;padding:0;border:0;background:none;color:var(--tx3);font-size:11px}
+.conversation-column .user-bubble .message-action:hover{color:var(--ac);text-decoration:none}
+
+.conversation-column .history-assistant{grid-template-columns:28px minmax(0,1fr);gap:11px;margin:0 0 22px}
+.conversation-column .history-assistant .agent-star.small{width:28px;height:28px;display:grid;place-items:center;border:1px solid color-mix(in srgb,var(--ac) 35%,transparent);border-radius:9px;background:var(--acsoft);color:var(--ac);box-shadow:none}
+.conversation-column .history-assistant .agent-star.small svg{width:14px;height:14px}
+.conversation-column .assistant-message-text{padding-top:4px;font-size:13.5px;line-height:1.7;color:var(--tx1)}
+.conversation-column .history-assistant-body{min-width:0}
+.conversation-column .assistant-heading{padding-top:5px;font-size:12.5px;font-weight:550;line-height:18px;color:var(--tx1)}
+.conversation-column .assistant-heading+.assistant-message-text{padding-top:6px}
+.conversation-column .turn-outcome{display:inline-flex;align-items:center;gap:5px;margin-top:10px;padding:3px 8px;border:1px solid var(--okb);border-radius:99px;background:var(--okt);color:var(--ok);font:500 10.5px/1.3 var(--mono)}
+.conversation-column .turn-outcome.tone-warn{border-color:var(--warnb);background:var(--warnt);color:var(--warn)}
+.conversation-column .turn-outcome.tone-err{border-color:var(--errb);background:var(--errt);color:var(--err)}
+.conversation-column .turn-outcome svg{flex:none}
+/* A turn that failed, was stopped or completed before any reply ends with a row of its own (TurnOutcomeRow): the heading and the
+   pill on one line (two when narrow), then the error it ended with in full, wrapped however long it is, unbroken URLs included
+   ("Finished without a reply." for a completed one). */
+.conversation-column .turn-outcome-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-height:28px}
+.conversation-column .turn-outcome-head .assistant-heading{padding-top:0}
+.conversation-column .turn-outcome-head .turn-outcome{margin-top:0}
+.conversation-column .turn-outcome-message{margin:3px 0 0;font-size:12.5px;line-height:1.6;color:var(--err);white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation-column .turn-outcome-message.tone-warn{color:var(--warn)}
+.conversation-column .turn-outcome-message.tone-ok{color:var(--tx2)}
+/* A turn whose harness had lost the conversation opens with a note that it goes on in a new session (SessionHandoffRow): in the
+   reply column where the turn's activity card starts, above its steps and reply, quiet and in no failure colour, wrapped however
+   long. */
+.conversation-column .session-handoff-row{display:flex;align-items:flex-start;gap:9px;margin:0 0 14px 39px;padding:8px 12px;border:1px solid var(--line);border-radius:var(--r-m);background:transparent}
+.conversation-column .session-handoff-row>svg{flex:none;width:13px;height:13px;margin-top:2px;color:var(--ac)}
+.conversation-column .session-handoff-row>p{min-width:0;margin:0;font-size:12.5px;line-height:1.5;color:var(--tx2);overflow-wrap:anywhere}
+.conversation-column .assistant-message-text::selection{background:color-mix(in srgb,var(--ac) 32%,transparent);color:var(--tx0)}
+/* Markdown in replies (ChatMarkdown): blocks keep the reply's rhythm, code reads as code, and wide tables and code scroll
+   inside the reply instead of widening the conversation. */
+.conversation-column .chat-markdown{white-space:normal;overflow-wrap:anywhere}
+.conversation-column .chat-markdown ::selection{background:color-mix(in srgb,var(--ac) 32%,transparent);color:var(--tx0)}
+.conversation-column .chat-markdown>:first-child{margin-top:0}
+.conversation-column .chat-markdown>:last-child{margin-bottom:0}
+.conversation-column .chat-markdown :is(p,ul,ol,blockquote,table,.chat-markdown-code){margin:0 0 10px}
+.conversation-column .chat-markdown :is(ul,ol){padding-left:22px}
+.conversation-column .chat-markdown li{margin:3px 0}
+.conversation-column .chat-markdown li>:is(p,ul,ol){margin:3px 0 0}
+.conversation-column .chat-markdown li>p:first-child{margin-top:0}
+.conversation-column .chat-markdown li::marker{color:var(--tx3)}
+.conversation-column .chat-markdown :is(h1,h2,h3,h4,h5,h6){margin:16px 0 8px;color:var(--tx0);font-weight:600;line-height:1.35;letter-spacing:-.01em}
+.conversation-column .chat-markdown h1{font-size:18px}
+.conversation-column .chat-markdown h2{font-size:16px}
+.conversation-column .chat-markdown h3{font-size:14.5px}
+.conversation-column .chat-markdown :is(h4,h5,h6){font-size:13.5px}
+.conversation-column .chat-markdown :is(strong,b){color:var(--tx0);font-weight:600}
+.conversation-column .chat-markdown a{color:var(--ac);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ac) 40%,transparent);text-underline-offset:2px}
+.conversation-column .chat-markdown a:hover{text-decoration-color:var(--ac)}
+.conversation-column .chat-markdown-link-text{text-decoration:underline dotted;text-decoration-color:var(--line2);text-underline-offset:2px}
+.conversation-column .chat-markdown :not(pre)>code{padding:1px 5px;border:1px solid var(--line);border-radius:5px;background:var(--bg3);color:var(--tx0);font:500 .88em/1.5 var(--mono);white-space:break-spaces}
+.conversation-column .chat-markdown blockquote{padding:2px 12px;border-left:2px solid var(--line2);color:var(--tx2)}
+.conversation-column .chat-markdown hr{margin:14px 0;border:0;border-top:1px solid var(--line)}
+.conversation-column .chat-markdown table{display:block;width:max-content;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:12.5px;line-height:1.5}
+.conversation-column .chat-markdown :is(th,td){padding:5px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}
+.conversation-column .chat-markdown th{background:var(--bg2);color:var(--tx0);font-weight:600}
+.conversation-column .chat-markdown input[type=checkbox]{margin:0 6px 0 0;vertical-align:-1px;accent-color:var(--ac)}
+.conversation-column .chat-markdown li:has(>input[type=checkbox]){list-style:none;margin-left:-18px}
+.conversation-column .chat-markdown-code{border:1px solid var(--line);border-radius:var(--r-m);background:var(--bg0);overflow:hidden}
+.conversation-column .chat-markdown-code-head{display:flex;align-items:center;justify-content:space-between;height:28px;padding:0 5px 0 12px;border-bottom:1px solid var(--line);background:var(--bg2);color:var(--tx3);font:500 10.5px/1 var(--mono)}
+.conversation-column .chat-markdown-code-head button{width:24px;height:22px;display:grid;place-items:center;padding:0;border:0;border-radius:6px;background:transparent;color:var(--tx2);cursor:pointer}
+.conversation-column .chat-markdown-code-head button:hover{background:var(--bg3);color:var(--tx0)}
+.conversation-column .chat-markdown-code-head .chat-markdown-copy-error{min-width:0;margin:0 8px 0 auto;overflow:hidden;color:var(--err);font:500 11.5px/1.3 var(--font);white-space:nowrap;text-overflow:ellipsis}
+.conversation-column .chat-markdown-code pre{margin:0;padding:10px 12px;overflow-x:auto;white-space:pre;overflow-wrap:normal;color:var(--tx1);font:400 12px/1.6 var(--mono);tab-size:2}
+.conversation-column .chat-markdown-code pre code{padding:0;border:0;background:none;color:inherit;font:inherit}
+/* Rows skip painting outside their box (content-visibility:auto, workspace-overlay.css); the row holding the active match is on
+   screen, so it paints normally and its ring is not clipped to a sliver. */
+.conversation-history>:is(.user-row,.history-assistant).find-active{content-visibility:visible}
+.conversation-column .user-row.find-active .user-bubble,.conversation-column .history-assistant.find-active>div:last-child{outline:1px solid color-mix(in srgb,var(--ac) 70%,transparent);box-shadow:0 0 0 3px var(--acsoft);border-radius:12px}
+.conversation-column .inline-visualization-card{border:1px solid var(--line);border-radius:var(--r-m);background:var(--bg2)}
+/* The card's head takes the mode's colours, as a code block's head does, with its file name and label at the chat's small size. */
+.conversation-column .inline-visualization-head{border-bottom:1px solid var(--line);background:var(--bg2)}
+.conversation-column .inline-visualization-head strong{color:var(--tx1);font-size:12px;font-weight:600}
+.conversation-column .inline-visualization-head span{color:var(--tx2);font-size:11.5px}
+/* Until its content has loaded, the card says so where the chart goes, on its own colours instead of the frame's white, and the
+   frame waits unseen under that line at the size it shows at. */
+.inline-visualization-card{position:relative}
+.inline-visualization-card iframe.loading{position:absolute;left:0;bottom:0;visibility:hidden}
+.inline-visualization-card .inline-visualization-wait{height:340px;margin:0;display:grid;place-items:center;color:var(--tx2);font-size:12.5px}.inline-visualization-card.wide .inline-visualization-wait{height:500px}
+.inline-visualization-card .inline-visualization-missing{margin:0;padding:12px 14px;color:var(--tx2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+
+/* Agent activity cards (TurnActivityCard): the live turn's (.agent-block) and each earlier turn's (.turn-card) read alike, one
+   card whose head names the activity and counts its steps, and opens or closes the steps below it. Closed, a card is its head.
+   An earlier turn's card off screen is not painted, and keeps the height it last had. */
+.conversation-column .agent-block,.conversation-column .agent-block-after,.conversation-column .agent-block-before{margin:0 0 22px 39px}
+/* Once its turn has ended, the live card's rows of no turn read below that turn's reply in a card of their own (.agent-block-after,
+   which the order below puts after the reply), and above the card of a turn the window did not send that started after them
+   (.agent-block-before, before the card's block and so before its order): a turn with no rows of its own leaves its block empty,
+   which takes no room. */
+.conversation-column .agent-block:empty{display:none}
+.conversation-column .turn-card{margin:0 0 22px 39px;content-visibility:auto;contain-intrinsic-size:auto 36px;min-width:0}
+.conversation-column .activity-card{border:1px solid var(--line);border-radius:var(--r-m);background:var(--bg2);overflow:hidden}
+.conversation-column .activity-card-head{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;margin:0;padding:8px 12px;border:0;border-radius:calc(var(--r-m) - 1px) calc(var(--r-m) - 1px) 0 0;background:none;color:var(--tx2);font:600 11.5px/1.3 var(--font);letter-spacing:.04em;text-transform:uppercase;text-align:left;cursor:pointer}
+.conversation-column .activity-card-head:hover{background:var(--bg3)}
+.conversation-column .activity-card-head:focus-visible{outline:2px solid var(--ac);outline-offset:-2px}
+/* The focus ring follows the card's corners: the top ones while the steps show, all four when the card is its head. */
+.conversation-column .activity-card.closed .activity-card-head{border-radius:calc(var(--r-m) - 1px)}
+.conversation-column .activity-card-head .agent-star{display:grid;place-items:center;flex:none;width:auto;height:auto;border:0;border-radius:0;background:none;color:var(--ac);box-shadow:none}
+.conversation-column .activity-card-head .agent-star svg{width:13px;height:13px}
+.conversation-column .activity-card-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-column .activity-card-meta{display:flex;align-items:center;gap:8px;min-width:0;margin-left:auto}
+.conversation-column .activity-card-summary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx3);font:500 11px/1.3 var(--mono);letter-spacing:0;text-transform:none}
+/* The row's err pill with a pixel less above and below, so a closed card that has one stays a 36px line. */
+.conversation-column .activity-card-failed{flex:none;padding:1px 8px;border:1px solid var(--errb);border-radius:99px;background:var(--errt);color:var(--err);font:500 10.5px/1.3 var(--mono);font-style:normal;letter-spacing:0;text-transform:none;white-space:nowrap}
+.conversation-column .activity-card-chevron{flex:none;width:13px;height:13px;color:var(--tx3);transition:transform .2s}
+.conversation-column .activity-card.closed .activity-card-chevron{transform:rotate(-90deg)}
+@media (prefers-reduced-motion:reduce){.conversation-column .activity-card-chevron{transition:none}}
+.conversation-column .activity-card>.timeline{margin:0;padding:6px;gap:1px;border:0;border-top:1px solid var(--line);border-radius:0;background:transparent}
+.conversation-column .timeline .tool-event{margin:0;border:0;border-radius:8px;background:transparent}
+.conversation-column .timeline .tool-event summary{min-height:30px;grid-template-columns:18px minmax(0,1fr) auto;gap:9px;padding:0 7px;border-radius:7px;color:var(--tx1)}
+.conversation-column .timeline .tool-event summary:hover{background:var(--bg3);color:var(--tx0)}
+.conversation-column .timeline .tool-event summary .timeline-marker{width:16px;height:16px;display:grid;place-items:center;border:0;background:none;color:var(--tx2);box-shadow:none}
+.conversation-column .timeline .tool-event summary .timeline-marker svg{width:13.5px;height:13.5px}
+.conversation-column .timeline .tool-event.status-done summary .timeline-marker{color:var(--ok)}
+/* A stored row can stay "running" after its turn was cut off, so the pulse stops after a minute; its pill still says running. */
+.conversation-column .timeline .tool-event.status-running summary .timeline-marker{color:var(--ac);animation:tb-pulse 1.4s ease-in-out 43}
+.conversation-column .timeline .tool-event:is(.status-error,.kind-error) summary .timeline-marker{color:var(--err)}
+.conversation-column .timeline .tool-event.status-warning summary .timeline-marker{color:var(--warn)}
+.conversation-column .timeline .tool-event summary strong{font-size:12.5px;font-weight:500;color:inherit}
+.conversation-column .timeline .tool-event summary em{padding:2px 8px;border:1px solid var(--line2);border-radius:99px;background:var(--bg3);color:var(--tx2);font:500 10.5px/1.3 var(--mono)}
+.conversation-column .timeline .tool-event:is(.status-done,.status-completed) summary em{border-color:var(--okb);background:var(--okt);color:var(--ok)}
+.conversation-column .timeline .tool-event.status-running summary em{border-color:color-mix(in srgb,var(--ac) 35%,transparent);background:var(--acsoft);color:var(--ac)}
+.conversation-column .timeline .tool-event:is(.status-error,.kind-error) summary em{border-color:var(--errb);background:var(--errt);color:var(--err)}
+.conversation-column .timeline .tool-event.status-warning summary em{border-color:var(--warnb);background:var(--warnt);color:var(--warn)}
+/* A step whose end the window does not know (a compaction it stopped waiting for) says what the person can do next, so its whole
+   text shows, wrapped, where other steps' long titles are cut. */
+.conversation-column .timeline .tool-event.status-unknown summary strong{padding:6px 0;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45}
+/* A retry row while its harness retries: amber, as a degraded state that goes on (the turn has not failed). */
+.conversation-column .timeline .tool-event.kind-retry.status-running summary .timeline-marker{color:var(--warn)}
+.conversation-column .timeline .tool-event.kind-retry.status-running summary em{border-color:var(--warnb);background:var(--warnt);color:var(--warn)}
+.conversation-column .timeline .tool-event-body{margin:0 7px 8px 34px;padding:2px 0 0;border:0;border-radius:0;background:transparent}
+.conversation-column .timeline .tool-event-body pre{margin:0 0 6px;max-height:200px;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg0);color:var(--tx2);font:11px/1.55 var(--mono)}
+.conversation-column .timeline .tool-event-body button{height:28px;padding:0 10px;gap:6px;border:1px solid var(--line2);border-radius:var(--r-s);background:var(--bg3);color:var(--tx1);font-size:11.5px}
+.conversation-column .timeline .tool-event-body button:hover{background:var(--bg4);color:var(--tx0)}
+/* A path that gives way at its start: an RTL box puts the cut and the ellipsis on the left, and the bdi keeps the path itself
+   reading left to right, so its last folders and file name stay in view. */
+.conversation-column .timeline .path-tail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.conversation-column .timeline .path-tail>bdi{direction:ltr;unicode-bidi:isolate}
+/* A command's exit code, folder and duration as one quiet line under its command, however long the folder: the exit code and
+   duration stay whole and the folder gives way. A non-zero exit reads as a failure. */
+.conversation-column .timeline .tool-event-facts{display:flex;align-items:center;min-width:0;margin:-1px 0 7px;padding:0 2px;color:var(--tx3);font:500 10.5px/1.5 var(--mono);white-space:nowrap}
+.conversation-column .timeline .tool-event-facts>:is(span,i){flex:none}
+.conversation-column .timeline .tool-event-facts>.fact-cwd{flex:0 1 auto}
+.conversation-column .timeline .tool-event-facts>.fact-sep{margin:0 7px;color:var(--tx3);font-style:normal}
+.conversation-column .timeline .tool-event-facts>.tone-ok{color:var(--ok)}
+.conversation-column .timeline .tool-event-facts>.tone-err{color:var(--err)}
+/* A change step's files: each path with what happened to it, then its diff. The kind pill and "to" stay whole; the paths give
+   way. */
+.conversation-column .timeline .tool-event-change-head{display:flex;align-items:center;gap:7px;min-width:0;margin:1px 0 5px;color:var(--tx2)}
+.conversation-column .timeline .tool-event-change-head>svg{flex:none;color:var(--tx3)}
+.conversation-column .timeline .tool-event-change-head>code{flex:0 1 auto;color:var(--tx0);font:500 11.5px/1.4 var(--mono)}
+.conversation-column .timeline .tool-event-change-head .change-kind{flex:none;padding:1px 7px;border:1px solid var(--line2);border-radius:99px;background:var(--bg3);color:var(--tx2);font:500 10px/1.4 var(--mono);font-style:normal;white-space:nowrap}
+.conversation-column .timeline .tool-event-change-head .change-move-to{flex:none;color:var(--tx3);font:500 10.5px/1.4 var(--mono)}
+.conversation-column .timeline .tool-event-change-head .change-kind.kind-added{border-color:var(--okb);background:var(--okt);color:var(--ok)}
+.conversation-column .timeline .tool-event-change-head .change-kind.kind-deleted{border-color:var(--errb);background:var(--errt);color:var(--err)}
+.conversation-column .timeline .tool-event-body pre.tool-event-diff{overflow:auto}
+.conversation-column .timeline .tool-event-diff>span{display:block;min-width:max-content;margin:0 -10px;padding:0 10px}
+.conversation-column .timeline .tool-event-diff>.diff-add{background:color-mix(in srgb,var(--ok) 9%,transparent);color:var(--dadd)}
+.conversation-column .timeline .tool-event-diff>.diff-del{background:color-mix(in srgb,var(--err) 9%,transparent);color:var(--ddel)}
+.conversation-column .timeline .tool-event-diff>.diff-hunk{color:var(--ac)}
+.conversation-column .timeline .tool-event-diff>.diff-meta{color:var(--tx3)}
+.conversation-column .timeline-window-controls{margin:0 0 6px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg1);color:var(--tx3);font:10.5px var(--mono)}
+.conversation-column .timeline-window-controls button{height:24px;padding:0 8px;border:1px solid var(--line2);border-radius:7px;background:var(--bg3);color:var(--tx1);font-size:11px}
+/* A reply still being written reads as the message it becomes: the old light theme's card behind it is dropped. */
+.conversation-column .agent-block .assistant-answer{margin:12px 0 0;padding:0;border:0;background:transparent;font-size:13.5px;line-height:1.7;color:var(--tx1)}
+.conversation-column .agent-block .assistant-answer:first-child{margin-top:0}
+.conversation-column .history-page-control button{height:30px;padding:0 12px;border:1px solid var(--line2);border-radius:99px;background:var(--bg2);color:var(--tx1);font-size:12px}
+.conversation-column .history-page-control button:hover:not(:disabled){background:var(--bg3);color:var(--tx0)}
+/* Turns not loaded between a find hit and the newest pages: a dashed break with their count, whose button loads them. */
+.conversation-column .history-page-control.history-gap{align-items:center;gap:0 12px;margin:4px 0 22px}
+.conversation-column .history-page-control.history-gap::before,.conversation-column .history-page-control.history-gap::after{content:"";flex:1;min-width:16px;border-top:1px dashed var(--line2)}
+.conversation-column .history-page-control.history-gap button{display:inline-flex;align-items:center;gap:6px;flex:none}
+.conversation-column .history-page-control.history-gap .history-gap-load{color:var(--ac);font-weight:600}
+/* Busy, a history button only says so (aria-disabled), as Load older threads does, so the keyboard stays on it to press it again
+   once its page fails; it takes no pointer meanwhile. */
+.conversation-column .history-page-control button[aria-disabled="true"]{opacity:.55;pointer-events:none}
+/* A page that did not load: the failure on a line of its own under the button pressed (after the gap's dashes too). */
+.conversation-column .history-page-control{flex-wrap:wrap}
+.conversation-column .history-page-control .history-page-error{order:1;flex-basis:100%;margin:8px 0 0;font-size:12.5px;line-height:1.5;color:var(--err);text-align:center;overflow-wrap:anywhere}
+
+/* Queued follow-ups and inline approvals line up with the assistant text column. */
+.conversation-column .inline-approval{margin:8px 0 22px 39px}
+.conversation-column .queued-message{margin:8px 0 16px 39px;padding:11px 13px;border:1px dashed var(--line2);border-radius:12px;background:var(--bg2)}
+.conversation-column .queued-message.editing{border-color:color-mix(in srgb,var(--ac) 50%,var(--line2));background:var(--acsoft)}
+.conversation-column .queued-message>span{font:600 10.5px var(--mono);letter-spacing:.04em;color:var(--ac)}
+.conversation-column .queued-message p{margin:6px 0 9px;font-size:13px;line-height:1.55;color:var(--tx1)}
+.conversation-column .queued-message-actions{gap:6px}
+.conversation-column .queued-message button{height:26px;padding:0 10px;border:1px solid var(--line2);border-radius:7px;background:var(--bg3);color:var(--tx1);font-size:11.5px}
+.conversation-column .queued-message button:hover:not(:disabled){background:var(--bg4);color:var(--tx0)}
+
+/* ============ Clone progress banner ============ */
+/* Above the conversation while a project clones (App.jsx .clone-banner): the same type scale and tokens as the rest of the
+   chat, instead of the 7-8px text it had before the redesign. The conversation is positioned over the whole area under the
+   header, so it was drawn over the banner and took its buttons' hover and clicks: the banner stacks above it, and while it shows
+   the conversation's first rows start below it (its 10px margin, its one-line height and a gap). */
+.chat-workspace .clone-banner{position:relative;z-index:4;margin:10px 16px 0;padding:10px 12px;gap:12px;grid-template-columns:minmax(0,1fr) minmax(90px,180px) auto auto;border:1px solid color-mix(in srgb,var(--ac) 30%,var(--line2));border-radius:var(--r-m);background:color-mix(in srgb,var(--ac) 6%,var(--bg2));box-shadow:var(--sh1)}
+.chat-workspace.with-clone-banner .conversation-scroll{padding-top:max(92px,var(--thread-find-reserve,0px))}
+.chat-workspace .clone-banner>div{gap:3px}
+.chat-workspace .clone-banner strong{font-size:12.5px;font-weight:600;color:var(--tx0)}
+.chat-workspace .clone-banner span{font-size:12px;line-height:1.45;color:var(--tx2)}
+/* A progress read that failed is said under the banner's text in two lines at most, and the strip kept clear for the banner grows
+   by those two lines while it shows: wrapped freely, it made the banner taller than the strip and drew it over the first row. */
+.chat-workspace .clone-banner .clone-refresh-error{color:var(--err);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.chat-workspace.with-clone-error .conversation-scroll{padding-top:max(130px,var(--thread-find-reserve,0px))}
+.chat-workspace .clone-banner i{height:6px;background:var(--bg4)}
+.chat-workspace .clone-banner i b{background:var(--ac)}
+.chat-workspace .clone-banner em{min-width:34px;font:500 11.5px/1 var(--mono);color:var(--tx2)}
+.chat-workspace .clone-banner button{height:28px;padding:0 10px;gap:5px;border:1px solid var(--line2);border-radius:var(--r-s);background:var(--bg3);color:var(--tx1);font-size:12px;font-weight:500;cursor:pointer;transition:background .14s,color .14s}
+.chat-workspace .clone-banner button:hover{background:var(--bg4);color:var(--tx0)}
+.chat-workspace .clone-banner:is(.failed,.cancelled){border-color:var(--errb);background:color-mix(in srgb,var(--err) 7%,var(--bg2))}
+.chat-workspace .clone-banner:is(.failed,.cancelled) strong{color:var(--err)}
+
+/* ============ Empty-state hero ============ */
+.conversation-column .welcome{min-height:calc(100vh - 180px - var(--composer-reach,116px));padding:24px 24px 40px;justify-content:safe center}
+.app-shell.desktop-shell .conversation-column .welcome{min-height:calc(100vh - 212px - var(--composer-reach,116px))}
+.main-frame.terminal-open .conversation-column .welcome{min-height:0;padding:16px 24px 20px}
+.main-frame.terminal-open .conversation-column .welcome-mark{width:44px;height:44px;margin-bottom:14px}
+.main-frame.terminal-open .conversation-column .welcome-mark img{width:44px;height:44px}
+.main-frame.terminal-open .conversation-column .welcome h1{font-size:22px}
+.conversation-column .welcome-mark{width:62px;height:62px;margin:0 auto 22px;position:relative;display:grid;place-items:center;border:0;border-radius:0;background:none;animation:tb-float 5.5s ease-in-out 2}
+.conversation-column .welcome-mark::before{content:"";position:absolute;inset:-16px;border-radius:50%;background:radial-gradient(closest-side,var(--acglow),transparent 72%);filter:blur(6px)}
+.conversation-column .welcome-mark img{position:relative;width:62px;height:62px;filter:drop-shadow(0 6px 22px var(--acglow))}
+.conversation-column .welcome h1{margin:0;font-size:27px;font-weight:650;letter-spacing:-.035em;line-height:1.2;color:var(--tx0)}
+.conversation-column .welcome p{max-width:480px;margin:12px auto 0;font-size:13px;line-height:1.65;color:var(--tx2)}
+.conversation-column .welcome .suggestions{gap:8px;margin-top:24px}
+.conversation-column .welcome .suggestions button{height:auto;padding:7.5px 14px;border:1px solid var(--line2);border-radius:99px;background:var(--bg2);color:var(--tx1);font-size:12.5px;font-weight:500;transition:border-color .16s,color .16s,background .16s,transform .16s}
+.conversation-column .welcome .suggestions button:hover{border-color:color-mix(in srgb,var(--ac) 55%,var(--line2));background:var(--acsoft);color:var(--ac);transform:translateY(-1px)}
+
+/* ============ Composer ============ */
+.chat-workspace .composer-wrap{bottom:16px;width:min(calc(100% - 56px),820px);min-height:0;padding:0;border:1px solid var(--line2);border-radius:var(--r-l);background:var(--bg1) linear-gradient(180deg,var(--bg2),var(--bg1));box-shadow:var(--shadow);-webkit-backdrop-filter:none;backdrop-filter:none;transition:bottom var(--panel-animation-ms) ease,border-color .2s,box-shadow .2s}
+.chat-workspace .composer-wrap:focus-within{border-color:color-mix(in srgb,var(--ac) 45%,var(--line2));box-shadow:0 0 0 3.5px var(--acsoft),var(--shadow)}
+/* Above the terminal drawer the composer and its shelf keep under the header, 12px from it: the draft gives way, down to what the
+   room leaves it, and scrolls (resizeTextarea), and the drawer's tallest leaves it a line (App's --terminal-room). The room slides
+   with the composer's foot, over the same time and easing (Settings > Appearance), as the two always add up to the space under the
+   header: a drawer set lower does not show the composer whole, over the header, while its foot is still on its way down. */
+.main-frame.terminal-open .chat-workspace .composer-wrap{bottom:calc(var(--terminal-height,330px) + 12px);display:flex;flex-direction:column;max-height:calc(100% - var(--top) - var(--terminal-height,330px) - 24px - var(--composer-shelf,0px));transition:bottom var(--panel-animation-ms) ease,max-height var(--panel-animation-ms) ease,border-color .2s,box-shadow .2s}
+.main-frame.terminal-open .chat-workspace .composer-wrap>:not(textarea){flex:none}
+.main-frame.terminal-open .chat-workspace .composer-wrap>textarea{min-height:0}
+.composer-wrap textarea{display:block;width:100%;min-height:40px;max-height:160px;padding:12px 16px 4px;border:0;background:transparent;color:var(--tx0);font-size:13.5px;line-height:1.55}
+.composer-wrap textarea::placeholder{color:var(--tx3)}
+.composer-wrap textarea:disabled{cursor:not-allowed}
+.composer-wrap .composer-bar{min-height:0;gap:8px;padding:2px 10px 8px}
+/* Room for focus rings inside the clipped left group. */
+.composer-wrap .composer-left{gap:7px;padding:4px;margin:-4px}
+.composer-wrap .composer-right{gap:6px}
+/* The left group asks for the width its pickers' values need. Where they and the right group do not fit on one row (Thinking and
+   Speed beside a project's workspace picker in a 900 or 700 wide window), the right group goes under them, at the right as in the
+   stacked layout below, and pickers that do not fit beside each other wrap: none is cut to "Thinking…" or "Speed · …". The right
+   group asks for its controls' width too, up to the whole row: the legacy sheet held it to 52%, so beside a harness's agent picker
+   the model picker ran over the mic from 1000 wide down. */
+.composer-wrap .composer-bar{flex-wrap:wrap;row-gap:6px}
+.composer-wrap .composer-left{flex:1 1 auto;flex-wrap:wrap}
+.composer-wrap .composer-right{margin-left:auto;max-width:100%}
+/* Narrow composer (inspector open at 1280, small windows): the legacy container query stacks the left group above
+   the right group (e2e specs rely on that order). Keep the pills compact so the left group stays on one row where
+   possible, and keep the model picker at its natural width next to voice and send instead of stretching it. */
+@container (max-width:600px){
+  .composer-wrap .composer-bar{row-gap:6px}
+  .composer-wrap .composer-left{flex:none;gap:6px}
+  .composer-wrap .composer-left>select{flex:0 1 auto;min-width:0;max-width:150px;padding:0 23px 0 9px;background-position:right 7px center;font-size:11.5px}
+  .composer-wrap .model-picker-wrap{flex:0 1 auto;min-width:0}
+}
+.composer-wrap :is(.circle-btn,.mic-btn){width:30px;height:30px;flex:none;display:grid;place-items:center;border:0;border-radius:var(--r-s);background:transparent;color:var(--tx2);transition:background .14s,color .14s}
+.composer-wrap :is(.circle-btn,.mic-btn):hover:not(:disabled){background:var(--bg3);color:var(--tx0)}
+.composer-wrap .circle-btn svg{width:17px;height:17px}
+.composer-wrap .mic-btn.active{border:0;background:var(--acsoft);color:var(--ac);box-shadow:none}
+.composer-wrap .mic-btn:disabled{opacity:.4}
+.composer-wrap select{height:30px;min-width:0;max-width:170px;padding:0 26px 0 10px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--bg3) var(--chev) no-repeat right 8px center/11px;color:var(--tx1);font-size:12px;font-weight:500;appearance:none;-webkit-appearance:none;cursor:pointer;text-overflow:ellipsis;transition:border-color .14s,color .14s}
+.composer-wrap select:hover:not(:disabled){border-color:var(--line2);color:var(--tx0)}
+.composer-wrap select:disabled{opacity:.55;cursor:not-allowed}
+.composer-wrap .workspace-mode{max-width:160px}
+/* The model picker takes its name's width, up to 260px in both layouts, and is never wider than its place in the row: the name is cut
+   with an ellipsis only where its row has no room left (it shrinks with the row, min-width:0), never drawn over the mic. A cap of
+   32vw cut a longer name below about 800 wide while the row had room for it. */
+.composer-wrap .model-picker-wrap{max-width:260px}
+.composer-wrap .model-picker-button{height:30px;width:auto;min-width:0;max-width:100%;gap:8px;padding:0 9px 0 11px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--bg3);color:var(--tx1);font:500 11px var(--mono);transition:border-color .14s,color .14s}
+.composer-wrap .model-picker-button:hover:not(:disabled){border-color:var(--line2);color:var(--tx0)}
+.composer-wrap .model-picker-button svg{flex:none;color:var(--tx2)}
+.composer-wrap .model-picker-button.multi{border-color:color-mix(in srgb,var(--ac) 35%,transparent);background:var(--acsoft);color:var(--ac)}
+.composer-wrap .model-picker-button.choose{border-color:color-mix(in srgb,var(--ac) 45%,transparent);color:var(--ac)}
+.composer-wrap .model-picker-current{gap:6px}
+.composer-wrap .model-picker-current strong{font:500 11px var(--mono)}
+.composer-wrap .model-picker-current small{max-width:96px;color:var(--tx3);font:10px var(--mono)}
+.composer-wrap .send-btn{width:30px;height:30px;flex:none;margin-left:2px;display:grid;place-items:center;border:0;border-radius:9px;background:linear-gradient(135deg,var(--ac2),var(--ac));color:#fff;box-shadow:0 3px 12px var(--acglow);transition:filter .15s,transform .15s,background .15s}
+.composer-wrap .send-btn svg{width:15px;height:15px}
+.composer-wrap .send-btn:hover:not(:disabled){filter:brightness(1.12)}
+.composer-wrap .send-btn:active:not(:disabled){transform:scale(.94)}
+.composer-wrap .send-btn:disabled{opacity:1;background:var(--bg3);color:var(--tx3);box-shadow:none;cursor:default}
+.composer-wrap .login-btn{height:30px;padding:0 12px;border:1px solid color-mix(in srgb,var(--ac) 40%,var(--line));border-radius:var(--r-s);background:transparent;color:var(--ac);font-size:12px;font-weight:550}
+.composer-wrap .login-btn:hover{background:var(--acsoft)}
+.composer-wrap .composer-status{flex-wrap:wrap;align-items:center;gap:4px 14px;margin:0;padding:6px 14px;border-top:1px solid var(--line);color:var(--tx3);font:400 10.5px/16px var(--mono)}
+.composer-wrap .composer-status>span{min-width:0;overflow-wrap:anywhere}
+.composer-wrap .composer-status>span:first-child{color:var(--tx2)}
+.composer-wrap .composer-status.error,.composer-wrap .composer-status.error>span:first-child{color:var(--err)}
+.composer-wrap .context-meter{display:inline-block;width:74px;height:4px;margin-right:8px;position:relative;top:-1px;vertical-align:middle;border-radius:3px;background:var(--bg4);overflow:hidden}
+.composer-wrap .context-meter i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--ac2),var(--ac));transition:width .5s var(--ease-out)}
+.composer-wrap .context-meter.high i{background:var(--warn)}
+.composer-wrap .context-meter.full i{background:var(--err)}
+.composer-wrap .context-compact-btn{height:20px;margin-left:8px;padding:0 7px;border:1px solid var(--line2);border-radius:6px;background:var(--bg3);color:var(--tx1);font:500 10.5px var(--font)}
+.composer-wrap .context-compact-btn:hover{background:var(--bg4);color:var(--tx0)}
+
+/* Chips above the draft */
+.composer-wrap .context-chip-row{padding:10px 12px 0;gap:6px}
+.composer-wrap .context-chip{--chip:var(--ac);height:24px;max-width:280px;gap:6px;padding:0 3px 0 9px;border:1px solid color-mix(in srgb,var(--chip) 32%,var(--line));border-radius:99px;background:color-mix(in srgb,var(--chip) 10%,transparent);color:color-mix(in srgb,var(--chip) 62%,var(--tx0));font-size:11px}
+.composer-wrap .context-chip.kind-terminal,.composer-wrap .context-chip.kind-pr{--chip:var(--ok)}
+.composer-wrap .context-chip.kind-review{--chip:var(--warn)}
+.composer-wrap .context-chip.kind-browser{--chip:var(--info)}
+.composer-wrap .context-chip strong{font-size:11px;font-weight:600}
+.composer-wrap .context-chip small{min-width:0;color:var(--tx3);font:10px var(--mono)}
+.composer-wrap .context-chip{max-width:min(420px,100%);min-width:0}
+.composer-wrap .context-chip :is(svg,strong,button){flex:none}
+.composer-wrap .context-chip button{width:18px;height:18px;color:var(--tx2)}
+.composer-wrap .context-chip button:hover{background:var(--bg3);color:var(--tx0)}
+/* A file picked from the @ menu while it imports: no remove button yet, and Attaching… with its icon turning as a file that uploads. */
+.composer-wrap .context-chip.attaching{padding-right:9px}
+.composer-wrap .context-chip.attaching small{flex:none;color:var(--tx2);font:10.5px var(--font)}
+.composer-wrap .context-chip.attaching svg{color:var(--ac);animation:tb-spin 1s linear infinite}
+/* An empty shelf takes no room, nor the clicks on the end of the reply above the composer. */
+.composer-wrap .attachment-shelf:empty{display:none}
+/* The shelf stands on the composer's top and its rows go up from there, three and a part of the row above them at most, then it
+   scrolls (the composer shows the newest chip) with the theme's own scrollbar, as the conversation does: hung a row above the composer
+   and wrapping down, a sixth screenshot at 1280 lay over the draft and a third row at 700 over the + and the mode picker. Cut exactly
+   between rows (92px: three 26px rows, their gaps and the 6px under them) and with the platform's thin bar, which turns the theme's
+   off and which macOS shows only while it scrolls, a shelf scrolled to its newest row showed nothing of the chips above it. */
+.composer-wrap .attachment-shelf{top:auto;bottom:calc(100% - 1px);max-height:108px;overflow-y:auto}
+.composer-wrap .attachment-shelf>span{height:26px;gap:6px;padding:0 6px 0 9px;border:1px solid var(--line2);border-radius:var(--r-s);background:var(--bg2);color:var(--tx1);font-size:11px;box-shadow:var(--sh1)}
+.composer-wrap .attachment-shelf>span button{color:var(--tx3)}
+.composer-wrap .attachment-shelf>span button:hover{color:var(--tx0)}
+/* A chip's name gives way before its icon, its remove button and a file's "Uploading…" do, cut with an ellipsis: a bare text node in
+   the chip's row kept its whole width, so a long name pushed the remove button out past the chip's end, out of a click's reach, and
+   was cut with no ellipsis, and focus on the button from the keyboard scrolled the name to its end. */
+.composer-wrap .attachment-shelf>span>bdi{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.composer-wrap .attachment-shelf>span>:is(svg,button){flex:none}
+.composer-wrap .attachment-shelf>span.uploading small{flex:none;color:var(--tx2);font-size:10.5px}
+.composer-wrap .attachment-shelf>span.uploading svg{color:var(--ac);animation:tb-spin 1s linear infinite}
+
+/* Popovers anchored to the composer */
+.composer-wrap :is(.slash-menu,.file-mention-menu,.model-picker-menu){border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:var(--shbig)}
+.composer-wrap .slash-menu{padding:6px;width:min(360px,calc(100vw - 48px))}
+.composer-wrap .slash-menu button{min-height:34px;grid-template-columns:104px minmax(0,1fr);gap:8px;padding:5px 9px;border-radius:8px;background:transparent;color:var(--tx1)}
+.composer-wrap .slash-menu button:hover{background:var(--bg3)}
+.composer-wrap .slash-menu button.active{background:var(--acsoft);color:var(--tx0)}
+.composer-wrap .slash-menu strong{color:var(--ac);font:500 11.5px var(--mono)}
+.composer-wrap .slash-menu span{color:var(--tx2);font-size:11.5px}
+.composer-wrap .file-mention-menu{padding:6px}
+.composer-wrap .file-mention-menu button{border-radius:8px;background:transparent;color:var(--tx1)}
+.composer-wrap .file-mention-menu button:is(:hover,.active){background:var(--acsoft);color:var(--tx0)}
+.composer-wrap .file-mention-menu strong{font-size:12px}
+.composer-wrap .file-mention-menu small{color:var(--tx3);font:10.5px var(--mono)}
+.composer-wrap .model-picker-menu{bottom:38px;width:min(330px,72vw);max-height:340px;padding:6px}
+.composer-wrap .model-picker-menu>button,.composer-wrap .model-runtime-profiles>button{min-height:34px;padding:6px 9px;border-radius:8px;background:transparent;color:var(--tx1)}
+.composer-wrap .model-picker-menu>button:hover,.composer-wrap .model-runtime-profiles>button:hover{background:var(--bg3);color:var(--tx0)}
+.composer-wrap .model-picker-menu>button.selected,.composer-wrap .model-runtime-profiles>button.selected{background:var(--acsoft);color:var(--tx0)}
+.composer-wrap .model-picker-menu>button.selected svg,.composer-wrap .model-runtime-profiles>button.selected svg{color:var(--ac)}
+.composer-wrap :is(.model-picker-menu,.model-runtime-profiles) strong{font:500 11.5px var(--mono)}
+.composer-wrap :is(.model-picker-menu,.model-runtime-profiles) small{max-width:130px;color:var(--tx3);font-size:10.5px}
+.composer-wrap .model-picker-menu>p{margin:6px 8px 4px;color:var(--tx3);font-size:11px;line-height:1.45}
+.composer-wrap .model-runtime-profiles{border-bottom-color:var(--line)}
+.composer-wrap .model-runtime-profiles>p{color:var(--tx3);font-size:10.5px}
+/* The search field sticks flush with the menu's 6px padding, so no scrolled row shows above it. */
+.composer-wrap .model-picker-search{top:-6px;margin-top:-6px;background:var(--panel);border-bottom-color:var(--line)}
+.composer-wrap .model-picker-search input{color:var(--tx0);font-size:12px}
+
+/* ============ Narrow widths ============ */
+@media (max-width:900px){
+  .sidebar .sidebar-brand em{display:none}
+  .chat-workspace .workspace-header{padding-left:10px}
+  .chat-workspace .composer-wrap{width:calc(100% - 28px)}
+  .chat-workspace .conversation-scroll{padding-inline:18px}
+}
+
+/* ============ Legacy !important neutralizer ============
+   styles.css and workspace-overlay.css force hard-coded colors with !important for built-in Light mode
+   (html[data-mode="light"]:not([data-custom-theme="true"]) …) and custom themes (html[data-custom-theme="true"] …).
+   The rules below re-assert the token values above for exactly those modes. Remove this section together with
+   those legacy rules during the cleanup step. */
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .main-frame{background:var(--bg0)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .main-frame>.window-bar{background:var(--bg0)!important;border-color:var(--line)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .workspace-header{background:var(--bgtop)!important;border-color:var(--line)!important}
+/* The header's editor picker: the legacy field rules repaint it and reset the select's background shorthand, dropping its chevron. */
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .open-in-picker{background:var(--bg2)!important;border-color:var(--line)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .open-in-picker>select{background:var(--bg2) var(--chev) right 8px center/10px no-repeat!important;border-color:var(--line)!important;color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .open-in-picker>select:hover{background-color:var(--bg3)!important;color:var(--tx0)!important}
+
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-provider{background:var(--bg2)!important;border-color:var(--line)!important;color:var(--tx0)!important;box-shadow:none!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-provider:hover{background:var(--bg3)!important;border-color:var(--line2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-provider strong{color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-provider>div>span{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-brand{background:transparent!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .search-box{background:var(--bg2)!important;border-color:var(--line)!important;color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .search-box:hover{border-color:var(--line2)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .search-box:focus-within{border-color:color-mix(in srgb,var(--ac) 45%,var(--line2))!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .search-box input{background:transparent!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .search-box input::placeholder{color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .bulk-bar{background:var(--bg2)!important;border-color:var(--line)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-row{background:transparent!important;color:var(--tx1)!important;box-shadow:none!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-row:hover{background:var(--bg2)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-row.active{background:var(--acsoft)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-main strong{color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-row.active .thread-main strong{color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-main .thread-title-text{color:inherit!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-main>div>span{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-sections h4{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-utility{background:transparent!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-utility:hover{background:var(--bg2)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .sidebar-utility.active{background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-menu-popover{background:var(--panel)!important;border-color:var(--line2)!important;color:var(--tx1)!important;box-shadow:var(--shbig)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-menu-popover button{background:transparent!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-menu-popover button:hover:not(:disabled){background:var(--bg3)!important;color:var(--tx0)!important}
+/* A move that can do nothing reads and hovers as unavailable in every theme, as it does in built-in dark. */
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-menu-popover button:disabled{background:transparent!important;color:var(--tx3)!important;cursor:default}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .sidebar .thread-menu-popover button.danger{color:var(--err)!important}
+
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .workspace-breadcrumb{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header :is(.project-crumb,.thread-title-button){background:transparent!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header :is(.project-crumb,.thread-title-button):hover{background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .thread-title-button strong{color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .thread-title-button:disabled:hover{background:transparent!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control{background:transparent!important;color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control:hover{background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control.active{background:var(--acsoft)!important;color:var(--ac)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control.branch-control{background:var(--bg2)!important;border-color:var(--line)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control.branch-control:hover{background:var(--bg2)!important;border-color:var(--line2)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control:is(.stop-control,.script-stop-control){color:var(--err)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control:is(.stop-control,.script-stop-control):hover{background:var(--errt)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control:is(:disabled,:disabled:hover){background:transparent!important;color:var(--tx3)!important;cursor:default}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .workspace-header .header-control.stop-control.stopping{background:transparent!important;color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .thread-find-bar{background:var(--panel)!important;border-color:var(--line2)!important;box-shadow:var(--shadow)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .thread-find-bar input{background:transparent!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .thread-find-snippet{background:var(--bg2)!important;color:var(--tx2)!important}
+
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .user-bubble{background:linear-gradient(135deg,var(--bub1),var(--bub2))!important;border-color:color-mix(in srgb,var(--ac) 22%,var(--line2))!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .user-bubble p{color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column :is(.assistant-message-text,.assistant-answer){color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .timeline .tool-event summary{color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .timeline .tool-event summary:hover{background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .timeline .tool-event-body{background:transparent!important;border-color:transparent!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .timeline .tool-event-body pre{background:var(--bg0)!important;border-color:var(--line)!important;color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .history-page-control button{background:var(--bg2)!important;border-color:var(--line2)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .history-page-control button:hover:not(:disabled){background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .welcome h1{color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .welcome p{color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .welcome-mark{background:none!important;border-color:transparent!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .welcome .suggestions button{background:var(--bg2)!important;border-color:var(--line2)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .conversation-column .welcome .suggestions button:hover{background:var(--acsoft)!important;border-color:color-mix(in srgb,var(--ac) 55%,var(--line2))!important;color:var(--ac)!important}
+
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .composer-wrap{background:var(--bg1) linear-gradient(180deg,var(--bg2),var(--bg1))!important;border-color:var(--line2)!important;box-shadow:var(--shadow)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .chat-workspace .composer-wrap:focus-within{border-color:color-mix(in srgb,var(--ac) 45%,var(--line2))!important;box-shadow:0 0 0 3.5px var(--acsoft),var(--shadow)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap textarea{background:transparent!important;border-color:transparent!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap textarea::placeholder{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap select{background:var(--bg3) var(--chev) no-repeat right 8px center/11px!important;border-color:var(--line)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap select:hover:not(:disabled){border-color:var(--line2)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .model-picker-button{background:var(--bg3)!important;border-color:var(--line)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .model-picker-button:hover:not(:disabled){border-color:var(--line2)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .model-picker-button.multi{background:var(--acsoft)!important;color:var(--ac)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .model-picker-button.choose{border-color:color-mix(in srgb,var(--ac) 45%,transparent)!important;color:var(--ac)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.circle-btn,.mic-btn){color:var(--tx2)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.circle-btn,.mic-btn):hover:not(:disabled){background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .mic-btn.active{background:var(--acsoft)!important;color:var(--ac)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .send-btn{background:linear-gradient(135deg,var(--ac2),var(--ac))!important;border-color:transparent!important;color:#fff!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .send-btn:disabled{background:var(--bg3)!important;color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .composer-status{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .composer-status.error{color:var(--err)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .context-chip{background:color-mix(in srgb,var(--chip) 10%,transparent)!important;border-color:color-mix(in srgb,var(--chip) 32%,var(--line))!important;color:color-mix(in srgb,var(--chip) 62%,var(--tx0))!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .attachment-shelf>span{background:var(--bg2)!important;border-color:var(--line2)!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.slash-menu,.file-mention-menu,.model-picker-menu){background:var(--panel)!important;border-color:var(--line2)!important;color:var(--tx1)!important;box-shadow:var(--shbig)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.slash-menu button,.file-mention-menu button,.model-picker-menu>button,.model-runtime-profiles>button){background:transparent!important;border-color:transparent!important;color:var(--tx1)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.slash-menu button,.model-picker-menu>button,.model-runtime-profiles>button):hover{background:var(--bg3)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .file-mention-menu button:is(:hover,.active),:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap :is(.model-picker-menu>button,.model-runtime-profiles>button).selected{background:var(--acsoft)!important;color:var(--tx0)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .file-mention-menu small{color:var(--tx3)!important}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .composer-wrap .slash-menu button.active{background:var(--acsoft)!important;color:var(--tx0)!important}
+
+/* ============ Polish pass (review findings) ============ */
+/* Page topbar: the pages keep the shell's 52px topbar (crumb, inspector, theme and palette), so the sidebar can always be
+   reopened and the chrome does not jump between Home and a page. */
+.main-frame>.page-topbar{position:absolute;top:32px;left:0;right:0;z-index:5;height:var(--top);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px 0 14px;border-bottom:1px solid var(--line);background:var(--bgtop);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.app-shell.hosted-shell .main-frame>.page-topbar{top:0}
+.main-frame>.page-topbar~.secondary-page{top:calc(32px + var(--top))}
+.app-shell.hosted-shell .main-frame>.page-topbar~.secondary-page{top:var(--top)}
+.page-topbar .workspace-breadcrumb{display:flex;align-items:center;min-width:0;flex:1 1 auto}
+.page-topbar .workspace-header-actions{display:flex;align-items:center;flex:none}
+.page-topbar .workspace-breadcrumb>span.page-crumb{flex:0 1 auto;display:inline-flex;align-items:center;gap:7px;min-width:0;height:30px;padding:0 9px;color:var(--tx2);font-size:12.5px;font-weight:550;white-space:nowrap}
+.page-topbar .page-crumb>svg{flex:none;color:var(--tx2)}
+.page-topbar .page-crumb>svg+strong+svg{color:var(--tx3)}
+.page-topbar .page-crumb strong{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--tx0)}
+.page-topbar .page-crumb em{min-width:0;overflow:hidden;text-overflow:ellipsis;font-style:normal;font-weight:550;color:var(--tx1)}
+/* A link (it navigates back to Settings), styled like the crumb buttons. */
+.page-topbar .page-crumb-back{flex:none;display:inline-flex;align-items:center;padding:0 9px 0 6px;text-decoration:none}
+.page-topbar .page-crumb-back svg{color:var(--tx3)}
+.page-topbar .page-crumb-back+span{flex:none;padding:0 3px;color:var(--tx3);font-size:12px}
+:is(html[data-mode="light"]:not([data-custom-theme="true"]),html[data-custom-theme="true"]) .main-frame>.page-topbar{background:var(--bgtop)!important;border-color:var(--line)!important}
+
+/* Thread title before a thread exists: plain text, not a button that does nothing. */
+/* (The breadcrumb separator rule targets every direct span: the static title keeps the title button metrics instead.) */
+.workspace-header .workspace-breadcrumb>span.thread-title-button.is-static{flex:0 1 auto;min-width:0;display:inline-flex;align-items:center;padding:0 9px;color:var(--tx1);font-size:12.5px;cursor:default}
+.workspace-header .thread-title-button.is-static:hover{background:transparent;color:var(--tx1)}
+
+/* Topbar in narrow main columns (a mid-size window with the inspector open): the thread title is the last thing to give way.
+   The project crumb shrinks first, to a few letters (its flex-shrink, a million times the title's, takes the whole squeeze before
+   the title takes any: at a thousand times the title took a few hundredths of a pixel of it, and its ellipsis showed in place of
+   its last letters beside every shortened crumb); then header-fit.js measures the title and, while it is cut, sets data-fit: 1
+   drops the labels of the labelled actions, 2 folds several linked pull requests into the first one's chip ("#482 +1", as the
+   sidebar row reads) and lets the project crumb shrink to its first letter and the ellipsis, 3 also drops the project name, 4
+   also moves the theme and palette buttons into the More actions menu, which shows from there on, 5 leaves the pull request chip
+   its icon and how many are linked, and 6 folds actions into the menu one at a time from the end of the row (each one
+   header-fit.js marks data-folded; Stop and the inspector toggle never fold). The title shows whole wherever
+   a level gives it that, at the first that does, however many actions it folds, so a wider main column never cuts a title a
+   narrower one shows whole; where none does, the fit stops at the first level that leaves it a readable width, folding actions
+   only as far as that needs. From 3 on the project name comes back as at 2 (data-crumb="short") wherever
+   the title keeps what the level gave it beside it, all of itself or its readable width; at 3 that name would be 2 again, so a
+   header whose title fits at 3 takes 4 with the name, the theme and palette buttons stepping aside into More actions for it, and 3
+   shows only where 4 has no room for the name. Whole is the title's text no wider than its box, to the fraction of a pixel, as its
+   ellipsis shows. Each control keeps its tooltip and accessible name. */
+.workspace-header .workspace-breadcrumb{flex:1 1 auto}
+.workspace-header .project-crumb:not(.sidebar-reopen){flex:0 1000000 auto;min-width:calc(39px + 4ch)}
+.workspace-header .thread-title-button{flex:0 1 auto;min-width:0}
+.workspace-header .thread-title-button strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-header:is([data-fit="1"],[data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .header-control:is(.branch-control,.review-control,.script-control,.stop-control){width:30px;padding:0;justify-content:center}
+.workspace-header:is([data-fit="1"],[data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .header-control:is(.branch-control,.review-control,.script-control,.stop-control)>span{display:none}
+/* The row's own picker; the copy in the More actions menu keeps its label. The icon-only select hides its editor's name over
+   the light theme's !important select color, which would otherwise show the name's first letters beside the chevron. */
+.workspace-header:is([data-fit="1"],[data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .workspace-header-actions>.open-in-wrap .open-in-picker>button{width:28px;padding:0;justify-content:center}
+.workspace-header:is([data-fit="1"],[data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .workspace-header-actions>.open-in-wrap .open-in-picker>button>span{display:none}
+.workspace-header:is([data-fit="1"],[data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .workspace-header-actions>.open-in-wrap .open-in-picker>select{width:24px;min-width:0;padding:0;color:transparent!important}
+.workspace-header:is([data-fit="2"],[data-crumb="short"]) .project-crumb:not(.sidebar-reopen){min-width:calc(39px + 3ch)}
+.workspace-header:is([data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]):not([data-crumb="short"]) .project-crumb:not(.sidebar-reopen){width:30px;min-width:30px;padding:0;justify-content:center}
+.workspace-header:is([data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]):not([data-crumb="short"]) .project-crumb:not(.sidebar-reopen)>span{display:none}
+.workspace-header:is([data-fit="4"],[data-fit="5"],[data-fit="6"]) .workspace-header-actions>:is(.theme-toggle,.palette-control){display:none}
+.workspace-header .header-pr>:is(.header-pr-more,.header-pr-count){display:none}
+.workspace-header:is([data-fit="2"],[data-fit="3"],[data-fit="4"],[data-fit="5"],[data-fit="6"]) .header-pr+.header-pr{display:none}
+.workspace-header:is([data-fit="2"],[data-fit="3"],[data-fit="4"]) .header-pr>.header-pr-more{display:inline}
+.workspace-header:is([data-fit="5"],[data-fit="6"]) .header-pr{padding:0 7px}
+.workspace-header:is([data-fit="5"],[data-fit="6"]) .header-pr>.header-pr-number{display:none}
+.workspace-header:is([data-fit="5"],[data-fit="6"]) .header-pr>.header-pr-count{display:inline}
+.workspace-header .header-overflow{position:relative;display:none;flex:none}
+.workspace-header:is([data-fit="4"],[data-fit="5"],[data-fit="6"]) .header-overflow{display:flex}
+/* A folded action leaves the row for the menu; the menu lists only the folded ones (and the theme and palette buttons). */
+.workspace-header .workspace-header-actions>[data-folded]{display:none}
+.workspace-header .header-overflow-menu>[data-fold]:not([data-folded]){display:none}
+/* The menu opens under its button, toward the conversation, so it stays inside the main column. While it is open the header
+   rises above the composer, the terminal drawer and the find bar it would otherwise open under. */
+.chat-workspace .workspace-header:has(.header-overflow-menu){z-index:80}
+.workspace-header .header-overflow-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:30;display:grid;gap:1px;width:max-content;min-width:204px;max-width:min(300px,calc(100vw - 32px));padding:5px;border:1px solid var(--line2);border-radius:var(--r-m);background:var(--panel);box-shadow:var(--shbig);animation:tb-pop .14s var(--ease-out)}
+.workspace-header .header-overflow-menu>button{height:30px;min-width:0;display:flex;align-items:center;gap:9px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--tx1);font-size:12px;font-weight:500;text-align:left;transition:background .14s,color .14s}
+.workspace-header .header-overflow-menu>button>svg{flex:none;color:var(--tx2)}
+.workspace-header .header-overflow-menu>button>span{min-width:0;flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workspace-header .header-overflow-menu>button>small{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx3);font:500 10.5px var(--mono);text-align:right}
+.workspace-header .header-overflow-menu>button>.tb-kbd{margin-left:auto}
+.workspace-header .header-overflow-menu>button:hover{background:var(--bg3);color:var(--tx0)}
+.workspace-header .header-overflow-menu>button:hover>svg{color:var(--tx1)}
+.workspace-header .header-overflow-menu>button[aria-pressed="true"]{color:var(--tx0)}
+.workspace-header .header-overflow-menu>button[aria-pressed="true"]>svg{color:var(--ac)}
+.workspace-header .header-overflow-menu>button:is(:disabled,:disabled:hover){background:transparent;color:var(--tx3);cursor:default}
+.workspace-header .header-overflow-menu>button:disabled>svg{color:var(--tx3)}
+.workspace-header .header-overflow-menu>.header-overflow-node{display:flex;padding:3px 5px}
+.workspace-header .header-overflow-menu>.header-overflow-node:empty{display:none}
+.workspace-header .header-overflow-menu>.header-overflow-node>.open-in-wrap,.workspace-header .header-overflow-menu .open-in-picker{flex:1 1 auto}
+.workspace-header .header-overflow-menu .open-in-picker>select{min-width:0;max-width:none;flex:1 1 auto}
+
+/* Composer footer: "Context" with a meter that is always drawn (dashed while the window size is unknown) and the token
+   value beside it; the hints keep their own end of the row with the Enter key as a key cap. */
+.composer-wrap .composer-status{justify-content:space-between}
+.composer-wrap .composer-status .composer-context{display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px 7px}
+.composer-wrap .composer-status .composer-context .context-meter{margin-right:0;top:0}
+.composer-wrap .context-meter.unknown{background:repeating-linear-gradient(90deg,var(--bg4) 0 5px,transparent 5px 8px)}
+.composer-wrap .context-meter.unknown i{display:none}
+.composer-wrap .composer-status .composer-hints{display:inline-flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:2px 7px;margin-left:auto;color:var(--tx3)}
+.composer-wrap .composer-status .composer-hints .tb-kbd{padding:0 5px;font-size:9.5px;line-height:15px;color:var(--tx2)}
+/* Why the last send or open did not go through (the composer's alert): a long harness error scrolls within four lines, so the
+   draft, Send and the conversation above stay in view. */
+.composer-wrap .composer-status .composer-alert{display:block;max-height:64px;overflow-y:auto;overscroll-behavior:contain}
+/* Each select fits its current value (Chromium/Electron), so the control row is not padded with empty pill space. */
+@supports (field-sizing:content){
+  .composer-wrap .composer-left>select{field-sizing:content}
+  /* ...never narrower than the compact layout keeps them (the permission pill 100px, the workspace pill 125px). */
+  .composer-wrap .composer-left>select.permission-picker{min-width:100px}
+  .composer-wrap .composer-left>select.workspace-mode{min-width:125px}
+}
+
+/* Hero with the terminal open: the scroller drops its conversation padding and the hero fills the space left above the
+   composer, centred when it fits and aligned to the top when it does not. In short windows the mark, then the subtitle,
+   give way so the title and the starters stay in view instead of the column scrolling them under the topbar. */
+.main-frame.terminal-open .conversation-column .welcome{justify-content:safe center}
+.main-frame.terminal-open .chat-workspace .conversation-scroll:has(>.conversation-column>.welcome){padding-top:12px;padding-bottom:12px}
+.main-frame.terminal-open .chat-workspace .conversation-column>.welcome{min-height:calc(100vh - 36px - var(--top) - var(--terminal-height,330px) - var(--composer-reach,116px))}
+.app-shell.desktop-shell .main-frame.terminal-open .chat-workspace .conversation-column>.welcome{min-height:calc(100vh - 68px - var(--top) - var(--terminal-height,330px) - var(--composer-reach,116px))}
+@media (max-height:799px){
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome>.welcome-mark{display:none}
+}
+@media (max-height:720px){
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome{padding-block:4px}
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome>p{display:none}
+}
+@media (max-height:640px){
+  .main-frame.terminal-open .chat-workspace .conversation-scroll:has(>.conversation-column>.welcome){padding-top:6px;padding-bottom:6px}
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome{min-height:calc(100vh - 24px - var(--top) - var(--terminal-height,330px) - var(--composer-reach,116px))}
+  .app-shell.desktop-shell .main-frame.terminal-open .chat-workspace .conversation-column>.welcome{min-height:calc(100vh - 56px - var(--top) - var(--terminal-height,330px) - var(--composer-reach,116px))}
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome>h1{font-size:18px}
+  .main-frame.terminal-open .chat-workspace .conversation-column>.welcome>.suggestions{margin-top:10px}
+}
+
+/* Docked inspector wider than 900px: the main column may shrink, and App clamps --right-panel-width to the window, so the
+   panel never runs past the right edge (960-1140px windows). Its test is the overlay drawer's below, negated, so every width,
+   fractional ones too (a zoomed window or a scaled display), is one or the other: 900.8px matched neither (min-width:901px) nor
+   (max-width:900px), and Chrome takes 900.00006px (a 1575px window at 175%) for both (width > 900px) and (max-width:900px). */
+@media not (max-width:900px){
+  .workspace-shell.right-open:not(.right-maximized){grid-template-columns:minmax(0,1fr) var(--right-panel-width,440px)}
+}
+
+/* Inspector overlay drawer at 900px and below: a dimmed scrim behind it that closes it on click. */
+.workspace-shell>.inspector-scrim{display:none}
+@keyframes tb-scrim-in{from{opacity:0}}
+@media (max-width:900px){
+  .workspace-shell>.inspector-scrim{display:block;position:absolute;inset:32px 0 0;z-index:29;background:color-mix(in srgb,var(--ovl) 60%,transparent);animation:tb-scrim-in .16s ease-out;cursor:default}
+  .app-shell.hosted-shell .workspace-shell>.inspector-scrim{inset:0}
+}
+
+/* Secondary destinations as one row of icon buttons in short windows and narrow sidebars: their names stay in aria-label and
+   the tooltip, and the thread list gets the height back. The icons share the row whatever their number, so Codex's six fit the
+   196px sidebar of a narrow window instead of leaving Environments alone on a second row. */
+@media (max-height:720px){
+  .sidebar .sidebar-nav-secondary{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;padding-top:4px}
+  .sidebar .sidebar-nav-secondary .sidebar-utility{min-height:30px;padding:0;justify-content:center}
+  .sidebar .sidebar-nav-secondary .sidebar-utility>span{display:none}
+  .sidebar .sidebar-nav-secondary .sidebar-utility.panel-open::after{position:absolute;top:4px;right:calc(50% - 13px);margin:0}
+}
+@container tbsidebar (max-width:236px){
+  .sidebar .sidebar-nav-secondary{grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;padding-top:4px}
+  .sidebar .sidebar-nav-secondary .sidebar-utility{min-height:30px;padding:0;justify-content:center}
+  .sidebar .sidebar-nav-secondary .sidebar-utility>span{display:none}
+  .sidebar .sidebar-nav-secondary .sidebar-utility.panel-open::after{position:absolute;top:4px;right:calc(50% - 13px);margin:0}
+}
+
+/* The latest turn reads top-down: the user's message, the activity card, then the reply with its outcome pill. The card stays
+   a sibling of the history in the DOM (live reasoning rows stay out of .conversation-history); only the visual order changes,
+   and only the card's own turn's rows move: those after the .latest-turn-start marker the conversation places (a turn that
+   started without a user message, as a goal continuing, keeps the previous turn's reply above its card). The outcome row of
+   the card's turn moves with them, also when it follows the turn's message directly and no marker is placed. What comes after
+   the card's block reads after them, the card of the rows that came once its turn had ended (.agent-block-after) first. A user's
+   message after the marker is one still waiting to be sent while a turn that comes before it runs (conversation-order.js).
+   App names the card's block in the column's class (with-agent-block), never a :has() on the column: Chrome restyles everything
+   inside an element a :has() rule tests whenever something under it may change the rule's match, and a streaming reply adds
+   elements to the block as it grows, so each delta restyled the whole conversation (110 elements a delta, up to 459 at once, on a
+   40-turn thread). */
+.chat-workspace .conversation-column.with-agent-block{display:flex;flex-direction:column}
+.chat-workspace .conversation-column.with-agent-block>.conversation-history{display:contents}
+.chat-workspace .conversation-column.with-agent-block>.agent-block{order:2}
+.chat-workspace .conversation-column.with-agent-block>.conversation-history>.latest-turn-start~:is(.history-assistant,.reasoning-row,.turn-card,.user-row){order:3}
+.chat-workspace .conversation-column.with-agent-block>.conversation-history>.turn-outcome-row.latest-turn-end{order:3}
+.chat-workspace .conversation-column.with-agent-block>.agent-block~*{order:4}
+/* A part loaded later that could not be shown (LazySlot in App.jsx) says so in its place; a dialog's, at the foot of the window. */
+.lazy-slot-error{display:flex;align-items:center;gap:10px;margin:8px 0;padding:9px 10px 9px 12px;border:1px solid var(--errb);border-radius:var(--r-m);background:color-mix(in srgb,var(--err) 9%,var(--panel));color:var(--tx0);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.lazy-slot-error>span{flex:1;min-width:0}
+.lazy-slot-error>button{flex:none}
+.app-shell>.lazy-slot-error{position:fixed;z-index:170;left:50%;bottom:24px;margin:0;translate:-50% 0;width:max-content;max-width:min(560px,calc(100vw - 32px));box-shadow:var(--shadow)}
+/* The Cite button's, where the button would come: above the text selected in a reply, as Cite is (App.jsx CiteUnavailable). */
+.lazy-slot-error.cite-unavailable{position:fixed;z-index:120;transform:translate(-50%,-100%);width:max-content;margin:0;padding:2px 2px 2px 11px;box-shadow:var(--shadow);animation:tb-cite-in .14s var(--ease-out)}
