@@ -24,8 +24,9 @@ function gh(args,{allowFailure=false}={}){
 const exists=gh(["release","view",tag,"--repo",repository,"--json","id"],{allowFailure:true}).status===0;
 if(!exists)gh(["release","create",tag,"--repo",repository,"--target",commit,"--title","Trebell Code","--notes-file","docs/releases/desktop.md","--draft"]);
 else{
+  gh(["release","edit",tag,"--repo",repository,"--draft=true"]);
   gh(["api",`repos/${repository}/git/refs/tags/${tag}`,"--method","PATCH","-f",`sha=${commit}`,"-F","force=true"]);
 }
 gh(["release","upload",tag,"--repo",repository,"--clobber",...files.map(file=>join(directory,file)),join(directory,"SHA256SUMS")]);
-gh(["release","edit",tag,"--repo",repository,"--title","Trebell Code","--notes-file","docs/releases/desktop.md","--draft=false","--latest"]);
+gh(["release","edit",tag,"--repo",repository,"--target",commit,"--title","Trebell Code","--notes-file","docs/releases/desktop.md","--draft=false","--latest"]);
 console.log(`Published https://github.com/${repository}/releases/tag/${tag}`);

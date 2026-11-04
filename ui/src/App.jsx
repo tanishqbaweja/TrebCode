@@ -1282,7 +1282,7 @@ export default function App(){
   const [agentBlockShown,setAgentBlockShown]=useState(false);
   // Whether a composer menu that opens upward shows (Composer says so), for the workspace shell's class with-composer-menu.
   const [composerMenuShown,setComposerMenuShown]=useState(false);
-  const [resolvedMode,setResolvedMode]=useState(()=>typeof document!=="undefined"&&document.documentElement.dataset.mode==="light"?"light":"dark");
+  const [resolvedMode,setResolvedMode]=useState(()=>typeof document!=="undefined"&&document.documentElement.dataset.mode==="dark"?"dark":"light");
   if(!assistantStreamBufferRef.current)assistantStreamBufferRef.current=createTextFrameBuffer({
     schedule:callback=>requestAnimationFrame(callback),
     cancel:handle=>cancelAnimationFrame(handle),
@@ -1395,7 +1395,7 @@ export default function App(){
   // turn, and the header's Stop of the thread shown is its compaction's own while it runs (stop()).
   const [,setCompactionStops]=useState(0);
   const notificationHandlerRef=useRef(null); const serverRequestHandlerRef=useRef(null);
-  const [settings,setSettings]=useState(()=>({followUpMode:"queue",defaultPermissionMode:"supervised",appearance:"dark",appearanceMode:"dark",panelAnimationMs:0,customThemes:[],keyboardShortcuts:{},agentRuntime:"codex",modelProvider:DEFAULT_MODEL_PROVIDER,...cachedAppearanceSettings()}));
+  const [settings,setSettings]=useState(()=>({followUpMode:"queue",defaultPermissionMode:"supervised",appearance:"dark",appearanceMode:"light",panelAnimationMs:0,customThemes:[],keyboardShortcuts:{},agentRuntime:"codex",modelProvider:DEFAULT_MODEL_PROVIDER,...cachedAppearanceSettings()}));
   const [environmentThemeCatalog,setEnvironmentThemeCatalog]=useState({environmentKey:"local",environmentName:"Local machine",directory:"",themes:[]});
   const [sidebarOpen,setSidebarOpen]=useState(()=>!sidebarAutoCollapses(typeof window!=="undefined"?window.innerWidth:1600));
   const [layoutPrefs,setLayoutPrefs]=useState(()=>{
@@ -1945,7 +1945,7 @@ export default function App(){
   useEffect(()=>{
     const root=document.documentElement;const media=window.matchMedia?.("(prefers-color-scheme: dark)");
     const apply=()=>{
-      const requested=["system","light","dark"].includes(settings.appearanceMode)?settings.appearanceMode:"system";
+      const requested=["system","light","dark"].includes(settings.appearanceMode)?settings.appearanceMode:"light";
       const resolved=requested==="system"?(media?.matches===false?"light":"dark"):requested;
       const custom=environmentThemes.find(theme=>theme.publishedId===selectedEnvironmentThemeId)||(settings.customThemes||[]).find(theme=>theme.id===settings.appearance);
       const theme=custom?.id||settings.appearance||"dark";
@@ -5083,7 +5083,7 @@ export default function App(){
     const next=await api("/api/settings",{method:"POST",body:patch});settingsSaved(Object.keys(patch));setSettings(prev=>({...prev,...next}));return next;
   }
   async function cycleTheme(){const themes=["dark","midnight","black",...(settings.customThemes||[]).map(theme=>theme.id)];const next=themes[(themes.indexOf(settings.appearance||"dark")+1)%themes.length];await saveAppSettings({appearance:next})}
-  async function cycleAppearance(){const modes=["system","light","dark"];const next=modes[(modes.indexOf(settings.appearanceMode||"system")+1)%modes.length];await saveAppSettings({appearanceMode:next})}
+  async function cycleAppearance(){const modes=["system","light","dark"];const next=modes[(modes.indexOf(settings.appearanceMode||"light")+1)%modes.length];await saveAppSettings({appearanceMode:next})}
 
   // While a thread other than the open one opens, the sidebar row and the header name it at once (the composer waits) and, once it
   // takes long, its opening state covers the conversation and the composer drops the open thread's own controls and context; a quick

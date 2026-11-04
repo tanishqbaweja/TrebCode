@@ -800,7 +800,7 @@ async function openWindow(){
     frame:false,
     show:false,
     icon:appIcon(),
-    backgroundColor:"#080a11",
+    backgroundColor:"#eef1f6",
     autoHideMenuBar:true,
     webPreferences:{
       preload:join(import.meta.dirname,"preload.cjs"),

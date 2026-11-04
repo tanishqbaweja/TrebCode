@@ -13,6 +13,8 @@ The application, release title, and download names do not display a product rele
 
 ### Included fixes
 
+- Fresh desktop installations and source runs default to light mode from startup. Saved appearance choices continue to apply.
+- The README includes both ZIP-download and Git-clone setup instructions.
 - Windows runtime launchers work when their paths contain spaces.
 - Context usage displays the latest prompt input rather than cumulative billed usage.
 - Markdown file previews render tables with safe inline formatting.

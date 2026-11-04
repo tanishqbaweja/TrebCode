@@ -24,7 +24,7 @@ Git is recommended for repository features. Development tools used by a project 
 
 ## Setup guide
 
-After installing the release build:
+After installing the release build or starting the app from source:
 
 1. Launch Trebell Code.
 2. Open an existing project folder, or choose an empty folder for a new project.
@@ -32,6 +32,8 @@ After installing the release build:
 4. Add your provider API key, then select an available model in the composer. You need your own provider account and API access.
 5. Describe the work, choose the permission mode, and send the task.
 6. Review changes in Files, Diff, and Git; use the terminal and Browser to run the project's commands and verify the result.
+
+Light mode is the default for new profiles. Change it in **Settings → Appearance**.
 
 Trebell Native supports OpenAI, Anthropic, Google Gemini, xAI, the Meta Model API, and configured compatible providers. Each provider uses your own account and key. An environment variable such as `OPENAI_API_KEY` or `META_API_KEY` can be used instead of a saved key. Model availability depends on that provider and account.
 
@@ -52,14 +54,26 @@ Some desktop integrations are platform-specific. Computer-use capabilities curre
 
 ## Run from source
 
-Requirements: Node.js 22.12 or newer, npm, and Git. Linux builds of the native terminal dependency also need Python, make, and a C++ compiler.
+Requirements: Node.js 22.12 or newer and npm. Git is needed for cloning and repository features. Linux builds of the native terminal dependency also need Python, make, and a C++ compiler.
+
+Download the repository using either method:
+
+- **ZIP download:** on the [repository page](https://github.com/tanishqbaweja/TrebCode), select **Code → Download ZIP**. Extract the archive, then open a terminal in the extracted folder containing `package.json`.
+- **Git clone:** run these commands:
 
 ```bash
 git clone https://github.com/tanishqbaweja/TrebCode.git
 cd TrebCode
+```
+
+From the project folder, install the dependencies and start the desktop app:
+
+```bash
 npm ci
 npm run desktop
 ```
+
+The source app also starts in light mode for a new profile. Follow the [setup guide](#setup-guide) to open a project and configure a provider.
 
 To run the browser-hosted GUI instead:
 

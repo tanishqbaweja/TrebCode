@@ -35,7 +35,7 @@ const DEFAULT_STATE = Object.freeze({
     worktreeCleanup: {mode:"off"},
     storageCleanup: {attachmentsAfterDays:null,terminalHistoryAfterDays:null},
     appearance: "dark",
-    appearanceMode: "dark",
+    appearanceMode: "light",
     panelAnimationMs: 0,
     customThemes: [],
     environmentThemeSelections: {},
