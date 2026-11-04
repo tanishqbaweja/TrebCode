@@ -63,7 +63,7 @@ jobs:
       - name: Install dependencies on the target platform
         run: npm ci --no-audit --no-fund
       - name: Check desktop resources and packaging configuration
-        run: node --test tests/branding.test.mjs tests/desktop-packaging.test.mjs
+        run: node --test tests/branding.test.mjs tests/desktop-packaging.test.mjs tests/native-runtime-permissions.test.mjs
       - name: Build application and installers
         run: npm run prepare:icon && npm run ui:build && npx --no-install electron-builder ${{ matrix.arguments }} --publish never
       - name: Smoke-test the actual packaged application

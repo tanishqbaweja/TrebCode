@@ -19,6 +19,7 @@
     "trebell-code": "./bin/trebell.mjs"
   },
   "scripts": {
+    "postinstall": "node scripts/prepare-native-runtime.mjs",
     "test": "node --import tsx --test --test-concurrency=2 tests/*.test.mjs",
     "test:fast": "node --import tsx --test --test-concurrency=1 --test-isolation=none tests/*.test.mjs",
     "test:budgets": "node --test tests/bundle-budgets.test.mjs",
@@ -94,6 +95,7 @@
     "productName": "Trebell Code",
     "artifactName": "Trebell-Code-Setup.${ext}",
     "asar": true,
+    "beforePack": "./scripts/prepare-native-runtime.mjs",
     "npmRebuild": false,
     "directories": {
       "output": "desktop-dist",
