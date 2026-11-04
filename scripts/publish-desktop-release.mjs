@@ -4,7 +4,7 @@ import { readFile,readdir,rename,writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const directory=process.env.TREBELL_RELEASE_ASSETS||"release-assets",tag="desktop",repository=process.env.GH_REPO,commit=process.env.GITHUB_SHA;
+const directory=process.env.TREBELL_RELEASE_ASSETS||"release-assets",tag="desktop",repository=process.env.GH_REPO,commit=process.env.TREBELL_RELEASE_COMMIT||process.env.GITHUB_SHA;
 assert.ok(repository&&commit,"GH_REPO and GITHUB_SHA are required.");
 // Linux targets substitute their native architecture labels for ${arch}.
 for(const [built,published]of [["Trebell-Code-linux-amd64.deb","Trebell-Code-linux-x64.deb"],["Trebell-Code-linux-x86_64.AppImage","Trebell-Code-linux-x64.AppImage"]]){

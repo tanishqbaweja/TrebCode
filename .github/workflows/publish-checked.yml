@@ -48,5 +48,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          GITHUB_SHA: ${{ steps.checked.outputs.commit }}
+          TREBELL_RELEASE_COMMIT: ${{ steps.checked.outputs.commit }}
         run: node scripts/publish-desktop-release.mjs
