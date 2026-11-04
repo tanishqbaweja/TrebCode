@@ -165,5 +165,14 @@
   "optionalDependencies": {
     "@openai/codex-win32-x64": "npm:@openai/codex@0.155.1-win32-x64"
   },
-  "private": true
+  "private": true,
+  "allowScripts": {
+    "electron@38.8.6": true,
+    "node-pty@1.1.0": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "electron-winstaller": false,
+    "fsevents": false,
+    "msgpackr-extract": false
+  }
 }

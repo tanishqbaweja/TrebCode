@@ -94,6 +94,7 @@ jobs:
         with:
           name: check-${{ matrix.id }}
           if-no-files-found: ignore
+          include-hidden-files: true
           path: |
             .release-smoke/screenshots/*.png
             .release-smoke/result.json

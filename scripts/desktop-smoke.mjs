@@ -20,16 +20,20 @@ state.updateSettings({onboardingComplete:true,agentRuntime:"native",agentRuntime
   }))});state.close();
 const executablePath=resolve(process.env.TREBELL_SMOKE_EXECUTABLE||process.argv[2]||"");
 if(executablePath===resolve(""))throw new Error("Set TREBELL_SMOKE_EXECUTABLE to the packaged application executable.");
-let app;
+let app,page;
+const errors=[];
 try{
   app=await electron.launch({executablePath,args:["--no-sandbox","--disable-renderer-backgrounding","--disable-backgrounding-occluded-windows"],env,timeout:60_000});
-  const page=await app.firstWindow({timeout:60_000});page.setDefaultTimeout(15_000);
-  const errors=[];page.on("pageerror",error=>errors.push(error.message));
+  page=await app.firstWindow({timeout:60_000});page.setDefaultTimeout(15_000);
+  page.on("pageerror",error=>errors.push(error.message));
   await expect(page.getByTestId("composer")).toBeVisible({timeout:60_000});
   const packaged=await app.evaluate(({app})=>({packaged:app.isPackaged,path:app.getAppPath()}));
   assert.equal(packaged.packaged,true);assert.match(packaged.path,/app\.asar$/);
   await page.getByTestId("terminal-toggle").click();
+  const creation=page.waitForResponse(response=>new URL(response.url()).pathname==="/api/terminal/sessions"&&response.request().method()==="POST");
   await page.getByRole("button",{name:"Create terminal",exact:true}).click();
+  const created=await creation;
+  if(!created.ok())throw new Error("Packaged terminal creation failed: "+JSON.stringify(await created.json()));
   const terminal=page.locator(".terminal-pane").last(),command=terminal.locator(".terminal-command-line input");
   await command.fill('node -p "\'TREBCODE_\' + (6 * 7)"');await command.press("Enter");
   await expect(terminal).toContainText("TREBCODE_42",{timeout:30_000});
@@ -43,4 +47,11 @@ try{
   await writeFile(join(root,"screenshots",process.platform+"-"+process.arch+".png"),Buffer.from(shot,"base64"));
   await writeFile(join(root,"result.json"),JSON.stringify({platform:process.platform,arch:process.arch,packaged:true,asar:true,ui:true,nativeTerminal:true,lazySettings:true,pageErrors:errors},null,2));
   console.log("Packaged application passed: ASAR startup, UI, native terminal command, lazy Settings, and no renderer errors.");
+}catch(error){
+  const terminalErrors=await page?.locator(".terminal-error").allTextContents().catch(()=>[])||[];
+  const result={platform:process.platform,arch:process.arch,error:String(error.message),terminalErrors,pageErrors:errors};
+  await writeFile(join(root,"result.json"),JSON.stringify(result,null,2));
+  console.error(JSON.stringify(result));
+  if(app){try{const shot=await app.evaluate(async({BrowserWindow})=>(await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));await writeFile(join(root,"screenshots","failure-"+process.platform+"-"+process.arch+".png"),Buffer.from(shot,"base64"))}catch{}}
+  throw error;
 }finally{await app?.close()}
