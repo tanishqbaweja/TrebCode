@@ -1,0 +1,30 @@
+name: Source credential scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Download and verify the independent scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .cache/security
+          gh release download v8.30.1 --repo gitleaks/gitleaks --pattern '*linux_x64.tar.gz' --pattern '*checksums.txt' --dir .cache/security --clobber
+          (cd .cache/security && sha256sum --check --ignore-missing gitleaks_8.30.1_checksums.txt)
+          tar -xzf .cache/security/gitleaks_8.30.1_linux_x64.tar.gz -C .cache/security
+      - name: Scan reachable source history with values redacted
+        run: ./.cache/security/gitleaks git --log-opts=HEAD --no-banner --redact=100

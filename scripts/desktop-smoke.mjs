@@ -5,7 +5,7 @@ import { join,resolve } from "node:path";
 import { _electron as electron,expect } from "@playwright/test";
 import { TrebellStateStore } from "../src/trebell-state.mjs";
 
-const root=resolve(".release-smoke"),home=join(root,"home"),profile=join(root,"user-profile"),temporary=join(root,"tmp");
+const root=resolve(process.env.TREBELL_SMOKE_ROOT||".release-smoke"),home=join(root,"home"),profile=join(root,"user-profile"),temporary=join(root,"tmp");
 for(const path of [root,home,profile,temporary,join(root,"screenshots")])await mkdir(path,{recursive:true});
 const listener=createServer();await new Promise((ok,fail)=>listener.listen(0,"127.0.0.1",ok).once("error",fail));
 const port=listener.address().port;await new Promise(ok=>listener.close(ok));
@@ -36,7 +36,7 @@ try{
   await page.getByRole("button",{name:"Close terminal",exact:true}).click();
   await page.getByRole("navigation",{name:"Destinations"}).getByRole("button",{name:"Settings",exact:true}).click();
   await expect(page.getByRole("heading",{name:"Settings",exact:true})).toBeVisible();
-  await page.getByRole("button",{name:"Appearance Theme, color mode and motion"}).click();
+  await page.locator(".settings-nav").getByRole("button",{name:/^Appearance/}).click();
   await expect(page.getByRole("button",{name:"Create theme",exact:true})).toBeVisible();
   assert.deepEqual(errors,[]);
   const shot=await app.evaluate(async({BrowserWindow})=>(await BrowserWindow.getAllWindows()[0].webContents.capturePage()).toPNG().toString("base64"));

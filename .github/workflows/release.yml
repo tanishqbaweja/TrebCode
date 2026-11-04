@@ -18,7 +18,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  security:
+    name: Check source before building
+    uses: ./.github/workflows/security.yml
   build:
+    needs: security
     name: Build and check ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
