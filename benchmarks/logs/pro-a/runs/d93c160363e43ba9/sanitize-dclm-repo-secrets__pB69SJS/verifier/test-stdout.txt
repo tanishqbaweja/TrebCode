@@ -1,0 +1,156 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [359 kB]
+Fetched 9398 kB in 42s (224 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libcurl4
+The following NEW packages will be installed:
+  curl libcurl4
+0 upgraded, 2 newly installed, 0 to remove and 51 not upgraded.
+Need to get 708 kB of archives.
+After this operation, 1361 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:2 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 708 kB in 31s (22.8 kB/s)
+Selecting previously unselected package libcurl4:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 11226 files and directories currently installed.)
+Preparing to unpack .../libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u9) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `dclm`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 44ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 85ms
+Installed 5 packages in 12ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0 -- /app/dclm/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /tests
+collecting ... collected 45 items
+
+../../tests/test_outputs.py::TestSecretsRemoved::test_aws_access_keys_removed PASSED [  2%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_aws_secret_keys_removed PASSED [  4%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_github_tokens_removed PASSED [  6%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_huggingface_tokens_removed PASSED [  8%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_openai_api_key_removed PASSED [ 11%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_anthropic_api_key_removed PASSED [ 13%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_google_api_key_removed PASSED [ 15%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_database_passwords_removed PASSED [ 17%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_docker_password_removed PASSED [ 20%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_kubernetes_token_removed PASSED [ 22%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_vault_token_removed PASSED [ 24%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_redis_passwords_removed PASSED [ 26%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_datadog_api_key_removed PASSED [ 28%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_slack_webhook_removed PASSED [ 31%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_discord_token_removed PASSED [ 33%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_ssh_private_key_removed PASSED [ 35%]
+../../tests/test_outputs.py::TestSecretsRemoved::test_ssl_private_key_removed PASSED [ 37%]
+../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_aws_key_removed PASSED [ 40%]
+../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_aws_secret_removed PASSED [ 42%]
+../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_db_password_removed PASSED [ 44%]
+../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_docker_config_removed PASSED [ 46%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_process_py_has_aws_placeholders PASSED [ 48%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_ray_cluster_has_github_placeholder PASSED [ 51%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_ray_cluster_has_huggingface_placeholder PASSED [ 53%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_json_config_has_huggingface_placeholder PASSED [ 55%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_credentials_env_has_all_placeholders PASSED [ 57%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_deploy_sh_has_placeholders PASSED [ 60%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_k8s_secrets_has_base64_placeholders PASSED [ 62%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_ssh_config_has_placeholder PASSED [ 64%]
+../../tests/test_outputs.py::TestCorrectPlaceholders::test_terraform_has_placeholders PASSED [ 66%]
+../../tests/test_outputs.py::TestCleanFilesUnmodified::test_readme_contains_format_examples PASSED [ 68%]
+../../tests/test_outputs.py::TestCleanFilesUnmodified::test_test_dataset_config_not_sanitized PASSED [ 71%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_aws_access_key_pattern_remains PASSED [ 73%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_github_token_pattern_remains PASSED [ 75%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_huggingface_token_pattern_remains PASSED [ 77%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_openai_key_pattern_remains PASSED [ 80%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_vault_token_pattern_remains PASSED [ 82%]
+../../tests/test_outputs.py::TestRegexPatternMatching::test_no_jwt_token_pattern_remains PASSED [ 84%]
+../../tests/test_outputs.py::TestFileIntegrity::test_process_py_is_valid_python PASSED [ 86%]
+../../tests/test_outputs.py::TestFileIntegrity::test_json_file_is_valid PASSED [ 88%]
+../../tests/test_outputs.py::TestFileIntegrity::test_deploy_sh_is_valid_bash PASSED [ 91%]
+../../tests/test_outputs.py::TestFileIntegrity::test_all_contaminated_files_exist PASSED [ 93%]
+../../tests/test_outputs.py::TestSpecificFileContent::test_process_py_multiple_aws_key_locations PASSED [ 95%]
+../../tests/test_outputs.py::TestSpecificFileContent::test_credentials_env_format PASSED [ 97%]
+../../tests/test_outputs.py::TestSpecificFileContent::test_terraform_tfvars_format PASSED [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_aws_access_keys_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_aws_secret_keys_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_github_tokens_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_huggingface_tokens_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_openai_api_key_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_anthropic_api_key_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_google_api_key_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_database_passwords_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_docker_password_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_kubernetes_token_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_vault_token_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_redis_passwords_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_datadog_api_key_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_slack_webhook_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_discord_token_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_ssh_private_key_removed
+PASSED ../../tests/test_outputs.py::TestSecretsRemoved::test_ssl_private_key_removed
+PASSED ../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_aws_key_removed
+PASSED ../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_aws_secret_removed
+PASSED ../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_base64_db_password_removed
+PASSED ../../tests/test_outputs.py::TestBase64EncodedSecretsRemoved::test_k8s_docker_config_removed
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_process_py_has_aws_placeholders
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_ray_cluster_has_github_placeholder
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_ray_cluster_has_huggingface_placeholder
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_json_config_has_huggingface_placeholder
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_credentials_env_has_all_placeholders
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_deploy_sh_has_placeholders
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_k8s_secrets_has_base64_placeholders
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_ssh_config_has_placeholder
+PASSED ../../tests/test_outputs.py::TestCorrectPlaceholders::test_terraform_has_placeholders
+PASSED ../../tests/test_outputs.py::TestCleanFilesUnmodified::test_readme_contains_format_examples
+PASSED ../../tests/test_outputs.py::TestCleanFilesUnmodified::test_test_dataset_config_not_sanitized
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_aws_access_key_pattern_remains
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_github_token_pattern_remains
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_huggingface_token_pattern_remains
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_openai_key_pattern_remains
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_vault_token_pattern_remains
+PASSED ../../tests/test_outputs.py::TestRegexPatternMatching::test_no_jwt_token_pattern_remains
+PASSED ../../tests/test_outputs.py::TestFileIntegrity::test_process_py_is_valid_python
+PASSED ../../tests/test_outputs.py::TestFileIntegrity::test_json_file_is_valid
+PASSED ../../tests/test_outputs.py::TestFileIntegrity::test_deploy_sh_is_valid_bash
+PASSED ../../tests/test_outputs.py::TestFileIntegrity::test_all_contaminated_files_exist
+PASSED ../../tests/test_outputs.py::TestSpecificFileContent::test_process_py_multiple_aws_key_locations
+PASSED ../../tests/test_outputs.py::TestSpecificFileContent::test_credentials_env_format
+PASSED ../../tests/test_outputs.py::TestSpecificFileContent::test_terraform_tfvars_format
+============================== 45 passed in 0.09s ==============================

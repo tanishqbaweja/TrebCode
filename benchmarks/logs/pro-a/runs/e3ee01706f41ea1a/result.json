@@ -1,0 +1,39 @@
+{
+    "id": "1c16b537-19fc-496c-ac65-fa5b4d47e943",
+    "started_at": "2026-10-31T20:37:31.470525",
+    "updated_at": "2026-10-31T20:40:35.264485",
+    "finished_at": "2026-10-31T20:40:35.264485",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "trebell-native__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "fix-django-command-injection__H58yCq8"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 88864,
+        "n_cache_tokens": 82666,
+        "n_output_tokens": 2689,
+        "cost_usd": null
+    }
+}

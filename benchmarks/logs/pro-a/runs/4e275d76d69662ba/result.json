@@ -1,0 +1,39 @@
+{
+    "id": "e2c32dcb-27f4-4f72-bb12-20022b277a91",
+    "started_at": "2026-10-31T17:20:19.350354",
+    "updated_at": "2026-10-31T17:23:35.710851",
+    "finished_at": "2026-10-31T17:23:35.710851",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "solve-ode-with-sympy__6fVjpU5"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 243688,
+        "n_cache_tokens": 137254,
+        "n_output_tokens": 6423,
+        "cost_usd": null
+    }
+}

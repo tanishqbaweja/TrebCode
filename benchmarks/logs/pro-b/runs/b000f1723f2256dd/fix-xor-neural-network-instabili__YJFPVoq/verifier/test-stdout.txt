@@ -1,0 +1,244 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 24.3.1 -> 26.2.2
+[notice] To update, run: pip install --upgrade pip
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python
+cachedir: .pytest_cache
+rootdir: /tests
+plugins: anyio-4.12.0
+collecting ... collected 25 items
+
+../tests/test_outputs.py::TestTrainingConvergence::test_xor_training_converges PASSED [  4%]
+../tests/test_outputs.py::TestTrainingConvergence::test_no_nan_during_training PASSED [  8%]
+../tests/test_outputs.py::TestTrainingConvergence::test_no_inf_during_training PASSED [ 12%]
+../tests/test_outputs.py::TestAccuracy::test_training_accuracy_above_98_percent PASSED [ 16%]
+../tests/test_outputs.py::TestAccuracy::test_test_accuracy_above_95_percent PASSED [ 20%]
+../tests/test_outputs.py::TestAccuracy::test_grid_accuracy PASSED        [ 24%]
+../tests/test_outputs.py::TestNumericalStability::test_sigmoid_large_positive_input PASSED [ 28%]
+../tests/test_outputs.py::TestNumericalStability::test_sigmoid_large_negative_input PASSED [ 32%]
+../tests/test_outputs.py::TestNumericalStability::test_forward_pass_stability PASSED [ 36%]
+../tests/test_outputs.py::TestNumericalStability::test_gradient_stability_during_backprop PASSED [ 40%]
+../tests/test_outputs.py::TestNumericalStability::test_extreme_input_predictions PASSED [ 44%]
+../tests/test_outputs.py::TestAPICompatibility::test_constructor_signature PASSED [ 48%]
+../tests/test_outputs.py::TestAPICompatibility::test_weight_shapes PASSED [ 52%]
+../tests/test_outputs.py::TestAPICompatibility::test_train_method_signature PASSED [ 56%]
+../tests/test_outputs.py::TestAPICompatibility::test_predict_method_returns_binary PASSED [ 60%]
+../tests/test_outputs.py::TestAPICompatibility::test_forward_method_returns_continuous PASSED [ 64%]
+../tests/test_outputs.py::TestEdgeCases::test_single_sample_training PASSED [ 68%]
+../tests/test_outputs.py::TestEdgeCases::test_boundary_decision_accuracy FAILED [ 72%]
+../tests/test_outputs.py::TestEdgeCases::test_weight_initialization_not_too_large PASSED [ 76%]
+../tests/test_outputs.py::TestTrainingScript::test_train_py_execution PASSED [ 80%]
+../tests/test_outputs.py::TestTrainingScript::test_train_py_accuracy_output PASSED [ 84%]
+../tests/test_outputs.py::TestDifferentNetworkSizes::test_various_hidden_sizes PASSED [ 88%]
+../tests/test_outputs.py::TestLossFunction::test_loss_decreases PASSED   [ 92%]
+../tests/test_outputs.py::TestLossFunction::test_mse_loss_format PASSED  [ 96%]
+../tests/test_outputs.py::TestReproducibility::test_deterministic_with_seed PASSED [100%]
+
+=================================== FAILURES ===================================
+________________ TestEdgeCases.test_boundary_decision_accuracy _________________
+
+self = <test_outputs.TestEdgeCases object at 0x716910183610>
+
+    def test_boundary_decision_accuracy(self):
+        """Test predictions near decision boundary (0.5)."""
+        NeuralNetwork = load_nn_module()
+        np.random.seed(42)
+    
+        X_train = np.load(os.path.join(TEST_DATA_DIR, 'xor_train_X.npy'))
+        y_train = np.load(os.path.join(TEST_DATA_DIR, 'xor_train_y.npy'))
+        X_edge = np.load(os.path.join(TEST_DATA_DIR, 'edge_X.npy'))
+        y_edge = np.load(os.path.join(TEST_DATA_DIR, 'edge_y.npy'))
+    
+        nn = NeuralNetwork(input_size=2, hidden_size=16, output_size=1)
+        success = nn.train(X_train, y_train, epochs=50000, convergence_loss=0.01)
+    
+        assert success, "Training must converge"
+    
+        predictions = nn.predict(X_edge)
+        accuracy = np.mean(predictions == y_edge)
+    
+        # Edge cases are harder, but should still get reasonable accuracy
+>       assert accuracy >= 0.4, f"Edge case accuracy {accuracy:.2%} is too low"
+E       AssertionError: Edge case accuracy 25.00% is too low
+E       assert np.float64(0.25) >= 0.4
+
+/tests/test_outputs.py:346: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+==================================== PASSES ====================================
+_____________ TestTrainingConvergence.test_xor_training_converges ______________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+_____________ TestTrainingConvergence.test_no_nan_during_training ______________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Did not converge after 10000 epochs. Final loss: 0.012213
+_____________ TestTrainingConvergence.test_no_inf_during_training ______________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Did not converge after 10000 epochs. Final loss: 0.012213
+_____________ TestAccuracy.test_training_accuracy_above_98_percent _____________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+_______________ TestAccuracy.test_test_accuracy_above_95_percent _______________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+_______________________ TestAccuracy.test_grid_accuracy ________________________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+____________ TestNumericalStability.test_extreme_input_predictions _____________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Epoch 1000, Loss: 0.044863
+Epoch 2000, Loss: 0.023915
+Epoch 3000, Loss: 0.019542
+Epoch 4000, Loss: 0.017389
+Epoch 5000, Loss: 0.015973
+Epoch 6000, Loss: 0.014914
+Epoch 7000, Loss: 0.014066
+Epoch 8000, Loss: 0.013357
+Epoch 9000, Loss: 0.012748
+Epoch 10000, Loss: 0.012212
+Epoch 11000, Loss: 0.011734
+Epoch 12000, Loss: 0.011301
+Epoch 13000, Loss: 0.010905
+Epoch 14000, Loss: 0.010539
+Epoch 15000, Loss: 0.010198
+Converged at epoch 15610 with loss 0.010000
+_______________ TestAPICompatibility.test_train_method_signature _______________
+----------------------------- Captured stdout call -----------------------------
+Converged at epoch 0 with loss 0.180616
+___________ TestAPICompatibility.test_predict_method_returns_binary ____________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.271925
+Converged at epoch 424 with loss 0.099924
+__________________ TestEdgeCases.test_single_sample_training ___________________
+----------------------------- Captured stdout call -----------------------------
+Epoch 0, Loss: 0.331409
+Converged at epoch 1 with loss 0.002094
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestTrainingConvergence::test_xor_training_converges
+PASSED ../tests/test_outputs.py::TestTrainingConvergence::test_no_nan_during_training
+PASSED ../tests/test_outputs.py::TestTrainingConvergence::test_no_inf_during_training
+PASSED ../tests/test_outputs.py::TestAccuracy::test_training_accuracy_above_98_percent
+PASSED ../tests/test_outputs.py::TestAccuracy::test_test_accuracy_above_95_percent
+PASSED ../tests/test_outputs.py::TestAccuracy::test_grid_accuracy
+PASSED ../tests/test_outputs.py::TestNumericalStability::test_sigmoid_large_positive_input
+PASSED ../tests/test_outputs.py::TestNumericalStability::test_sigmoid_large_negative_input
+PASSED ../tests/test_outputs.py::TestNumericalStability::test_forward_pass_stability
+PASSED ../tests/test_outputs.py::TestNumericalStability::test_gradient_stability_during_backprop
+PASSED ../tests/test_outputs.py::TestNumericalStability::test_extreme_input_predictions
+PASSED ../tests/test_outputs.py::TestAPICompatibility::test_constructor_signature
+PASSED ../tests/test_outputs.py::TestAPICompatibility::test_weight_shapes
+PASSED ../tests/test_outputs.py::TestAPICompatibility::test_train_method_signature
+PASSED ../tests/test_outputs.py::TestAPICompatibility::test_predict_method_returns_binary
+PASSED ../tests/test_outputs.py::TestAPICompatibility::test_forward_method_returns_continuous
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_single_sample_training
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_weight_initialization_not_too_large
+PASSED ../tests/test_outputs.py::TestTrainingScript::test_train_py_execution
+PASSED ../tests/test_outputs.py::TestTrainingScript::test_train_py_accuracy_output
+PASSED ../tests/test_outputs.py::TestDifferentNetworkSizes::test_various_hidden_sizes
+PASSED ../tests/test_outputs.py::TestLossFunction::test_loss_decreases
+PASSED ../tests/test_outputs.py::TestLossFunction::test_mse_loss_format
+PASSED ../tests/test_outputs.py::TestReproducibility::test_deterministic_with_seed
+FAILED ../tests/test_outputs.py::TestEdgeCases::test_boundary_decision_accuracy
+======================== 1 failed, 24 passed in 24.56s =========================

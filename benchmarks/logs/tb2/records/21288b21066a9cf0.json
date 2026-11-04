@@ -1,0 +1,455 @@
+{
+  "pairId": "tb2-pair-muse-spark-1-3-contributor-high-default-break-filter-js-from-html-20261030T232406Z",
+  "dataset": "terminal-bench/terminal-bench-2@1",
+  "task": "break-filter-js-from-html",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": null,
+  "localTaskPath": null,
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-30T23:24:08.255Z",
+    "completed": true,
+    "qualifiedTask": "terminal-bench/break-filter-js-from-html",
+    "taskCount": 89,
+    "datasetVersion": "1.0.0",
+    "datasetRevision": "1",
+    "datasetContentHash": "sha256:c6fc2e2382c1dbae99b2d5ecd2f4f4a60c3c01e0d84642d69b4afd92e99d078b",
+    "attempts": 1,
+    "finishedAt": "2026-10-30T23:24:16.483Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeContextPolicy": {
+    "catalogContextWindow": null,
+    "operatingContextWindow": null,
+    "serverCompactionThreshold": null,
+    "serverCompactionArming": {
+      "armAtMaxObservedInputTokens": null,
+      "staysArmed": true
+    },
+    "retroactiveOpenAiReadCooling": true,
+    "catalogLookup": {
+      "outcome": "no window listed",
+      "window": null,
+      "status": null,
+      "reason": null
+    }
+  },
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "8fe540b20ec8a6c0d76dfd8241718d21ade8e963",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "nativePinnedNodeVersion": "22.23.3",
+  "nativePinnedNodeTarballSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+  "comparisonLanes": [
+    "native-meta"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeAdapterSha256": "aab42d5f0e5ceecaa3cbf78e5d96dc9c94c7a8b4dcd787d7d29e72fbe102246c",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeMetaBundleNormalizedSha256": "1bfec0e973ad831538616deafe267a999e513a1891a4b59e33b46cefc0ddb850",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "task.toml docker_image",
+        "image": "alexgshaw/break-filter-js-from-html:20251031",
+        "id": "sha256:d7bfb45e47cf10d2e21dc520239215498f4eba9c1ab2d0cd7d647985dddb4fa8",
+        "repoDigests": [
+          "alexgshaw/break-filter-js-from-html@sha256:d7bfb45e47cf10d2e21dc520239215498f4eba9c1ab2d0cd7d647985dddb4fa8"
+        ]
+      },
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "python:3.13-slim-bookworm",
+        "id": null,
+        "repoDigests": null
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "native-meta",
+      "harness": "native",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-break-filter-js-from-html-20261030T232406Z",
+      "status": "finished",
+      "startedAt": "2026-10-30T23:24:16.532Z",
+      "finishedAt": "2026-10-30T23:39:05.091Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-break-filter-js-from-html-20261030T232406Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-30T23:39:05.391Z",
+  "jobs": [
+    {
+      "harness": "native",
+      "label": "native-meta",
+      "agent": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-break-filter-js-from-html-20261030T232406Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 1186177,
+      "cachedTokens": 1113775,
+      "uncachedInputTokens": 72402,
+      "cacheHitPercent": 93.9,
+      "outputTokens": 55177,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.02050315,
+      "apiEquivalentCostAsReportedUsd": 0.02050315,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 1186177,
+          "cachedInputTokens": 1113775,
+          "uncachedInputTokens": 72402,
+          "outputTokens": 55177,
+          "reasoningTokens": 0
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0072402000000000005,
+        "cachedInputUsd": 0.00222755,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0110354,
+        "totalUsd": 0.02050315,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 1186177,
+            "cachedInputTokens": 1113775,
+            "outputTokens": 55177,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.02050315
+          }
+        },
+        "usageAccountingComplete": true,
+        "unaccountedProviderRequests": 0,
+        "totalUsdIsLowerBound": false
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0
+        },
+        "lowerBound": false
+      },
+      "wireModels": [
+        "muse-spark-1.3-contributor"
+      ],
+      "cachedOverInputRecords": 0,
+      "reward": 1,
+      "taskChecksum": "3d0f7651479ff6739729cc962b44510501fa83a3df4cfc874583d4de3e4ef610",
+      "agentVersion": "trebell-native-harbor/1",
+      "setupMs": 9034,
+      "agentExecutionMs": 766252,
+      "verifierMs": 81348,
+      "modelTurns": 31,
+      "toolCalls": 31,
+      "providerRequests": 31,
+      "effectiveServiceTiers": [
+        "auto"
+      ],
+      "reasoningContext": "current_turn",
+      "effectiveReasoningContexts": [],
+      "reasoningOutputTokens": 42740,
+      "cacheWriteInputTokens": 0,
+      "cacheCarryover": {
+        "transitions": 30,
+        "priorRequestInputTokens": 1110101,
+        "knownCachedPriorTokens": 1038526,
+        "retainedKnownCachedTokens": 1038526,
+        "lostKnownCachedTokens": 0,
+        "percent": 100
+      },
+      "strategy": {
+        "firstEditAtMs": 751309,
+        "editCount": 1,
+        "convergenceCheckpoints": 0,
+        "deliverableCheckpoints": 0,
+        "deliverableEscalations": 0,
+        "persistentArtifactSemanticAudits": 0,
+        "globalConstraintPlanningCheckpoints": 0,
+        "globalConstraintCommitBlocks": 0,
+        "globalConstraintCommitAudits": 0,
+        "batchEvidenceClosureAuditRequests": 0,
+        "batchEvidenceClosureAuditCompletions": 0,
+        "batchEvidenceClosureAuditBlocks": 0,
+        "batchEvidencePrecommitGateRequests": 0,
+        "batchEvidencePrecommitGateChecks": 0,
+        "batchEvidencePrecommitGateBlocks": 0,
+        "batchEvidencePrecommitGateRetries": 0,
+        "batchEvidencePrecommitGateOutputCapEvents": 0,
+        "batchEvidencePrecommitGateOutputCapRetries": 0,
+        "batchEvidencePrecommitGateOutputTokenBudget": 0,
+        "batchEvidencePostcommitGateSkips": 0,
+        "batchEvidenceCommitValidationCarryovers": 0,
+        "implementationPressureEvents": 0,
+        "actionOutputCaps": 31,
+        "actionOutputCapRelaxations": 0,
+        "convergenceCallsBlocked": 0,
+        "postEditProbeBatchCheckpoints": 0,
+        "postEditProbeCallsBlocked": 0,
+        "assumptionAuditCheckpoints": 0,
+        "abstractionBoundaryEscalations": 0,
+        "abstractionRepairVerificationCheckpoints": 0,
+        "abstractionRepairVerificationEvidence": 0,
+        "abstractionRepairVerificationGates": 0,
+        "abstractionRepairVerified": 0,
+        "abstractionRepairVerificationRejected": 0,
+        "residualStructureCheckpoints": 0,
+        "completionGateChecks": 0,
+        "completionGateContextCompactions": 0,
+        "completionGateControlMessagesDropped": 0,
+        "completionGateControlCharsDropped": 0,
+        "completionGateCachePrefixPreservations": 0,
+        "completionGateControlMessagesPreservedForCache": 0,
+        "completionGateControlCharsPreservedForCache": 0,
+        "completionGateOutputCapEvents": 0,
+        "completionGateOutputCapRetries": 0,
+        "completionGateOutputTokenBudget": 0,
+        "completionGateInvalidFailClosed": 0,
+        "completionArtifactConstraintAuditBlocks": 0,
+        "completionGateRecoveries": 0,
+        "completionRecoveryEvidenceUses": 0,
+        "completionRecoveryEvidenceCallsBlocked": 0,
+        "completionRecoveryPostEditVerificationUses": 0,
+        "completionRecoveryStrategyResets": 0,
+        "completionRecoveryResidualFactorizations": 0,
+        "completionRecoveryEditUses": 0,
+        "completionRecoveryUnsupportedEditsSkipped": 0,
+        "completionRecoveryCandidateSnapshots": 0,
+        "completionRecoverySnapshotAbsentPaths": 0,
+        "completionRecoveryIncumbentRestores": 0,
+        "completionRecoveryIncumbentRestoreFailures": 0,
+        "completionRecoveryExhaustions": 0,
+        "completionRecoveryTerminalRepairGraces": 0,
+        "completionRecoveryEvidenceThenEditWindows": 0,
+        "completionRecoveryDependentEditVerificationBlocks": 0,
+        "completionRecoveryEditsBlocked": 0,
+        "completionRecoveryNonEditCallsBlocked": 0,
+        "completionRecoveryEditDebtsUnpaid": 0,
+        "postEditEvidenceCheckpoints": 0,
+        "postEditEvidenceEscalations": 0,
+        "postEditEvidenceCallsBlocked": 0,
+        "revisionChurnEscalations": 0,
+        "revisionChurnEditsBlocked": 0,
+        "selfAdmittedVerificationGaps": 0,
+        "selfAdmittedCompletionGaps": 0
+      },
+      "budgets": {
+        "maxModelTurns": 500,
+        "maxToolCalls": 5000,
+        "maxWallTimeMs": null
+      },
+      "contextPolicy": {
+        "catalogContextWindow": null,
+        "operatingContextWindow": null,
+        "serverCompactionThreshold": null,
+        "serverCompactionArming": {
+          "armAtMaxObservedInputTokens": null,
+          "staysArmed": true
+        },
+        "retroactiveOpenAiReadCooling": true,
+        "catalogLookup": {
+          "outcome": "no window listed",
+          "window": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "trebell-native__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 1
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "1.0": [
+                "break-filter-js-from-html__uSTiP7t"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 1
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 0,
+        "writtenNetworkCode": 0,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 2,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 28,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "verifier-path"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-break-filter-js-from-html-20261030T232406Z/break-filter-js-from-html__uSTiP7t/agent/trebell-native-events.jsonl",
+            "line": 17,
+            "snippet": "bash -lc cat /app/filter.py; echo ---; ls -R /app 2>&1; echo ---; ls -R /tests 2>&1 | head -n 100",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "verifier-path"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-break-filter-js-from-html-20261030T232406Z/break-filter-js-from-html__uSTiP7t/agent/trebell-native-events.jsonl",
+            "line": 122,
+            "snippet": "bash -lc ls -la /app/; cat /app/test_outputs.py; python /app/test_outputs.py 2>&1 | head -n 50; echo EXIT:$?",
+            "networkFailureSeen": false
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+    "id": "2979ba38-f1a6-4d81-bac7-e9f4e55d21c8",
+    "started_at": "2026-10-31T15:23:05.566932",
+    "updated_at": "2026-10-31T15:35:19.776620",
+    "finished_at": "2026-10-31T15:35:19.776620",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "recover-and-sanitize-postgres-wa__KhduZgj"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 4604143,
+        "n_cache_tokens": 4140805,
+        "n_output_tokens": 64623,
+        "cost_usd": null
+    }
+}

@@ -1,0 +1,104 @@
+{
+    "results": {
+        "tool": {
+            "name": "pytest",
+            "version": "8.4.1"
+        },
+        "summary": {
+            "tests": 9,
+            "passed": 8,
+            "failed": 1,
+            "skipped": 0,
+            "pending": 0,
+            "other": 0,
+            "start": 1793434605.9569669,
+            "stop": 1793434623.472303
+        },
+        "tests": [
+            {
+                "name": "test_outputs.py::test_python_file_exists",
+                "status": "passed",
+                "duration": 0.0004155209753662348,
+                "start": 1793434607.9252424,
+                "stop": 1793434607.9259918,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_run_script",
+                "status": "passed",
+                "duration": 15.446974905091338,
+                "start": 1793434607.9261594,
+                "stop": 1793434623.3707187,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_csv_output_exists",
+                "status": "passed",
+                "duration": 0.0003316530492156744,
+                "start": 1793434623.3709204,
+                "stop": 1793434623.371772,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_csv_shape_cols",
+                "status": "passed",
+                "duration": 0.0033398258965462446,
+                "start": 1793434623.3719094,
+                "stop": 1793434623.375727,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_masks_are_no_longer_rect",
+                "status": "passed",
+                "duration": 0.013146018027327955,
+                "start": 1793434623.37585,
+                "stop": 1793434623.3895934,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_mask_alignment",
+                "status": "passed",
+                "duration": 0.026368073071353137,
+                "start": 1793434623.389717,
+                "stop": 1793434623.416887,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_no_polyline_overlaps",
+                "status": "passed",
+                "duration": 0.013165457989089191,
+                "start": 1793434623.4171603,
+                "stop": 1793434623.4310648,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_single_contiguous_mask_per_cell",
+                "status": "passed",
+                "duration": 0.011751201935112476,
+                "start": 1793434623.4312644,
+                "stop": 1793434623.4436235,
+                "retries": 0,
+                "file_path": "test_outputs.py"
+            },
+            {
+                "name": "test_outputs.py::test_coords_are_flat_lists",
+                "status": "failed",
+                "raw_status": "call_failed",
+                "duration": 0.00209691992495209,
+                "start": 1793434623.4439964,
+                "stop": 1793434623.4717834,
+                "retries": 0,
+                "file_path": "test_outputs.py",
+                "trace": "def test_coords_are_flat_lists():\n        \"\"\"\n        Checks that 'coords_x' and 'coords_y' columns contain flat lists of numbers,\n        allowing for them to be stored as strings.\n        \"\"\"\n        df = pd.read_csv(\"/app/test_output.csv\")\n        for col in ['coords_x', 'coords_y']:\n            for index, value in df[col].items():\n                parsed_value = None\n                if isinstance(value, str):\n                    try:\n                        # Use ast.literal_eval for safe evaluation of string\n                        parsed_value = ast.literal_eval(value)\n                    except (ValueError, SyntaxError):\n                        assert False, (f\"Row {index}, column '{col}': \"\n                                       f\"could not parse string.\")\n                elif isinstance(value, (list, np.ndarray)):\n                    parsed_value = value\n                else:\n                    assert False, (f\"Row {index}, column '{col}': value is\"\n                                   f\" not a list or string (got {type(value)}).\")\n    \n>               assert isinstance(parsed_value, list), \\\n                    (f\"Row {index}, column '{col}': parsed value is \"\n                     f\"not a list (got {type(parsed_value)}).\")\nE               AssertionError: Row 0, column 'coords_x': parsed value is not a list (got <class 'tuple'>).\nE               assert False\nE                +  where False = isinstance((142, 141, 139, 136, 132, 126, ...), list)\n\n/tests/test_outputs.py:280: AssertionError",
+                "message": "The test failed in the call phase due to an assertion error"
+            }
+        ]
+    }
+}

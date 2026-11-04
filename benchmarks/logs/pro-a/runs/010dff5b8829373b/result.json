@@ -1,0 +1,39 @@
+{
+    "id": "57d28557-0ef8-40f8-8d57-87ed9cc3373d",
+    "started_at": "2026-10-31T15:16:42.951055",
+    "updated_at": "2026-10-31T15:18:56.696912",
+    "finished_at": "2026-10-31T15:18:56.696912",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "restore-broken-pip-installation__xaqannx"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 656591,
+        "n_cache_tokens": 483231,
+        "n_output_tokens": 16007,
+        "cost_usd": null
+    }
+}

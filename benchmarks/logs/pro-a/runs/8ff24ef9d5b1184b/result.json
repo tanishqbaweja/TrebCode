@@ -1,0 +1,39 @@
+{
+    "id": "ec7b0c32-1639-48ed-8de8-63e0f49c1059",
+    "started_at": "2026-10-31T23:05:10.823683",
+    "updated_at": "2026-10-31T23:08:56.822204",
+    "finished_at": "2026-10-31T23:08:56.822204",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "trebell-native__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "parse-bitcoin-tx-to-json__92y2m9y"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 76229,
+        "n_cache_tokens": 66937,
+        "n_output_tokens": 4619,
+        "cost_usd": null
+    }
+}

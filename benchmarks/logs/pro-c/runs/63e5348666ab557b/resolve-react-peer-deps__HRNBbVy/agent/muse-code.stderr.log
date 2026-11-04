@@ -1,0 +1,2 @@
+muse: workspace root: /workspace (cwd default)
+muse: workspace trust: trusted source=run-flag

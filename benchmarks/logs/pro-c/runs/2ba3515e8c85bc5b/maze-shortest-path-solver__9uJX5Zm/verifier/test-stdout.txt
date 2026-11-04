@@ -1,0 +1,362 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [360 kB]
+Fetched 9398 kB in 7s (1412 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+Suggested packages:
+  libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+  libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql
+The following NEW packages will be installed:
+  curl libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+0 upgraded, 13 newly installed, 0 to remove and 49 not upgraded.
+Need to get 1837 kB of archives.
+After this operation, 4546 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main amd64 libbrotli1 amd64 1.0.9-2+deb12u1 [275 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg-10+deb12u1 [20.5 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-2 amd64 2.1.28+dfsg-10+deb12u1 [59.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 libldap-2.5-0 amd64 2.5.13+dfsg-5 [183 kB]
+Get:5 http://deb.debian.org/debian bookworm/main amd64 libnghttp2-14 amd64 1.52.0-1+deb12u3 [72.4 kB]
+Get:6 http://deb.debian.org/debian bookworm/main amd64 libpsl5 amd64 0.21.2-1 [58.7 kB]
+Get:7 http://deb.debian.org/debian bookworm/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b2 [60.8 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main amd64 libssh2-1 amd64 1.10.0-3+deb12u1 [176 kB]
+Get:9 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:10 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main amd64 libldap-common all 2.5.13+dfsg-5 [29.3 kB]
+Get:12 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules amd64 2.1.28+dfsg-10+deb12u1 [66.9 kB]
+Get:13 http://deb.debian.org/debian bookworm/main amd64 publicsuffix all 20230209.2326-1 [126 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 1837 kB in 33s (56.1 kB/s)
+Selecting previously unselected package libbrotli1:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 7590 files and directories currently installed.)
+Preparing to unpack .../00-libbrotli1_1.0.9-2+deb12u1_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../01-libsasl2-modules-db_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../02-libsasl2-2_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libldap-2.5-0:amd64.
+Preparing to unpack .../03-libldap-2.5-0_2.5.13+dfsg-5_amd64.deb ...
+Unpacking libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../04-libnghttp2-14_1.52.0-1+deb12u3_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:amd64.
+Preparing to unpack .../05-libpsl5_0.21.2-1_amd64.deb ...
+Unpacking libpsl5:amd64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../06-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:amd64.
+Preparing to unpack .../07-libssh2-1_1.10.0-3+deb12u1_amd64.deb ...
+Unpacking libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl4:amd64.
+Preparing to unpack .../08-libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../09-curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../10-libldap-common_2.5.13+dfsg-5_all.deb ...
+Unpacking libldap-common (2.5.13+dfsg-5) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../11-libsasl2-modules_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../12-publicsuffix_20230209.2326-1_all.deb ...
+Unpacking publicsuffix (20230209.2326-1) ...
+Setting up libpsl5:amd64 (0.21.2-1) ...
+Setting up libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Setting up libldap-common (2.5.13+dfsg-5) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Setting up publicsuffix (20230209.2326-1) ...
+Setting up libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u9) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 44ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 74ms
+Installed 5 packages in 10ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 12 items
+
+../tests/test_outputs.py FFFFFFFFFF.F                                    [100%]
+
+=================================== FAILURES ===================================
+____________ test_success_reachable_maze_writes_path_and_exit_zero _____________
+
+    def test_success_reachable_maze_writes_path_and_exit_zero():
+        remove_solution()
+        start, end, grid = base_corridor_maze()
+        write_maze((*start, *end), grid)
+        result = run_main()
+        assert result.returncode == 0, f"Expected success, got {result.returncode}, stderr: {result.stderr}"
+        assert os.path.exists(SOLUTION_PATH), "solution.txt should exist on success"
+        directions = read_solution()
+        assert directions, "Path must not be empty"
+        assert re.match(r"^[UDLR]+$", directions), "Solution must contain only U, D, L, R"
+>       assert_valid_path(directions, grid, start, end)
+
+/tests/test_outputs.py:94: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+directions = 'DDDDRRDDDDLLDDDDDDRRUURRDDRRRRUULLUULLUUUUUURRDDDDRRUURRUULLUUUURRDDRRUURRRRRRRRRRRRDDRRRRDDDDLLLLDDDDLLUULLUULLUURRU...RRUUUUUUUURRDDDDDDDDRRDDRRDDRRRRUULLUUUURRDDRRRRUULLUULLLLUURRRRRRDDRRUURRDDDDRRUUUURRRRDDLLDDRRDDLLLLDDLLDDRRRRUURRDD'
+grid_lines = ['11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', ...]
+start_pos = (1, 1), end_pos = (10, 1)
+
+    def assert_valid_path(directions: str, grid_lines, start_pos, end_pos):
+        width = len(grid_lines[0])
+        height = len(grid_lines)
+    
+        def is_wall(pos):
+            x, y = pos
+            return grid_lines[y][x] == "1"
+    
+        current = start_pos
+        for direction in directions:
+            if direction == "U":
+                current = (current[0], current[1] - 1)
+            elif direction == "D":
+                current = (current[0], current[1] + 1)
+            elif direction == "L":
+                current = (current[0] - 1, current[1])
+            elif direction == "R":
+                current = (current[0] + 1, current[1])
+            else:
+                raise AssertionError(f"Invalid direction character: {direction}")
+    
+            if current[0] < 0 or current[0] >= width or current[1] < 0 or current[1] >= height:
+                raise AssertionError(f"Path goes out of bounds at {current}")
+            if is_wall(current):
+>               raise AssertionError(f"Path hits wall at {current}")
+E               AssertionError: Path hits wall at (1, 2)
+
+/tests/test_outputs.py:70: AssertionError
+____________ test_missing_maze_file_exits_non_zero_and_no_solution _____________
+
+    def test_missing_maze_file_exits_non_zero_and_no_solution():
+        if os.path.exists(MAZE_PATH):
+            os.remove(MAZE_PATH)
+        remove_solution()
+        result = run_main()
+>       assert result.returncode != 0, "Missing maze file should cause non-zero exit"
+E       AssertionError: Missing maze file should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:102: AssertionError
+_____________________ test_empty_maze_file_exits_non_zero ______________________
+
+    def test_empty_maze_file_exits_non_zero():
+        remove_solution()
+        with open(MAZE_PATH, "w"):
+            pass
+        result = run_main()
+>       assert result.returncode != 0, "Empty maze file should cause non-zero exit"
+E       AssertionError: Empty maze file should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:111: AssertionError
+_____________________ test_malformed_header_exits_non_zero _____________________
+
+    def test_malformed_header_exits_non_zero():
+        remove_solution()
+        grid = ["1" * SIZE for _ in range(SIZE)]
+        with open(MAZE_PATH, "w") as f:
+            f.write("BAD HEADER\n")
+            f.write("\n".join(grid))
+        result = run_main()
+>       assert result.returncode != 0, "Malformed header should cause non-zero exit"
+E       AssertionError: Malformed header should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:122: AssertionError
+_____________________ test_wrong_row_count_exits_non_zero ______________________
+
+    def test_wrong_row_count_exits_non_zero():
+        remove_solution()
+        start, end, grid = base_corridor_maze()
+        write_maze((*start, *end), grid[:-1])  # 254 rows instead of 255
+        result = run_main()
+>       assert result.returncode != 0, "Incorrect row count should cause non-zero exit"
+E       AssertionError: Incorrect row count should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:131: AssertionError
+____________________ test_wrong_column_count_exits_non_zero ____________________
+
+    def test_wrong_column_count_exits_non_zero():
+        remove_solution()
+        start, end, grid = base_corridor_maze()
+        bad_grid = ["1" * (SIZE - 1) for _ in range(SIZE)]
+        write_maze((*start, *end), bad_grid)
+        result = run_main()
+>       assert result.returncode != 0, "Incorrect column count should cause non-zero exit"
+E       AssertionError: Incorrect column count should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:141: AssertionError
+____________________ test_invalid_characters_exits_non_zero ____________________
+
+    def test_invalid_characters_exits_non_zero():
+        remove_solution()
+        start, end, grid = base_corridor_maze()
+        grid[0] = grid[0].replace("1", "2", 1)  # introduce invalid char
+        write_maze((*start, *end), grid)
+        result = run_main()
+>       assert result.returncode != 0, "Invalid characters should cause non-zero exit"
+E       AssertionError: Invalid characters should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:151: AssertionError
+___________________ test_start_out_of_bounds_exits_non_zero ____________________
+
+    def test_start_out_of_bounds_exits_non_zero():
+        remove_solution()
+        _, end, grid = base_corridor_maze()
+        write_maze((SIZE + 1, 1, *end), grid)
+        result = run_main()
+>       assert result.returncode != 0, "Start out of bounds should cause non-zero exit"
+E       AssertionError: Start out of bounds should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:160: AssertionError
+_______________________ test_end_on_wall_exits_non_zero ________________________
+
+    def test_end_on_wall_exits_non_zero():
+        remove_solution()
+        start, _, grid = base_corridor_maze()
+        write_maze((*start, 0, 0), grid)  # (0,0) is a wall in this grid
+        result = run_main()
+>       assert result.returncode != 0, "End on wall should cause non-zero exit"
+E       AssertionError: End on wall should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:169: AssertionError
+_____________ test_unreachable_maze_exits_non_zero_and_no_solution _____________
+
+    def test_unreachable_maze_exits_non_zero_and_no_solution():
+        remove_solution()
+        start = (1, 1)
+        end = (1, 3)
+        open_cells = {(1, 1), (1, 3)}
+        grid = grid_from_open_cells(open_cells)
+        # Add a solid wall row at y=2 to block path
+        grid[2] = "1" * SIZE
+        write_maze((*start, *end), grid)
+        result = run_main()
+>       assert result.returncode != 0, "Unreachable maze should cause non-zero exit"
+E       AssertionError: Unreachable maze should cause non-zero exit
+E       assert 0 != 0
+E        +  where 0 = CompletedProcess(args=['python3', '/app/main.py'], returncode=0, stdout='', stderr='').returncode
+
+/tests/test_outputs.py:183: AssertionError
+____________________ test_solution_reaches_end_when_written ____________________
+
+    def test_solution_reaches_end_when_written():
+        remove_solution()
+        start, end, grid = base_corridor_maze()
+        write_maze((*start, *end), grid)
+        result = run_main()
+        assert result.returncode == 0, "Expected success for reachable maze"
+        directions = read_solution()
+>       assert_valid_path(directions, grid, start, end)
+
+/tests/test_outputs.py:205: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+directions = 'DDDDRRDDDDLLDDDDDDRRUURRDDRRRRUULLUULLUUUUUURRDDDDRRUURRUULLUUUURRDDRRUURRRRRRRRRRRRDDRRRRDDDDLLLLDDDDLLUULLUULLUURRU...RRUUUUUUUURRDDDDDDDDRRDDRRDDRRRRUULLUUUURRDDRRRRUULLUULLLLUURRRRRRDDRRUURRDDDDRRUUUURRRRDDLLDDRRDDLLLLDDLLDDRRRRUURRDD'
+grid_lines = ['11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111...1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111', ...]
+start_pos = (1, 1), end_pos = (10, 1)
+
+    def assert_valid_path(directions: str, grid_lines, start_pos, end_pos):
+        width = len(grid_lines[0])
+        height = len(grid_lines)
+    
+        def is_wall(pos):
+            x, y = pos
+            return grid_lines[y][x] == "1"
+    
+        current = start_pos
+        for direction in directions:
+            if direction == "U":
+                current = (current[0], current[1] - 1)
+            elif direction == "D":
+                current = (current[0], current[1] + 1)
+            elif direction == "L":
+                current = (current[0] - 1, current[1])
+            elif direction == "R":
+                current = (current[0] + 1, current[1])
+            else:
+                raise AssertionError(f"Invalid direction character: {direction}")
+    
+            if current[0] < 0 or current[0] >= width or current[1] < 0 or current[1] >= height:
+                raise AssertionError(f"Path goes out of bounds at {current}")
+            if is_wall(current):
+>               raise AssertionError(f"Path hits wall at {current}")
+E               AssertionError: Path hits wall at (1, 2)
+
+/tests/test_outputs.py:70: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_solution_only_contains_udlr_on_success
+FAILED ../tests/test_outputs.py::test_success_reachable_maze_writes_path_and_exit_zero
+FAILED ../tests/test_outputs.py::test_missing_maze_file_exits_non_zero_and_no_solution
+FAILED ../tests/test_outputs.py::test_empty_maze_file_exits_non_zero - Assert...
+FAILED ../tests/test_outputs.py::test_malformed_header_exits_non_zero - Asser...
+FAILED ../tests/test_outputs.py::test_wrong_row_count_exits_non_zero - Assert...
+FAILED ../tests/test_outputs.py::test_wrong_column_count_exits_non_zero - Ass...
+FAILED ../tests/test_outputs.py::test_invalid_characters_exits_non_zero - Ass...
+FAILED ../tests/test_outputs.py::test_start_out_of_bounds_exits_non_zero - As...
+FAILED ../tests/test_outputs.py::test_end_on_wall_exits_non_zero - AssertionE...
+FAILED ../tests/test_outputs.py::test_unreachable_maze_exits_non_zero_and_no_solution
+FAILED ../tests/test_outputs.py::test_solution_reaches_end_when_written - Ass...
+========================= 11 failed, 1 passed in 0.32s =========================

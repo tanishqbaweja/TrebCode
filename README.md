@@ -116,7 +116,7 @@ The verification pass exercised 1,534 passing Playwright cases across batches an
 
 ## Benchmarks
 
-See the [Trebell Native vs Muse Code results](BENCHMARKS.md#results) for four recorded readouts on `muse-spark-1.3-contributor`: task resolution, verifier differences, cost ratios, methodology and [task-level evidence](benchmarks/results/muse-code.json). The figures describe historical Native snapshots; task familiarity, retries and accounting limits are documented alongside the results.
+See the [Trebell Native vs Muse Code results](BENCHMARKS.md#results) for four recorded readouts on `muse-spark-1.3-contributor`: task resolution, verifier differences, cost ratios, methodology, [task-level evidence](benchmarks/results/muse-code.json) and [run logs](benchmarks/logs/README.md). The figures describe historical Native snapshots; task familiarity, retries and accounting limits are documented alongside the results.
 
 ## Documentation
 

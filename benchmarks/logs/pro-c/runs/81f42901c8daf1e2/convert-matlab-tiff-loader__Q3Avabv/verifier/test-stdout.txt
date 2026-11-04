@@ -1,0 +1,90 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [360 kB]
+Fetched 9398 kB in 8s (1176 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following NEW packages will be installed:
+  curl
+0 upgraded, 1 newly installed, 0 to remove and 41 not upgraded.
+Need to get 316 kB of archives.
+After this operation, 501 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 316 kB in 1s (441 kB/s)
+Selecting previously unselected package curl.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17057 files and directories currently installed.)
+Preparing to unpack .../curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 69ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 136ms
+Installed 5 packages in 12ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Resolved 10 packages in 1.20s
+Downloading scipy (33.7MiB)
+Downloading numpy (15.9MiB)
+Downloading pillow (6.8MiB)
+ Downloading pillow
+ Downloading numpy
+ Downloading scipy
+Prepared 3 packages in 1.90s
+Installed 3 packages in 123ms
+ + numpy==2.5.4
+ + pillow==13.0.0
+ + scipy==1.18.1
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 20 items
+
+../tests/test_outputs.py ....................                            [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_image_analysis_module_exists
+PASSED ../tests/test_outputs.py::test_load_image_function_signature
+PASSED ../tests/test_outputs.py::test_output_file_created_single_image
+PASSED ../tests/test_outputs.py::test_output_file_is_numpy_array
+PASSED ../tests/test_outputs.py::test_single_image_output_shape
+PASSED ../tests/test_outputs.py::test_python_output_matches_matlab_single_image
+PASSED ../tests/test_outputs.py::test_multiple_images_output_shape
+PASSED ../tests/test_outputs.py::test_python_output_matches_matlab_multiple_images
+PASSED ../tests/test_outputs.py::test_output_data_type
+PASSED ../tests/test_outputs.py::test_output_values_in_valid_range
+PASSED ../tests/test_outputs.py::test_custom_save_folder
+PASSED ../tests/test_outputs.py::test_output_file_overwrites_existing
+PASSED ../tests/test_outputs.py::test_handles_three_images
+PASSED ../tests/test_outputs.py::test_output_consistency_across_runs
+PASSED ../tests/test_outputs.py::test_output_file_location
+PASSED ../tests/test_outputs.py::test_output_array_not_empty
+PASSED ../tests/test_outputs.py::test_function_raises_error_on_no_files
+PASSED ../tests/test_outputs.py::test_output_matches_input_image_content
+PASSED ../tests/test_outputs.py::test_output_dimensions_match_expected
+PASSED ../tests/test_outputs.py::test_function_handles_sorted_files
+============================== 20 passed in 1.77s ==============================

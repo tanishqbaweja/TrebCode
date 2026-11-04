@@ -1,0 +1,37 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 24.3.1 -> 26.2.2
+[notice] To update, run: pip install --upgrade pip
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-9.0.2, pluggy-1.6.0
+rootdir: /tests
+plugins: anyio-4.12.0
+collected 22 items
+
+../tests/test_outputs.py ......................                          [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestPortfolioOutput::test_output_file_exists
+PASSED ../tests/test_outputs.py::TestPortfolioOutput::test_output_file_readable
+PASSED ../tests/test_outputs.py::TestPortfolioOutput::test_output_has_correct_dimension
+PASSED ../tests/test_outputs.py::TestPortfolioOutput::test_weights_are_finite
+PASSED ../tests/test_outputs.py::TestPortfolioConstraints::test_weights_sum_to_one
+PASSED ../tests/test_outputs.py::TestPortfolioConstraints::test_no_short_positions
+PASSED ../tests/test_outputs.py::TestPortfolioConstraints::test_max_weight_constraint
+PASSED ../tests/test_outputs.py::TestPortfolioQuality::test_mean_variance_objective_positive
+PASSED ../tests/test_outputs.py::TestPortfolioQuality::test_expected_return_positive
+PASSED ../tests/test_outputs.py::TestPortfolioQuality::test_portfolio_is_diversified
+PASSED ../tests/test_outputs.py::TestPortfolioQuality::test_portfolio_improves_on_equal_weight
+PASSED ../tests/test_outputs.py::TestOptimizationValidity::test_weights_are_optimized
+PASSED ../tests/test_outputs.py::TestOptimizationValidity::test_low_risk_compared_to_naive
+PASSED ../tests/test_outputs.py::TestOptimizationValidity::test_objective_better_than_random
+PASSED ../tests/test_outputs.py::TestOptimizationValidity::test_high_return_assets_have_more_weight
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_uses_correct_asset_count
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_weights_match_data_dimension
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_not_using_backup_data
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_extreme_concentrations
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_weights_precision
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_portfolio_risk_reasonable
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_sharpe_like_ratio
+============================== 22 passed in 0.23s ==============================

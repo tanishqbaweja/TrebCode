@@ -1,0 +1,111 @@
+Get:1 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:2 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:7 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:8 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:10 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Fetched 33.6 MB in 2min 27s (228 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+git is already the newest version (1:2.43.0-1ubuntu7.4).
+The following NEW packages will be installed:
+  curl libcurl4t64
+0 upgraded, 2 newly installed, 0 to remove and 57 not upgraded.
+Need to get 571 kB of archives.
+After this operation, 1487 kB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcurl4t64 amd64 8.5.0-2ubuntu10.16 [344 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.16 [226 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 571 kB in 2s (240 kB/s)
+Selecting previously unselected package libcurl4t64:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 10460 files and directories currently installed.)
+Preparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../curl_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.16) ...
+Setting up libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Setting up curl (8.5.0-2ubuntu10.16) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.4) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 42ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 82ms
+Installed 5 packages in 10ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 17 items
+
+../tests/test_outputs.py ...............F.                               [100%]
+
+=================================== FAILURES ===================================
+_____________________ test_summary_has_remediation_section _____________________
+
+    def test_summary_has_remediation_section():
+        content = Path(SUMMARY).read_text(encoding="utf-8")
+        assert "## Remediation" in content
+        for keyword in (
+            "Rotate exposed credentials",
+            "Audit access during exposure windows",
+            "Enforce environment variable usage",
+        ):
+>           assert keyword in content, f"remediation section should mention: {keyword}"
+E           AssertionError: remediation section should mention: Rotate exposed credentials
+E           assert 'Rotate exposed credentials' in '# Secrets Scan Summary\n\nFound 4 unique secret(s) in Git history of `/app/repo`.\n\n| Secret | File | Commit | Messa...credentials to environment variables or a secrets manager.\n4. Add pre-commit secret scanning to prevent recurrence.\n'
+
+/tests/test_outputs.py:196: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_result_file_exists_and_sorted
+PASSED ../tests/test_outputs.py::test_expected_secret_set
+PASSED ../tests/test_outputs.py::test_git_worktree_clean
+PASSED ../tests/test_outputs.py::test_metadata_file_structure
+PASSED ../tests/test_outputs.py::test_metadata_commit_contains_secret
+PASSED ../tests/test_outputs.py::test_metadata_sorted_by_time
+PASSED ../tests/test_outputs.py::test_raw_hits_structure
+PASSED ../tests/test_outputs.py::test_summary_contains_table_rows
+PASSED ../tests/test_outputs.py::test_scan_command_recreates_outputs
+PASSED ../tests/test_outputs.py::test_result_and_metadata_consistent
+PASSED ../tests/test_outputs.py::test_secrets_absent_in_worktree
+PASSED ../tests/test_outputs.py::test_metadata_commit_is_first_occurrence
+PASSED ../tests/test_outputs.py::test_raw_hits_cover_all_commits
+PASSED ../tests/test_outputs.py::test_scan_script_is_executable
+PASSED ../tests/test_outputs.py::test_raw_hits_sorted_by_commit_history
+PASSED ../tests/test_outputs.py::test_scan_command_idempotent_outputs
+FAILED ../tests/test_outputs.py::test_summary_has_remediation_section - Asser...
+========================= 1 failed, 16 passed in 0.61s =========================

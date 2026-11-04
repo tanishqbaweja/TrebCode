@@ -1,0 +1,516 @@
+{
+  "pairId": "terminal-bench-pro-pair-muse-spark-1-3-contributor-high-default-recover-and-sanitize-git-db-credential-20261031T105132Z",
+  "dataset": "terminal-bench-pro@1.0",
+  "task": "recover-and-sanitize-git-db-credential",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks",
+  "localTaskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\recover-and-sanitize-git-db-credential",
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-31T10:51:33.740Z",
+    "completed": true,
+    "local": true,
+    "qualifiedTask": "recover-and-sanitize-git-db-credential",
+    "taskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\recover-and-sanitize-git-db-credential",
+    "taskCount": 200,
+    "datasetVersion": "terminal-bench-pro@1.0",
+    "datasetContentHash": "9e8a53b6b7e770beaf22b60b415a5bea5483a72d641d2f93f2337e617d093b82",
+    "taskContentHash": "977534cd204eea164f09ce9efbfe574cdc585aaafaba8cd91ebd4ff70dff72df",
+    "files": 10,
+    "finishedAt": "2026-10-31T10:51:33.795Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeContextPolicy": {
+    "catalogContextWindow": null,
+    "operatingContextWindow": null,
+    "serverCompactionThreshold": null,
+    "serverCompactionArming": {
+      "armAtMaxObservedInputTokens": null,
+      "staysArmed": true
+    },
+    "retroactiveOpenAiReadCooling": true,
+    "catalogLookup": {
+      "outcome": "no window listed",
+      "window": null,
+      "status": null,
+      "reason": null
+    }
+  },
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "47c89953d18ce94d759ec0744045ab32795a0f41",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "nativePinnedNodeVersion": "22.23.3",
+  "nativePinnedNodeTarballSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+  "comparisonLanes": [
+    "native-meta"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "072fc7f788f6d478f6009119e0fb32fd2cdf2a6083496956feb72e4136d35838",
+  "nativeAdapterSha256": "f55f42d87fc73e76d33b3e2fd348e3fec3a8a9b5097b4cf51b7abc7dbe763951",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "072fc7f788f6d478f6009119e0fb32fd2cdf2a6083496956feb72e4136d35838",
+  "nativeMetaBundleNormalizedSha256": "b8f4c2032515a1a460bc2a04ebb3f3ed7b3a36c0a67f0a7eae0ffb3850277ac7",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124:t-bench-ubuntu-24-04",
+        "id": "sha256:8f1842fa67bef3818a97d89bc1dbcdc70898c73a533b92867bda39898c19f4fc",
+        "repoDigests": [
+          "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124@sha256:8f1842fa67bef3818a97d89bc1dbcdc70898c73a533b92867bda39898c19f4fc"
+        ]
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "native-meta",
+      "harness": "native",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z",
+      "status": "finished",
+      "startedAt": "2026-10-31T10:51:33.816Z",
+      "finishedAt": "2026-10-31T10:56:55.508Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-31T10:56:55.780Z",
+  "jobs": [
+    {
+      "harness": "native",
+      "label": "native-meta",
+      "agent": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+      "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 503301,
+      "cachedTokens": 460244,
+      "uncachedInputTokens": 43057,
+      "cacheHitPercent": 91.45,
+      "outputTokens": 18257,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.008877587999999999,
+      "apiEquivalentCostAsReportedUsd": 0.008877587999999999,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 503301,
+          "cachedInputTokens": 460244,
+          "uncachedInputTokens": 43057,
+          "outputTokens": 18257,
+          "reasoningTokens": 0
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0043057,
+        "cachedInputUsd": 0.000920488,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0036514,
+        "totalUsd": 0.008877587999999999,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 503301,
+            "cachedInputTokens": 460244,
+            "outputTokens": 18257,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.008877587999999999
+          }
+        },
+        "usageAccountingComplete": true,
+        "unaccountedProviderRequests": 0,
+        "totalUsdIsLowerBound": false
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0
+        },
+        "lowerBound": false
+      },
+      "wireModels": [
+        "muse-spark-1.3-contributor"
+      ],
+      "cachedOverInputRecords": 0,
+      "reward": 0,
+      "taskChecksum": "b514303c0315ccb99c46f8447c63fa00f1c1efd4669cbb5763b12d8124fc4d49",
+      "agentVersion": "trebell-native-harbor/1",
+      "setupMs": 14204,
+      "agentExecutionMs": 189228,
+      "verifierMs": 87234,
+      "modelTurns": 21,
+      "toolCalls": 20,
+      "providerRequests": 21,
+      "effectiveServiceTiers": [
+        "auto"
+      ],
+      "reasoningContext": "current_turn",
+      "effectiveReasoningContexts": [],
+      "reasoningOutputTokens": 11223,
+      "cacheWriteInputTokens": 0,
+      "cacheCarryover": {
+        "transitions": 20,
+        "priorRequestInputTokens": 461423,
+        "knownCachedPriorTokens": 419043,
+        "retainedKnownCachedTokens": 419043,
+        "lostKnownCachedTokens": 0,
+        "percent": 100
+      },
+      "strategy": {
+        "firstEditAtMs": null,
+        "editCount": 0,
+        "convergenceCheckpoints": 0,
+        "deliverableCheckpoints": 0,
+        "deliverableEscalations": 0,
+        "persistentArtifactSemanticAudits": 0,
+        "globalConstraintPlanningCheckpoints": 0,
+        "globalConstraintCommitBlocks": 0,
+        "globalConstraintCommitAudits": 0,
+        "batchEvidenceClosureAuditRequests": 0,
+        "batchEvidenceClosureAuditCompletions": 0,
+        "batchEvidenceClosureAuditBlocks": 0,
+        "batchEvidencePrecommitGateRequests": 0,
+        "batchEvidencePrecommitGateChecks": 0,
+        "batchEvidencePrecommitGateBlocks": 0,
+        "batchEvidencePrecommitGateRetries": 0,
+        "batchEvidencePrecommitGateOutputCapEvents": 0,
+        "batchEvidencePrecommitGateOutputCapRetries": 0,
+        "batchEvidencePrecommitGateOutputTokenBudget": 0,
+        "batchEvidencePostcommitGateSkips": 0,
+        "batchEvidenceCommitValidationCarryovers": 0,
+        "implementationPressureEvents": 0,
+        "actionOutputCaps": 21,
+        "actionOutputCapRelaxations": 0,
+        "convergenceCallsBlocked": 0,
+        "postEditProbeBatchCheckpoints": 0,
+        "postEditProbeCallsBlocked": 0,
+        "assumptionAuditCheckpoints": 0,
+        "abstractionBoundaryEscalations": 0,
+        "abstractionRepairVerificationCheckpoints": 0,
+        "abstractionRepairVerificationEvidence": 0,
+        "abstractionRepairVerificationGates": 0,
+        "abstractionRepairVerified": 0,
+        "abstractionRepairVerificationRejected": 0,
+        "residualStructureCheckpoints": 0,
+        "completionGateChecks": 0,
+        "completionGateContextCompactions": 0,
+        "completionGateControlMessagesDropped": 0,
+        "completionGateControlCharsDropped": 0,
+        "completionGateCachePrefixPreservations": 0,
+        "completionGateControlMessagesPreservedForCache": 0,
+        "completionGateControlCharsPreservedForCache": 0,
+        "completionGateOutputCapEvents": 0,
+        "completionGateOutputCapRetries": 0,
+        "completionGateOutputTokenBudget": 0,
+        "completionGateInvalidFailClosed": 0,
+        "completionArtifactConstraintAuditBlocks": 0,
+        "completionGateRecoveries": 0,
+        "completionRecoveryEvidenceUses": 0,
+        "completionRecoveryEvidenceCallsBlocked": 0,
+        "completionRecoveryPostEditVerificationUses": 0,
+        "completionRecoveryStrategyResets": 0,
+        "completionRecoveryResidualFactorizations": 0,
+        "completionRecoveryEditUses": 0,
+        "completionRecoveryUnsupportedEditsSkipped": 0,
+        "completionRecoveryCandidateSnapshots": 0,
+        "completionRecoverySnapshotAbsentPaths": 0,
+        "completionRecoveryIncumbentRestores": 0,
+        "completionRecoveryIncumbentRestoreFailures": 0,
+        "completionRecoveryExhaustions": 0,
+        "completionRecoveryTerminalRepairGraces": 0,
+        "completionRecoveryEvidenceThenEditWindows": 0,
+        "completionRecoveryDependentEditVerificationBlocks": 0,
+        "completionRecoveryEditsBlocked": 0,
+        "completionRecoveryNonEditCallsBlocked": 0,
+        "completionRecoveryEditDebtsUnpaid": 0,
+        "postEditEvidenceCheckpoints": 0,
+        "postEditEvidenceEscalations": 0,
+        "postEditEvidenceCallsBlocked": 0,
+        "revisionChurnEscalations": 0,
+        "revisionChurnEditsBlocked": 0,
+        "selfAdmittedVerificationGaps": 0,
+        "selfAdmittedCompletionGaps": 0
+      },
+      "budgets": {
+        "maxModelTurns": 500,
+        "maxToolCalls": 5000,
+        "maxWallTimeMs": null
+      },
+      "contextPolicy": {
+        "catalogContextWindow": null,
+        "operatingContextWindow": null,
+        "serverCompactionThreshold": null,
+        "serverCompactionArming": {
+          "armAtMaxObservedInputTokens": null,
+          "staysArmed": true
+        },
+        "retroactiveOpenAiReadCooling": true,
+        "catalogLookup": {
+          "outcome": "no window listed",
+          "window": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "trebell-native__muse-spark-1.3-contributor__adhoc": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 0
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "0.0": [
+                "recover-and-sanitize-git-db-cred__iPwxzdR"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 0,
+        "passed": 0,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 0
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 0,
+        "writtenNetworkCode": 0,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 16,
+        "verifierPathReads": 0,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 18,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 15,
+            "snippet": "bash -lc pwd; ls -la; ls -la repo/; cat repo/README.md 2>&1; cat repo/temp_notes.txt 2>&1; git -C repo status 2>&1 | head -n 100; git -C repo branch -a 2>&1; git -C repo log --all --oneline --graph --decorate 2>&1 | head -n 100",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 20,
+            "snippet": "bash -lc git -C repo log --all --full-history -p 2>&1 | head -n 500\necho \"====BRANCHES====\"\ngit -C repo show-ref 2>&1\necho \"====STASH====\"\ngit -C repo stash list 2>&1\necho \"====REFLOG====\"\ngit -C repo reflog --all 2>&1 | head -n 100\necho \"=",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 25,
+            "snippet": "bash -lc echo '--- base64 decode ---'; echo 'ZGJfcGFzc3dvcmRbYUIzeFk5bUsycEw3cVI1c1Rd' | base64 -d; echo; echo '--- fsck ---'; git -C repo fsck --full --unreachable --dangling --no-reflogs 2>&1 | head -n 100; echo '--- fsck with reflogs ---",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 30,
+            "snippet": "bash -lc echo '=== 6ea9724 vs 1ddd5a4 ==='; git -C repo show 6ea9724 --stat 2>&1; git -C repo show 6ea9724 2>&1 | head -n 80; echo '==='; git -C repo show 1ddd5a4 2>&1 | head -n 80; echo '=== stash commits ==='; git -C repo show 9014f32 --s",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 35,
+            "snippet": "bash -lc echo '=== git log all -p full ==='; git -C repo log --all --full-history -p 2>&1 | grep -n \"db_password\" | head -n 30; echo '=== git cat-file unreachable via verify-pack ==='; ls repo/.git/objects/pack/ 2>&1; git -C repo verify-pac",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 40,
+            "snippet": "bash -lc git -C repo log --all --graph --oneline --decorate 2>&1\necho '=== parents ==='\ngit -C repo log --all --pretty='%H parents:%P %s %d' 2>&1\necho '=== show 6ea9724 detail ==='\ngit -C repo cat-file -p 6ea9724 2>&1\ngit -C repo ls-tree -r",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 45,
+            "snippet": "bash -lc echo '=== blob contents ==='; git -C repo cat-file -p d59b776249fbc02043aa7a77f96a8989452baf93 2>&1; echo '---'; git -C repo cat-file -p 82b4c952b918c135d882e27297ab2a2044cd05fe 2>&1; echo '---'; git -C repo cat-file -p d4d09a489ed",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-recover-and-sanitize-git-db-credential-20261031T105132Z/recover-and-sanitize-git-db-cred__iPwxzdR/agent/trebell-native-events.jsonl",
+            "line": 50,
+            "snippet": "bash -lc git -C repo tag 2>&1; echo '--- notes refs ---'; git -C repo for-each-ref 2>&1; echo '--- replace ---'; git -C repo replace -l 2>&1; ls -la repo/.git/refs/ 2>&1; find repo/.git/refs -type f 2>&1; echo '--- stash ---'; git -C repo s",
+            "networkFailureSeen": false
+          }
+        ]
+      }
+    }
+  ]
+}

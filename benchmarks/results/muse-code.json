@@ -9604,6 +9604,7 @@
   ],
   "evidence": {
     "contents": "Recorded per-task outcomes, attempts, usage totals and costs for the four sealed readouts.",
-    "original_trial_logs_included": false
+    "original_trial_logs_included": true,
+    "log_index": "../logs/README.md"
   }
 }

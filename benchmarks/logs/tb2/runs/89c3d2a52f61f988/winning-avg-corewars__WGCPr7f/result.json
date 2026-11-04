@@ -1,0 +1,255 @@
+{
+    "id": "ffab1baa-83f5-463a-adb1-de1c5e79b513",
+    "task_name": "terminal-bench/winning-avg-corewars",
+    "trial_name": "winning-avg-corewars__WGCPr7f",
+    "trial_uri": "file:///H:/TrebellExp-muse-d/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-winning-avg-corewars-20261030T182831Z/winning-avg-corewars__WGCPr7f",
+    "task_id": {
+        "org": "terminal-bench",
+        "name": "winning-avg-corewars",
+        "ref": "sha256:22bacd15f5063699f642a2e2c0a192865eb41924d4b35d8ddabf574debb6773c"
+    },
+    "source": "terminal-bench/terminal-bench-2",
+    "task_checksum": "a856b2c25a74b45d40e05154d8c76e2a02a294739bd2d7c87bd08811d4df4a76",
+    "config": {
+        "task": {
+            "path": null,
+            "git_url": null,
+            "git_commit_id": null,
+            "name": "terminal-bench/winning-avg-corewars",
+            "ref": "sha256:22bacd15f5063699f642a2e2c0a192865eb41924d4b35d8ddabf574debb6773c",
+            "overwrite": false,
+            "download_dir": null,
+            "source": "terminal-bench/terminal-bench-2"
+        },
+        "trial_name": "winning-avg-corewars__WGCPr7f",
+        "trials_dir": "H:\\TrebellExp-muse-d\\.harbor-jobs\\tb2-native-meta-muse-spark-1-3-contributor-high-winning-avg-corewars-20261030T182831Z",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+            "import_path": null,
+            "model_name": "meta/muse-spark-1.3-contributor",
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {
+                "reasoning_effort": "high"
+            },
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "UV_INSTALLER_GITHUB_BASE_URL": "http://host.docker.internal:18090/gh",
+                "UV_PYTHON_INSTALL_MIRROR": "http://host.docker.internal:18090/gh/astral-sh/python-build-standalone/releases/download",
+                "UV_DEFAULT_INDEX": "http://host.docker.internal:18090/pypi/simple",
+                "PIP_INDEX_URL": "http://host.docker.internal:18090/pypi/simple",
+                "PIP_TRUSTED_HOST": "host.docker.internal"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "89a8553a-ecf3-4fc8-b37c-0c3aab1d2557",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "trebell-native",
+        "version": "trebell-native-harbor/1",
+        "model_info": {
+            "name": "muse-spark-1.3-contributor",
+            "provider": "meta"
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 4140991,
+        "n_cache_tokens": 3962710,
+        "n_output_tokens": 95731,
+        "cost_usd": null,
+        "model_usage": {
+            "meta/muse-spark-1.3-contributor": {
+                "n_input_tokens": 4140991,
+                "n_cache_tokens": 3962710,
+                "n_output_tokens": 95731,
+                "cost_usd": null
+            }
+        },
+        "rollout_details": null,
+        "metadata": {
+            "trebell_native": {
+                "model_turns": 55,
+                "tool_calls": 54,
+                "provider_requests": 55,
+                "reasoning_effort": "high",
+                "service_tier": "default",
+                "effective_service_tiers": [
+                    "auto"
+                ],
+                "reasoning_context": "current_turn",
+                "effective_reasoning_contexts": [],
+                "reasoning_output_tokens": 81428,
+                "cache_write_input_tokens": 0,
+                "cache_carryover": {
+                    "transitions": 54,
+                    "priorRequestInputTokens": 4014080,
+                    "knownCachedPriorTokens": 3836645,
+                    "retainedKnownCachedTokens": 3789300,
+                    "lostKnownCachedTokens": 47345,
+                    "percent": 98.766
+                },
+                "strategy": {
+                    "firstEditAtMs": 155427,
+                    "editCount": 3,
+                    "convergenceCheckpoints": 0,
+                    "deliverableCheckpoints": 0,
+                    "deliverableEscalations": 0,
+                    "persistentArtifactSemanticAudits": 0,
+                    "globalConstraintPlanningCheckpoints": 0,
+                    "globalConstraintCommitBlocks": 0,
+                    "globalConstraintCommitAudits": 0,
+                    "batchEvidenceClosureAuditRequests": 0,
+                    "batchEvidenceClosureAuditCompletions": 0,
+                    "batchEvidenceClosureAuditBlocks": 0,
+                    "batchEvidencePrecommitGateRequests": 0,
+                    "batchEvidencePrecommitGateChecks": 0,
+                    "batchEvidencePrecommitGateBlocks": 0,
+                    "batchEvidencePrecommitGateRetries": 0,
+                    "batchEvidencePrecommitGateOutputCapEvents": 0,
+                    "batchEvidencePrecommitGateOutputCapRetries": 0,
+                    "batchEvidencePrecommitGateOutputTokenBudget": 0,
+                    "batchEvidencePostcommitGateSkips": 0,
+                    "batchEvidenceCommitValidationCarryovers": 0,
+                    "implementationPressureEvents": 0,
+                    "actionOutputCaps": 55,
+                    "actionOutputCapRelaxations": 0,
+                    "convergenceCallsBlocked": 0,
+                    "postEditProbeBatchCheckpoints": 0,
+                    "postEditProbeCallsBlocked": 0,
+                    "assumptionAuditCheckpoints": 0,
+                    "abstractionBoundaryEscalations": 0,
+                    "abstractionRepairVerificationCheckpoints": 0,
+                    "abstractionRepairVerificationEvidence": 0,
+                    "abstractionRepairVerificationGates": 0,
+                    "abstractionRepairVerified": 0,
+                    "abstractionRepairVerificationRejected": 0,
+                    "residualStructureCheckpoints": 0,
+                    "completionGateChecks": 0,
+                    "completionGateContextCompactions": 0,
+                    "completionGateControlMessagesDropped": 0,
+                    "completionGateControlCharsDropped": 0,
+                    "completionGateCachePrefixPreservations": 0,
+                    "completionGateControlMessagesPreservedForCache": 0,
+                    "completionGateControlCharsPreservedForCache": 0,
+                    "completionGateOutputCapEvents": 0,
+                    "completionGateOutputCapRetries": 0,
+                    "completionGateOutputTokenBudget": 0,
+                    "completionGateInvalidFailClosed": 0,
+                    "completionArtifactConstraintAuditBlocks": 0,
+                    "completionGateRecoveries": 0,
+                    "completionRecoveryEvidenceUses": 0,
+                    "completionRecoveryEvidenceCallsBlocked": 0,
+                    "completionRecoveryPostEditVerificationUses": 0,
+                    "completionRecoveryStrategyResets": 0,
+                    "completionRecoveryResidualFactorizations": 0,
+                    "completionRecoveryEditUses": 0,
+                    "completionRecoveryUnsupportedEditsSkipped": 0,
+                    "completionRecoveryCandidateSnapshots": 0,
+                    "completionRecoverySnapshotAbsentPaths": 0,
+                    "completionRecoveryIncumbentRestores": 0,
+                    "completionRecoveryIncumbentRestoreFailures": 0,
+                    "completionRecoveryExhaustions": 0,
+                    "completionRecoveryTerminalRepairGraces": 0,
+                    "completionRecoveryEvidenceThenEditWindows": 0,
+                    "completionRecoveryDependentEditVerificationBlocks": 0,
+                    "completionRecoveryEditsBlocked": 0,
+                    "completionRecoveryNonEditCallsBlocked": 0,
+                    "completionRecoveryEditDebtsUnpaid": 0,
+                    "postEditEvidenceCheckpoints": 0,
+                    "postEditEvidenceEscalations": 0,
+                    "postEditEvidenceCallsBlocked": 0,
+                    "revisionChurnEscalations": 0,
+                    "revisionChurnEditsBlocked": 0,
+                    "selfAdmittedVerificationGaps": 0,
+                    "selfAdmittedCompletionGaps": 0
+                },
+                "budgets": {
+                    "maxModelTurns": 500,
+                    "maxToolCalls": 5000,
+                    "maxWallTimeMs": null
+                },
+                "context_policy": {
+                    "catalogContextWindow": null,
+                    "operatingContextWindow": null,
+                    "serverCompactionThreshold": null,
+                    "serverCompactionArming": {
+                        "armAtMaxObservedInputTokens": null,
+                        "staysArmed": true
+                    },
+                    "retroactiveOpenAiReadCooling": true,
+                    "catalogLookup": {
+                        "outcome": "no window listed",
+                        "window": null,
+                        "status": null,
+                        "reason": null
+                    }
+                }
+            }
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 1.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": null,
+    "started_at": "2026-10-30T18:28:40.839232Z",
+    "finished_at": "2026-10-30T18:54:44.073191Z",
+    "environment_setup": {
+        "started_at": "2026-10-30T18:28:40.962440Z",
+        "finished_at": "2026-10-30T18:28:42.896738Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-10-30T18:28:42.896738Z",
+        "finished_at": "2026-10-30T18:28:49.164718Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-10-30T18:28:49.166229Z",
+        "finished_at": "2026-10-30T18:53:09.784995Z"
+    },
+    "verifier": {
+        "started_at": "2026-10-30T18:53:09.793598Z",
+        "finished_at": "2026-10-30T18:54:37.307907Z"
+    },
+    "step_results": null
+}

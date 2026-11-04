@@ -1,0 +1,17 @@
+Skipping image OS validation for hb__18311b9c2b2b422e1f9481397290f7d6: docker inspect returned 1
+Running command: for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do [ -s "$f" ] && { echo present; exit 0; }; done; echo missing
+Command outputs captured
+Running command: mkdir -p /installed-agent /installed-agent/tool-output; chmod 0777 /installed-agent/tool-output
+Command outputs captured
+Running command: set -euo pipefail; if command -v bun >/dev/null 2>&1 && bun /installed-agent/trebell-native-agent.mjs --version >/dev/null 2>&1; then printf '%s\n' bun; elif command -v node >/dev/null 2>&1 && node -e "process.exit(typeof fetch === 'function' ? 0 : 1)" >/dev/null 2>&1 && node /installed-agent/trebell-native-agent.mjs --version >/dev/null 2>&1; then printf '%s\n' node; elif command -v node >/dev/null 2>&1; then printf '%s\n' image-node; else exit 42; fi
+Command failed
+No compatible preinstalled Bun/Node runtime; installing Node 22 fallback.
+Running command: set -euo pipefail; rm -rf /opt/trebell-node; mkdir -p /opt/trebell-node; tar -xzf /tmp/trebell-node-linux-x64.tar.gz -C /opt/trebell-node --strip-components=1; ln -sf /opt/trebell-node/bin/node /usr/local/bin/node; ln -sf /opt/trebell-node/bin/npm /usr/local/bin/npm; ln -sf /opt/trebell-node/bin/npx /usr/local/bin/npx; if [ -e /opt/trebell-node/bin/corepack ]; then ln -sf /opt/trebell-node/bin/corepack /usr/local/bin/corepack; fi; rm -f /tmp/trebell-node-linux-x64.tar.gz; actual="$(node --version)"; test "$actual" = v22.23.3 || { echo "Unexpected Node version: $actual" >&2; exit 1; }
+Command outputs captured
+Running command: node /installed-agent/trebell-native-agent.mjs --version >/dev/null 2>&1
+Command outputs captured
+Running command: printf '%s\n' node > /installed-agent/runtime; chmod 0644 /installed-agent/runtime
+Command outputs captured
+Running command: set -o pipefail; runtime="$(cat /installed-agent/runtime 2>/dev/null || true)"; . ~/.nvm/nvm.sh >/dev/null 2>&1 || true; export META_API_KEY="$(cat /installed-agent/meta-api-key)"; rm -f /installed-agent/meta-api-key; if [ "$runtime" = "bun" ]; then runtime_cmd=bun; elif [ "$runtime" = /opt/trebell-node/bin/node ]; then runtime_cmd="$runtime"; else runtime_cmd=node; fi; runtime_cmd="$(command -v "$runtime_cmd" || printf %s "$runtime_cmd")"; trebell_path="$PATH"; eval "$(bash -lc 'export -p' 2>/dev/null)" 2>/dev/null || true; trebell_login_path="$PATH"; PATH="$trebell_path"; trebell_prefix=""; IFS=:; for entry in $trebell_login_path; do if [ -n "$entry" ]; then case ":$trebell_path:" in *":$entry:"*) ;; *) case ":$trebell_prefix:" in *":$entry:"*) ;; *) trebell_prefix="${trebell_prefix:+$trebell_prefix:}$entry";; esac;; esac; fi; done; unset IFS; if [ -n "$trebell_prefix" ]; then PATH="$trebell_prefix:$PATH"; fi; export PATH; "$runtime_cmd" /installed-agent/trebell-native-agent.mjs /installed-agent/instruction.txt 2>&1 | tee /logs/agent/trebell-native.txt; pipeline_status=$?; if [ "$pipeline_status" -eq 0 ]; then exit 0; fi; if [ -s /logs/agent/trebell-native-metrics.json ] && "$runtime_cmd" -e 'const fs=require("fs"); const metrics=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.exit(metrics.error===null?0:1)' /logs/agent/trebell-native-metrics.json; then echo "Trebell Native runner returned non-zero after persisting clean metrics; continuing to Harbor artifact collection and verification." >&2; exit 0; fi; exit "$pipeline_status"
+Command outputs captured
+Collecting main service artifacts

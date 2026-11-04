@@ -1,0 +1,347 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [360 kB]
+Fetched 9398 kB in 37s (255 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+Suggested packages:
+  libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+  libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql
+The following NEW packages will be installed:
+  curl libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+0 upgraded, 13 newly installed, 0 to remove and 49 not upgraded.
+Need to get 1837 kB of archives.
+After this operation, 4546 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main amd64 libbrotli1 amd64 1.0.9-2+deb12u1 [275 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg-10+deb12u1 [20.5 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-2 amd64 2.1.28+dfsg-10+deb12u1 [59.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 libldap-2.5-0 amd64 2.5.13+dfsg-5 [183 kB]
+Get:5 http://deb.debian.org/debian bookworm/main amd64 libnghttp2-14 amd64 1.52.0-1+deb12u3 [72.4 kB]
+Get:6 http://deb.debian.org/debian bookworm/main amd64 libpsl5 amd64 0.21.2-1 [58.7 kB]
+Get:7 http://deb.debian.org/debian bookworm/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b2 [60.8 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main amd64 libssh2-1 amd64 1.10.0-3+deb12u1 [176 kB]
+Get:9 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:10 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main amd64 libldap-common all 2.5.13+dfsg-5 [29.3 kB]
+Get:12 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules amd64 2.1.28+dfsg-10+deb12u1 [66.9 kB]
+Get:13 http://deb.debian.org/debian bookworm/main amd64 publicsuffix all 20230209.2326-1 [126 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 1837 kB in 27s (67.8 kB/s)
+Selecting previously unselected package libbrotli1:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 7590 files and directories currently installed.)
+Preparing to unpack .../00-libbrotli1_1.0.9-2+deb12u1_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../01-libsasl2-modules-db_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../02-libsasl2-2_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libldap-2.5-0:amd64.
+Preparing to unpack .../03-libldap-2.5-0_2.5.13+dfsg-5_amd64.deb ...
+Unpacking libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../04-libnghttp2-14_1.52.0-1+deb12u3_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:amd64.
+Preparing to unpack .../05-libpsl5_0.21.2-1_amd64.deb ...
+Unpacking libpsl5:amd64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../06-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:amd64.
+Preparing to unpack .../07-libssh2-1_1.10.0-3+deb12u1_amd64.deb ...
+Unpacking libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl4:amd64.
+Preparing to unpack .../08-libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../09-curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../10-libldap-common_2.5.13+dfsg-5_all.deb ...
+Unpacking libldap-common (2.5.13+dfsg-5) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../11-libsasl2-modules_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../12-publicsuffix_20230209.2326-1_all.deb ...
+Unpacking publicsuffix (20230209.2326-1) ...
+Setting up libpsl5:amd64 (0.21.2-1) ...
+Setting up libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Setting up libldap-common (2.5.13+dfsg-5) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Setting up publicsuffix (20230209.2326-1) ...
+Setting up libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u9) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 44ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 79ms
+Installed 5 packages in 11ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Resolved 12 packages in 305ms
+Downloading numpy (15.9MiB)
+Downloading pandas (11.4MiB)
+Downloading scipy (33.7MiB)
+ Downloading numpy
+ Downloading pandas
+ Downloading scipy
+Prepared 5 packages in 2.45s
+Installed 5 packages in 121ms
+ + numpy==2.5.4
+ + pandas==3.1.0
+ + python-dateutil==4.0.0
+ + scipy==1.18.1
+ + tzdata==2026.6
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 20 items
+
+../tests/test_outputs.py .F.F.FFFFFFF..FFF.FF                            [100%]
+
+=================================== FAILURES ===================================
+________________________ test_csv_structure_and_format _________________________
+
+    def test_csv_structure_and_format():
+        csv_path = "/app/metrics_summary.csv"
+        assert os.path.exists(csv_path), "metrics_summary.csv does not exist"
+    
+        with open(csv_path, 'r') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+    
+>       assert len(rows) == 16, f"Expected 16 rows (1 header + 15 data), got {len(rows)}"
+E       AssertionError: Expected 16 rows (1 header + 15 data), got 6
+E       assert 6 == 16
+E        +  where 6 = len([['period', '2xx_success', '4xx_client_error', '5xx_server_error'], ['today', '125', '24', '8'], ['last_7_days', '535'...13', '37'], ['last_30_days', '900', '173', '59'], ['month_to_date', '750', '143', '46'], ['total', '900', '173', '59']])
+
+/tests/test_outputs.py:19: AssertionError
+_______________________ test_csv_all_counts_non_negative _______________________
+
+    def test_csv_all_counts_non_negative():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+>               count = int(row['count'])
+                            ^^^^^^^^^^^^
+E               KeyError: 'count'
+
+/tests/test_outputs.py:47: KeyError
+_________________________ test_csv_categories_complete _________________________
+
+    def test_csv_categories_complete():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           categories = set(row['status_category'] for row in reader)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:63: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = <csv.DictReader object at 0x72a7bfbbd810>
+
+>   categories = set(row['status_category'] for row in reader)
+                     ^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'status_category'
+
+/tests/test_outputs.py:63: KeyError
+______________________ test_csv_all_combinations_present _______________________
+
+    def test_csv_all_combinations_present():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           combinations = set((row['period'], row['status_category']) for row in reader)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:72: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = <csv.DictReader object at 0x72a7bf93c510>
+
+>   combinations = set((row['period'], row['status_category']) for row in reader)
+                                       ^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'status_category'
+
+/tests/test_outputs.py:72: KeyError
+__________________________ test_count_accuracy_today ___________________________
+
+    def test_count_accuracy_today():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:85: KeyError
+_______________________ test_count_accuracy_last_7_days ________________________
+
+    def test_count_accuracy_last_7_days():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:95: KeyError
+_______________________ test_count_accuracy_last_30_days _______________________
+
+    def test_count_accuracy_last_30_days():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:105: KeyError
+______________________ test_count_accuracy_month_to_date _______________________
+
+    def test_count_accuracy_month_to_date():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:115: KeyError
+__________________________ test_count_accuracy_total ___________________________
+
+    def test_count_accuracy_total():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:125: KeyError
+_______________________ test_today_subset_of_last_7_days _______________________
+
+    def test_today_subset_of_last_7_days():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:149: KeyError
+___________________ test_last_7_days_subset_of_last_30_days ____________________
+
+    def test_last_7_days_subset_of_last_30_days():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:160: KeyError
+______________________ test_month_to_date_subset_of_total ______________________
+
+    def test_month_to_date_subset_of_total():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+>           data = {(row['period'], row['status_category']): int(row['count']) for row in reader}
+                                    ^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'status_category'
+
+/tests/test_outputs.py:171: KeyError
+_________________________ test_csv_column_names_exact __________________________
+
+    def test_csv_column_names_exact():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+    
+>       assert fieldnames == ['period', 'status_category', 'count'], f"Column names should be ['period', 'status_category', 'count'], got {fieldnames}"
+E       AssertionError: Column names should be ['period', 'status_category', 'count'], got ['period', '2xx_success', '4xx_client_error', '5xx_server_error']
+E       assert ['period', '2...server_error'] == ['period', 's...ory', 'count']
+E         
+E         At index 1 diff: '2xx_success' != 'status_category'
+E         Left contains one more item: '5xx_server_error'
+E         Use -v to get more diff
+
+/tests/test_outputs.py:190: AssertionError
+_________________________ test_all_counts_are_integers _________________________
+
+    def test_all_counts_are_integers():
+        csv_path = "/app/metrics_summary.csv"
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+>                   count = int(row['count'])
+                                ^^^^^^^^^^^^
+E                   KeyError: 'count'
+
+/tests/test_outputs.py:198: KeyError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_csv_file_exists
+PASSED ../tests/test_outputs.py::test_csv_no_empty_rows
+PASSED ../tests/test_outputs.py::test_csv_periods_complete
+PASSED ../tests/test_outputs.py::test_csv_readable
+PASSED ../tests/test_outputs.py::test_csv_valid_format
+PASSED ../tests/test_outputs.py::test_csv_file_size_reasonable
+FAILED ../tests/test_outputs.py::test_csv_structure_and_format - AssertionErr...
+FAILED ../tests/test_outputs.py::test_csv_all_counts_non_negative - KeyError:...
+FAILED ../tests/test_outputs.py::test_csv_categories_complete - KeyError: 'st...
+FAILED ../tests/test_outputs.py::test_csv_all_combinations_present - KeyError...
+FAILED ../tests/test_outputs.py::test_count_accuracy_today - KeyError: 'statu...
+FAILED ../tests/test_outputs.py::test_count_accuracy_last_7_days - KeyError: ...
+FAILED ../tests/test_outputs.py::test_count_accuracy_last_30_days - KeyError:...
+FAILED ../tests/test_outputs.py::test_count_accuracy_month_to_date - KeyError...
+FAILED ../tests/test_outputs.py::test_count_accuracy_total - KeyError: 'statu...
+FAILED ../tests/test_outputs.py::test_today_subset_of_last_7_days - KeyError:...
+FAILED ../tests/test_outputs.py::test_last_7_days_subset_of_last_30_days - Ke...
+FAILED ../tests/test_outputs.py::test_month_to_date_subset_of_total - KeyErro...
+FAILED ../tests/test_outputs.py::test_csv_column_names_exact - AssertionError...
+FAILED ../tests/test_outputs.py::test_all_counts_are_integers - KeyError: 'co...
+========================= 14 failed, 6 passed in 0.12s =========================

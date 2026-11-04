@@ -1,0 +1,39 @@
+{
+    "id": "89a8553a-ecf3-4fc8-b37c-0c3aab1d2557",
+    "started_at": "2026-10-30T23:58:40.682877",
+    "updated_at": "2026-10-31T00:24:44.081270",
+    "finished_at": "2026-10-31T00:24:44.081270",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "trebell-native__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "winning-avg-corewars__WGCPr7f"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 4140991,
+        "n_cache_tokens": 3962710,
+        "n_output_tokens": 95731,
+        "cost_usd": null
+    }
+}

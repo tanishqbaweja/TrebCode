@@ -1,0 +1,240 @@
+{
+    "id": "884c00dc-317b-4309-98d9-d86c7cb966df",
+    "task_name": "decrypt-and-restore-backup-fragments",
+    "trial_name": "decrypt-and-restore-backup-fragm__hgq2hJ8",
+    "trial_uri": "file:///H:/TrebellExp-muse-q/.harbor-jobs/terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-decrypt-and-restore-backup-fragments-20261102T014921Z/decrypt-and-restore-backup-fragm__hgq2hJ8",
+    "task_id": {
+        "path": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\decrypt-and-restore-backup-fragments"
+    },
+    "source": null,
+    "task_checksum": "c4af60afcda70ccbf1f2cd56ad1de35806ffcf9f69ca767d1e86cf3549f9b09d",
+    "config": {
+        "task": {
+            "path": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\decrypt-and-restore-backup-fragments",
+            "git_url": null,
+            "git_commit_id": null,
+            "name": null,
+            "ref": null,
+            "overwrite": false,
+            "download_dir": null,
+            "source": null
+        },
+        "trial_name": "decrypt-and-restore-backup-fragm__hgq2hJ8",
+        "trials_dir": "H:\\TrebellExp-muse-q\\.harbor-jobs\\terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-decrypt-and-restore-backup-fragments-20261102T014921Z",
+        "install_only": false,
+        "timeout_multiplier": 1.0,
+        "agent_timeout_multiplier": null,
+        "verifier_timeout_multiplier": null,
+        "agent_setup_timeout_multiplier": 3.0,
+        "environment_build_timeout_multiplier": null,
+        "agent": {
+            "name": "benchmarks.harbor.pinned_muse_agent:PinnedMuseAgent",
+            "import_path": null,
+            "model_name": "meta/muse-spark-1.3-contributor",
+            "n_concurrent": null,
+            "concurrency_group": null,
+            "skills": [],
+            "override_timeout_sec": null,
+            "override_setup_timeout_sec": null,
+            "max_timeout_sec": null,
+            "resume_trajectory": false,
+            "load_trajectory": null,
+            "extra_allowed_hosts": [],
+            "kwargs": {
+                "reasoning_effort": "high"
+            },
+            "mcp_servers": []
+        },
+        "user_agent": null,
+        "environment": {
+            "type": "docker",
+            "import_path": null,
+            "force_build": false,
+            "delete": true,
+            "cpu_enforcement_policy": "auto",
+            "memory_enforcement_policy": "auto",
+            "override_cpus": null,
+            "override_memory_mb": null,
+            "override_storage_mb": null,
+            "override_gpus": null,
+            "override_tpu": null,
+            "mounts": null,
+            "extra_docker_compose": [],
+            "kwargs": {},
+            "extra_allowed_hosts": []
+        },
+        "verifier": {
+            "override_timeout_sec": null,
+            "max_timeout_sec": null,
+            "env": {
+                "UV_INSTALLER_GITHUB_BASE_URL": "http://host.docker.internal:18090/gh",
+                "UV_PYTHON_INSTALL_MIRROR": "http://host.docker.internal:18090/gh/astral-sh/python-build-standalone/releases/download",
+                "UV_DEFAULT_INDEX": "http://host.docker.internal:18090/pypi/simple",
+                "PIP_INDEX_URL": "http://host.docker.internal:18090/pypi/simple",
+                "PIP_TRUSTED_HOST": "host.docker.internal"
+            },
+            "disable": false
+        },
+        "artifacts": [],
+        "extra_instruction_paths": [],
+        "extra_instructions": [],
+        "job_id": "23c07ae6-6d08-4e80-9358-bf0a3ba9f0b6",
+        "source_trial": null
+    },
+    "agent_info": {
+        "name": "muse-code",
+        "version": "1.4.14-R7309.1",
+        "model_info": {
+            "name": "muse-spark-1.3-contributor",
+            "provider": "meta"
+        }
+    },
+    "agent_result": {
+        "n_input_tokens": 271194,
+        "n_cache_tokens": 133414,
+        "n_output_tokens": 5784,
+        "cost_usd": null,
+        "model_usage": {
+            "meta/muse-spark-1.3-contributor": {
+                "n_input_tokens": 271194,
+                "n_cache_tokens": 133414,
+                "n_output_tokens": 5784,
+                "cost_usd": null
+            }
+        },
+        "rollout_details": null,
+        "metadata": {
+            "muse_code": {
+                "session_id": "e47d1f68-126d-4e44-b653-e42013b5cb0f",
+                "exit_status": 0,
+                "terminal": {
+                    "terminal": "completed",
+                    "reason": null
+                },
+                "reasoning_tokens": 2868,
+                "usage_source": "session-logs",
+                "usage_accounting_complete": true,
+                "run_usage_matches_main": true,
+                "by_role": {
+                    "main": {
+                        "input_tokens": 157123,
+                        "cached_tokens": 63330,
+                        "output_tokens": 1912,
+                        "reasoning_tokens": 274
+                    },
+                    "observers": {
+                        "input_tokens": 114071,
+                        "cached_tokens": 70084,
+                        "output_tokens": 3872,
+                        "reasoning_tokens": 2594
+                    },
+                    "subagents": {
+                        "input_tokens": 0,
+                        "cached_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_tokens": 0
+                    }
+                },
+                "calls": {
+                    "main": 5,
+                    "observers": 8,
+                    "subagents": 0
+                },
+                "models": [
+                    "muse-spark-1.3-contributor"
+                ],
+                "builds": [
+                    "1.4.14 (dec7d7497f)"
+                ],
+                "active_tools": [
+                    "workflow",
+                    "read_file",
+                    "search",
+                    "write_file",
+                    "edit_file",
+                    "read_memory",
+                    "add_memory",
+                    "edit_memory",
+                    "work_stop",
+                    "work_list",
+                    "bash",
+                    "bash_input",
+                    "monitor",
+                    "cron_create",
+                    "cron_delete",
+                    "cron_list",
+                    "get_goal",
+                    "create_goal",
+                    "update_goal",
+                    "report_progress",
+                    "image_generation",
+                    "subagent_spawn",
+                    "subagent_status",
+                    "subagent_send_message",
+                    "subagent_wait",
+                    "subagent_read_result",
+                    "subagent_cancel",
+                    "read_skill",
+                    "work_status",
+                    "snooze_reminder",
+                    "write_todos"
+                ],
+                "reminder_roster": [
+                    {
+                        "id": "skill-reminder",
+                        "model": "same-as-main",
+                        "reasoning_effort": "low",
+                        "blocking": null
+                    },
+                    {
+                        "id": "todo-reminder",
+                        "model": "same-as-main",
+                        "reasoning_effort": "medium",
+                        "blocking": null
+                    },
+                    {
+                        "id": "goal-reminder",
+                        "model": "same-as-main",
+                        "reasoning_effort": "high",
+                        "blocking": true
+                    },
+                    {
+                        "id": "verify-reminder",
+                        "model": "same-as-main",
+                        "reasoning_effort": "high",
+                        "blocking": true
+                    }
+                ],
+                "rate_limit_lines": 0,
+                "problems": [],
+                "key_found_in_logs": []
+            }
+        }
+    },
+    "verifier_result": {
+        "rewards": {
+            "reward": 1.0
+        }
+    },
+    "verifier_environment_mode": "shared",
+    "exception_info": null,
+    "started_at": "2026-11-02T01:49:26.394666Z",
+    "finished_at": "2026-11-02T01:50:53.200659Z",
+    "environment_setup": {
+        "started_at": "2026-11-02T01:49:26.486833Z",
+        "finished_at": "2026-11-02T01:49:34.246325Z"
+    },
+    "agent_setup": {
+        "started_at": "2026-11-02T01:49:34.246839Z",
+        "finished_at": "2026-11-02T01:50:01.451258Z"
+    },
+    "agent_execution": {
+        "started_at": "2026-11-02T01:50:01.451258Z",
+        "finished_at": "2026-11-02T01:50:44.638015Z"
+    },
+    "verifier": {
+        "started_at": "2026-11-02T01:50:44.685611Z",
+        "finished_at": "2026-11-02T01:50:47.194394Z"
+    },
+    "step_results": null
+}

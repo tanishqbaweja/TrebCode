@@ -1,0 +1,145 @@
+Get:1 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:4 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:8 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:10 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:11 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Fetched 33.6 MB in 1min 18s (430 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libcurl4t64
+The following NEW packages will be installed:
+  curl libcurl4t64
+0 upgraded, 2 newly installed, 0 to remove and 58 not upgraded.
+Need to get 571 kB of archives.
+After this operation, 1487 kB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcurl4t64 amd64 8.5.0-2ubuntu10.16 [344 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.16 [226 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 571 kB in 3s (220 kB/s)
+Selecting previously unselected package libcurl4t64:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9534 files and directories currently installed.)
+Preparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../curl_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.16) ...
+Setting up libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Setting up curl (8.5.0-2ubuntu10.16) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.4) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 49ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 83ms
+Installed 5 packages in 11ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 65 items
+
+../tests/test_outputs.py ............................................... [ 72%]
+..................                                                       [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_workspace_exists
+PASSED ../tests/test_outputs.py::test_all_branches_exist
+PASSED ../tests/test_outputs.py::test_current_branch_is_feature_a
+PASSED ../tests/test_outputs.py::test_merge_history
+PASSED ../tests/test_outputs.py::test_no_conflict_markers
+PASSED ../tests/test_outputs.py::test_processor_py_exists
+PASSED ../tests/test_outputs.py::test_processor_py_valid_python
+PASSED ../tests/test_outputs.py::test_utils_helpers_exists
+PASSED ../tests/test_outputs.py::test_utils_validators_exists
+PASSED ../tests/test_outputs.py::test_feature_files_exist
+PASSED ../tests/test_outputs.py::test_config_settings_exists
+PASSED ../tests/test_outputs.py::test_readme_exists
+PASSED ../tests/test_outputs.py::test_processor_transform_function_exists
+PASSED ../tests/test_outputs.py::test_all_test_cases
+PASSED ../tests/test_outputs.py::test_empty_input
+PASSED ../tests/test_outputs.py::test_invalid_input_type
+PASSED ../tests/test_outputs.py::test_non_dict_items_skipped
+PASSED ../tests/test_outputs.py::test_name_uppercase_and_strip
+PASSED ../tests/test_outputs.py::test_age_increment_and_clamp
+PASSED ../tests/test_outputs.py::test_value_conditional_processing
+PASSED ../tests/test_outputs.py::test_metadata_added
+PASSED ../tests/test_outputs.py::test_type_error_handling
+PASSED ../tests/test_outputs.py::test_long_name_truncation
+PASSED ../tests/test_outputs.py::test_passthrough_fields
+PASSED ../tests/test_outputs.py::test_nested_objects_passthrough
+PASSED ../tests/test_outputs.py::test_array_fields_passthrough
+PASSED ../tests/test_outputs.py::test_age_extreme_negative
+PASSED ../tests/test_outputs.py::test_age_extreme_positive
+PASSED ../tests/test_outputs.py::test_age_float_value
+PASSED ../tests/test_outputs.py::test_age_string_numeric
+PASSED ../tests/test_outputs.py::test_age_boolean_values
+PASSED ../tests/test_outputs.py::test_value_boundary_exact
+PASSED ../tests/test_outputs.py::test_value_just_above_threshold
+PASSED ../tests/test_outputs.py::test_value_negative
+PASSED ../tests/test_outputs.py::test_value_string_numeric
+PASSED ../tests/test_outputs.py::test_value_scientific_notation
+PASSED ../tests/test_outputs.py::test_unicode_chinese_name
+PASSED ../tests/test_outputs.py::test_unicode_mixed_name
+PASSED ../tests/test_outputs.py::test_name_with_newline
+PASSED ../tests/test_outputs.py::test_name_with_tabs
+PASSED ../tests/test_outputs.py::test_name_empty_string
+PASSED ../tests/test_outputs.py::test_name_only_whitespace
+PASSED ../tests/test_outputs.py::test_name_exactly_100_chars
+PASSED ../tests/test_outputs.py::test_name_101_chars
+PASSED ../tests/test_outputs.py::test_age_array_error
+PASSED ../tests/test_outputs.py::test_value_object_error
+PASSED ../tests/test_outputs.py::test_multiple_errors_single_item
+PASSED ../tests/test_outputs.py::test_empty_dict_item
+PASSED ../tests/test_outputs.py::test_null_name
+PASSED ../tests/test_outputs.py::test_null_age_and_value
+PASSED ../tests/test_outputs.py::test_deeply_nested_passthrough
+PASSED ../tests/test_outputs.py::test_large_batch_processing
+PASSED ../tests/test_outputs.py::test_mixed_valid_invalid_batch
+PASSED ../tests/test_outputs.py::test_special_field_names
+PASSED ../tests/test_outputs.py::test_value_result_whole_number
+PASSED ../tests/test_outputs.py::test_value_result_float
+PASSED ../tests/test_outputs.py::test_age_empty_string_error
+PASSED ../tests/test_outputs.py::test_value_empty_string_error
+PASSED ../tests/test_outputs.py::test_value_very_large
+PASSED ../tests/test_outputs.py::test_value_very_small_positive
+PASSED ../tests/test_outputs.py::test_age_at_exact_150_boundary
+PASSED ../tests/test_outputs.py::test_input_tuple
+PASSED ../tests/test_outputs.py::test_input_integer
+PASSED ../tests/test_outputs.py::test_value_zero
+PASSED ../tests/test_outputs.py::test_combined_all_fields
+============================== 65 passed in 0.13s ==============================

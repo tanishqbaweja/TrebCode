@@ -1,0 +1,39 @@
+{
+    "id": "1f14305c-ffb2-4f24-9b18-a66944f64318",
+    "started_at": "2026-10-30T23:36:12.244829",
+    "updated_at": "2026-10-30T23:39:22.250254",
+    "finished_at": "2026-10-30T23:39:22.250254",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "prove-plus-comm__Wp9M635"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 337446,
+        "n_cache_tokens": 229113,
+        "n_output_tokens": 5869,
+        "cost_usd": null
+    }
+}

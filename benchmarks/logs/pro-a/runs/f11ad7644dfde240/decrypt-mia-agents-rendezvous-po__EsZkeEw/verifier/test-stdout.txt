@@ -1,0 +1,152 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0
+rootdir: /tests
+collected 10 items
+
+../tests/test_outputs.py ......FFF.                                      [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_centroid_calculation ___________________________
+
+mission_instance = <rescue.RescueMission object at 0x75ad2ba5f950>
+
+    def test_centroid_calculation(mission_instance):
+        """Verify centroid calculation."""
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1, 2]):
+            with patch.object(mission_instance, 'decrypt_message') as mock_decrypt:
+                mock_decrypt.side_effect = [
+                    "Coordinates: 10.0, 20.0",
+                    "Coordinates: 30.0, 40.0"
+                ]
+    
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x75ad2ba5f950>, coordinates = None
+output_path = None, kwargs = {}
+
+    def calculate_rendezvous(self, coordinates=None, output_path=None, **kwargs):
+        """Run the full pipeline and write the rendezvous point to file.
+    
+        Cracks the password, fetches MIA agents, decrypts their distress
+        signals, extracts coordinates, averages them (centroid), and saves
+        the result as ``"Lat: XX.XXXX, Lon: XX.XXXX"``.
+    
+        Args:
+            coordinates: Optional list of ``(lat, lon)`` pairs. When given,
+                the centroid is computed directly from them instead of
+                querying the database (useful for testing).
+            output_path: Optional override for the solution file path.
+    
+        Returns:
+            The formatted rendezvous string, or ``"No MIA agents found."``
+            when there is nothing to average.
+        """
+        # Accept alternative kwarg spellings.
+        if coordinates is None and "coords" in kwargs:
+            coordinates = kwargs.pop("coords")
+        if output_path is None:
+>           output_path = kwargs.pop("output", None) or self.output_path
+                                                        ^^^^^^^^^^^^^^^^
+E           AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:261: AttributeError
+______________________________ test_no_mia_agents ______________________________
+
+mission_instance = <rescue.RescueMission object at 0x75ad2ba5d190>
+
+    def test_no_mia_agents(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[]):
+>           result = mission_instance.calculate_rendezvous()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:113: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x75ad2ba5d190>, coordinates = None
+output_path = None, kwargs = {}
+
+    def calculate_rendezvous(self, coordinates=None, output_path=None, **kwargs):
+        """Run the full pipeline and write the rendezvous point to file.
+    
+        Cracks the password, fetches MIA agents, decrypts their distress
+        signals, extracts coordinates, averages them (centroid), and saves
+        the result as ``"Lat: XX.XXXX, Lon: XX.XXXX"``.
+    
+        Args:
+            coordinates: Optional list of ``(lat, lon)`` pairs. When given,
+                the centroid is computed directly from them instead of
+                querying the database (useful for testing).
+            output_path: Optional override for the solution file path.
+    
+        Returns:
+            The formatted rendezvous string, or ``"No MIA agents found."``
+            when there is nothing to average.
+        """
+        # Accept alternative kwarg spellings.
+        if coordinates is None and "coords" in kwargs:
+            coordinates = kwargs.pop("coords")
+        if output_path is None:
+>           output_path = kwargs.pop("output", None) or self.output_path
+                                                        ^^^^^^^^^^^^^^^^
+E           AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:261: AttributeError
+____________________________ test_malformed_message ____________________________
+
+mission_instance = <rescue.RescueMission object at 0x75ad2ba5f530>
+
+    def test_malformed_message(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1]):
+            with patch.object(mission_instance, 'decrypt_message', return_value="Help me!"):
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x75ad2ba5f530>, coordinates = None
+output_path = None, kwargs = {}
+
+    def calculate_rendezvous(self, coordinates=None, output_path=None, **kwargs):
+        """Run the full pipeline and write the rendezvous point to file.
+    
+        Cracks the password, fetches MIA agents, decrypts their distress
+        signals, extracts coordinates, averages them (centroid), and saves
+        the result as ``"Lat: XX.XXXX, Lon: XX.XXXX"``.
+    
+        Args:
+            coordinates: Optional list of ``(lat, lon)`` pairs. When given,
+                the centroid is computed directly from them instead of
+                querying the database (useful for testing).
+            output_path: Optional override for the solution file path.
+    
+        Returns:
+            The formatted rendezvous string, or ``"No MIA agents found."``
+            when there is nothing to average.
+        """
+        # Accept alternative kwarg spellings.
+        if coordinates is None and "coords" in kwargs:
+            coordinates = kwargs.pop("coords")
+        if output_path is None:
+>           output_path = kwargs.pop("output", None) or self.output_path
+                                                        ^^^^^^^^^^^^^^^^
+E           AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:261: AttributeError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_class_structure
+PASSED ../tests/test_outputs.py::test_imports
+PASSED ../tests/test_outputs.py::test_docstrings
+PASSED ../tests/test_outputs.py::test_password_cracking
+PASSED ../tests/test_outputs.py::test_decryption_logic
+PASSED ../tests/test_outputs.py::test_coordinate_extraction
+PASSED ../tests/test_outputs.py::test_end_to_end
+FAILED ../tests/test_outputs.py::test_centroid_calculation - AttributeError: ...
+FAILED ../tests/test_outputs.py::test_no_mia_agents - AttributeError: 'Rescue...
+FAILED ../tests/test_outputs.py::test_malformed_message - AttributeError: 'Re...
+========================= 3 failed, 7 passed in 5.02s ==========================

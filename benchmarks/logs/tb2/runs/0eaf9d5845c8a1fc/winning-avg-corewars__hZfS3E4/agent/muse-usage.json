@@ -1,0 +1,201 @@
+{
+  "schema": "trebell-muse-usage/1",
+  "session_id": "f2a05895-04b9-4c6f-998e-3f6872265681",
+  "exit_status": null,
+  "terminal": null,
+  "json_events": 1356,
+  "source": "session-logs",
+  "input_tokens": 8578177,
+  "cached_tokens": 7929967,
+  "output_tokens": 263840,
+  "reasoning_tokens": 239815,
+  "usage_accounting_complete": false,
+  "unrecorded_children": 1,
+  "unrecorded_estimate": {
+    "input_tokens": 20127,
+    "cached_tokens": 19313,
+    "output_tokens": 1147,
+    "reasoning_tokens": 920
+  },
+  "run_usage": null,
+  "run_usage_matches_main": null,
+  "session": {
+    "session_dir": "H:\\TrebellExp-muse-d\\.harbor-jobs\\tb2-muse-code-muse-spark-1-3-contributor-high-winning-avg-corewars-20261030T170358Z\\winning-avg-corewars__hZfS3E4\\agent\\muse-sessions\\2026\\10\\30\\f2a05895-04b9-4c6f-998e-3f6872265681",
+    "session_files": 1,
+    "total": {
+      "input_tokens": 8578177,
+      "cached_tokens": 7929967,
+      "output_tokens": 263840,
+      "reasoning_tokens": 239815
+    },
+    "by_role": {
+      "main": {
+        "input_tokens": 7654444,
+        "cached_tokens": 7126222,
+        "output_tokens": 231191,
+        "reasoning_tokens": 217288
+      },
+      "observers": {
+        "input_tokens": 923733,
+        "cached_tokens": 803745,
+        "output_tokens": 32649,
+        "reasoning_tokens": 22527
+      },
+      "subagents": {
+        "input_tokens": 0,
+        "cached_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0
+      }
+    },
+    "by_observer": {
+      "skill-reminder": {
+        "input_tokens": 874565,
+        "cached_tokens": 800334,
+        "output_tokens": 24752,
+        "reasoning_tokens": 16042
+      },
+      "todo-reminder": {
+        "input_tokens": 49168,
+        "cached_tokens": 3411,
+        "output_tokens": 7897,
+        "reasoning_tokens": 6485
+      }
+    },
+    "calls": {
+      "main": 48,
+      "observers": 56,
+      "subagents": 0
+    },
+    "usage_records": 104,
+    "duplicate_usage_records": 0,
+    "mirrored_usage_records": 0,
+    "mirror_mismatches": [],
+    "unreported_usage_records": 0,
+    "cached_over_input_records": 0,
+    "model_completed_main": {
+      "input_tokens": 7654444,
+      "cached_tokens": 7126222,
+      "output_tokens": 231191,
+      "reasoning_tokens": 217288
+    },
+    "models": [
+      "muse-spark-1.3-contributor"
+    ],
+    "provider_ids": [
+      "meta"
+    ],
+    "builds": [
+      "1.4.14 (dec7d7497f)"
+    ],
+    "active_tools": [
+      "workflow",
+      "read_file",
+      "search",
+      "write_file",
+      "edit_file",
+      "read_memory",
+      "add_memory",
+      "edit_memory",
+      "work_stop",
+      "work_list",
+      "bash",
+      "bash_input",
+      "monitor",
+      "cron_create",
+      "cron_delete",
+      "cron_list",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "report_progress",
+      "image_generation",
+      "subagent_spawn",
+      "subagent_status",
+      "subagent_send_message",
+      "subagent_wait",
+      "subagent_read_result",
+      "subagent_cancel",
+      "read_skill",
+      "work_status",
+      "snooze_reminder",
+      "write_todos"
+    ],
+    "reminder_roster": [
+      {
+        "id": "skill-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "low",
+        "blocking": null
+      },
+      {
+        "id": "todo-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "medium",
+        "blocking": null
+      },
+      {
+        "id": "goal-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      },
+      {
+        "id": "verify-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      }
+    ],
+    "reminder_runs": 57,
+    "subagents": 0,
+    "unrecorded_children": [
+      {
+        "kind": "reminder",
+        "agent": "skill-reminder",
+        "child_session_id": "01a18dfc-17c6-7c42-9a54-42f6e35b4766",
+        "state": "started"
+      }
+    ],
+    "unrecorded_estimate": {
+      "input_tokens": 20127,
+      "cached_tokens": 19313,
+      "output_tokens": 1147,
+      "reasoning_tokens": 920
+    },
+    "unrecorded_estimated_runs": 1,
+    "user_input_calls": 0,
+    "in_flight_model_calls": 2,
+    "rate_limit_events": 0,
+    "provider_retries": {
+      "retries": 1,
+      "rate_limited": 0,
+      "network_retries": 1,
+      "retry_wait_ms": 1000,
+      "by_kind": {
+        "transport": 1
+      },
+      "main_run": {
+        "retries": 1,
+        "rate_limited": 0,
+        "network_retries": 1,
+        "retry_wait_ms": 1000,
+        "by_kind": {
+          "transport": 1
+        }
+      },
+      "unlogged_reminder_runs": 57,
+      "lower_bound": true
+    }
+  },
+  "models": [
+    "muse-spark-1.3-contributor"
+  ],
+  "model_confirmed": true,
+  "accepted_models": [],
+  "rate_limit_lines": 0,
+  "problems": [
+    "1 linked child run(s) left no usage record, so the cost is a lower bound: skill-reminder (started) x1"
+  ],
+  "key_found_in_logs": []
+}

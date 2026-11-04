@@ -1,0 +1,113 @@
+Get:1 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:3 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:4 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:5 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:6 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:8 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:9 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Fetched 26.4 MB in 1min 22s (320 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 42ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 96ms
+Installed 5 packages in 11ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Checking Apache status...
+Apache is running and ready for tests
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 20 items
+
+../tests/test_outputs.py ....................                            [100%]
+
+==================================== PASSES ====================================
+_________________________ test_access_log_http_method __________________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+_________________________ test_access_log_status_code __________________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+________________________ test_access_log_response_size _________________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+___________________________ test_access_log_referer ____________________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+___________________________ test_error_log_writable ____________________________
+----------------------------- Captured stdout call -----------------------------
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<html><head>
+<title>404 Not Found</title>
+</head><body>
+<h1>Not Found</h1>
+<p>The requested URL was not found on this server.</p>
+<hr>
+<address>Apache/2.4.58 (Ubuntu) Server at localhost Port 9090</address>
+</body></html>
+_______________________ test_multiple_access_log_entries _______________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+Welcome to the benchmark Apache server
+Welcome to the benchmark Apache server
+________________________ test_access_log_after_request _________________________
+----------------------------- Captured stdout call -----------------------------
+Welcome to the benchmark Apache server
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_apache_listening_on_port_9090
+PASSED ../tests/test_outputs.py::test_access_log_format
+PASSED ../tests/test_outputs.py::test_access_log_timestamp
+PASSED ../tests/test_outputs.py::test_access_log_http_method
+PASSED ../tests/test_outputs.py::test_access_log_status_code
+PASSED ../tests/test_outputs.py::test_access_log_response_size
+PASSED ../tests/test_outputs.py::test_access_log_referer
+PASSED ../tests/test_outputs.py::test_error_log_exists
+PASSED ../tests/test_outputs.py::test_error_log_writable
+PASSED ../tests/test_outputs.py::test_custom_403_error_page
+PASSED ../tests/test_outputs.py::test_static_content_served
+PASSED ../tests/test_outputs.py::test_apache_configuration_valid
+PASSED ../tests/test_outputs.py::test_apache_modules_enabled
+PASSED ../tests/test_outputs.py::test_benchmark_site_enabled
+PASSED ../tests/test_outputs.py::test_multiple_access_log_entries
+PASSED ../tests/test_outputs.py::test_access_log_after_request
+PASSED ../tests/test_outputs.py::test_document_root_accessible
+PASSED ../tests/test_outputs.py::test_403_error_page_file_exists
+PASSED ../tests/test_outputs.py::test_index_html_exists
+PASSED ../tests/test_outputs.py::test_apache_listening_on_correct_port
+============================= 20 passed in 21.86s ==============================

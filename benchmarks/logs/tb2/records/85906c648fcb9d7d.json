@@ -1,0 +1,510 @@
+{
+  "pairId": "tb2-pair-muse-spark-1-3-contributor-high-default-sparql-university-20261030T144321Z",
+  "dataset": "terminal-bench/terminal-bench-2@1",
+  "task": "sparql-university",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": null,
+  "localTaskPath": null,
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-30T14:43:21.329Z",
+    "completed": true,
+    "qualifiedTask": "terminal-bench/sparql-university",
+    "taskCount": 89,
+    "datasetVersion": "1.0.0",
+    "datasetRevision": "1",
+    "datasetContentHash": "sha256:c6fc2e2382c1dbae99b2d5ecd2f4f4a60c3c01e0d84642d69b4afd92e99d078b",
+    "attempts": 1,
+    "finishedAt": "2026-10-30T14:43:25.834Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeContextPolicy": {
+    "catalogContextWindow": null,
+    "operatingContextWindow": null,
+    "serverCompactionThreshold": null,
+    "serverCompactionArming": {
+      "armAtMaxObservedInputTokens": null,
+      "staysArmed": true
+    },
+    "retroactiveOpenAiReadCooling": true,
+    "catalogLookup": {
+      "outcome": "no window listed",
+      "window": null,
+      "status": null,
+      "reason": null
+    }
+  },
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "8fe540b20ec8a6c0d76dfd8241718d21ade8e963",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "nativePinnedNodeVersion": "22.23.3",
+  "nativePinnedNodeTarballSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+  "comparisonLanes": [
+    "native-meta"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeAdapterSha256": "aab42d5f0e5ceecaa3cbf78e5d96dc9c94c7a8b4dcd787d7d29e72fbe102246c",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeMetaBundleNormalizedSha256": "1bfec0e973ad831538616deafe267a999e513a1891a4b59e33b46cefc0ddb850",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "task.toml docker_image",
+        "image": "alexgshaw/sparql-university:20251031",
+        "id": "sha256:92fa4304e51167f9fb4466144eba33ef9272a7df0ac1cab9fc3986bccd1ab708",
+        "repoDigests": [
+          "alexgshaw/sparql-university@sha256:92fa4304e51167f9fb4466144eba33ef9272a7df0ac1cab9fc3986bccd1ab708"
+        ]
+      },
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "ubuntu:24.04",
+        "id": null,
+        "repoDigests": null
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "native-meta",
+      "harness": "native",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z",
+      "status": "finished",
+      "startedAt": "2026-10-30T14:43:25.853Z",
+      "finishedAt": "2026-10-30T14:48:42.462Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-30T14:48:42.699Z",
+  "jobs": [
+    {
+      "harness": "native",
+      "label": "native-meta",
+      "agent": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 241732,
+      "cachedTokens": 218030,
+      "uncachedInputTokens": 23702,
+      "cacheHitPercent": 90.19,
+      "outputTokens": 11203,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.00504686,
+      "apiEquivalentCostAsReportedUsd": 0.00504686,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 241732,
+          "cachedInputTokens": 218030,
+          "uncachedInputTokens": 23702,
+          "outputTokens": 11203,
+          "reasoningTokens": 0
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0023702000000000003,
+        "cachedInputUsd": 0.00043606,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0022405999999999997,
+        "totalUsd": 0.00504686,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 241732,
+            "cachedInputTokens": 218030,
+            "outputTokens": 11203,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.00504686
+          }
+        },
+        "usageAccountingComplete": true,
+        "unaccountedProviderRequests": 0,
+        "totalUsdIsLowerBound": false
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0
+        },
+        "lowerBound": false
+      },
+      "wireModels": [
+        "muse-spark-1.3-contributor"
+      ],
+      "cachedOverInputRecords": 0,
+      "reward": 1,
+      "taskChecksum": "77ebe1ea07f1df6aa571faffa5d5646bc4d8e3937503e74c2e3f3ec995897562",
+      "agentVersion": "trebell-native-harbor/1",
+      "setupMs": 7362,
+      "agentExecutionMs": 257126,
+      "verifierMs": 34845,
+      "modelTurns": 14,
+      "toolCalls": 13,
+      "providerRequests": 14,
+      "effectiveServiceTiers": [
+        "auto"
+      ],
+      "reasoningContext": "current_turn",
+      "effectiveReasoningContexts": [],
+      "reasoningOutputTokens": 6835,
+      "cacheWriteInputTokens": 0,
+      "cacheCarryover": {
+        "transitions": 13,
+        "priorRequestInputTokens": 213456,
+        "knownCachedPriorTokens": 190653,
+        "retainedKnownCachedTokens": 190653,
+        "lostKnownCachedTokens": 0,
+        "percent": 100
+      },
+      "strategy": {
+        "firstEditAtMs": 245315,
+        "editCount": 1,
+        "convergenceCheckpoints": 0,
+        "deliverableCheckpoints": 0,
+        "deliverableEscalations": 0,
+        "persistentArtifactSemanticAudits": 0,
+        "globalConstraintPlanningCheckpoints": 0,
+        "globalConstraintCommitBlocks": 0,
+        "globalConstraintCommitAudits": 0,
+        "batchEvidenceClosureAuditRequests": 0,
+        "batchEvidenceClosureAuditCompletions": 0,
+        "batchEvidenceClosureAuditBlocks": 0,
+        "batchEvidencePrecommitGateRequests": 0,
+        "batchEvidencePrecommitGateChecks": 0,
+        "batchEvidencePrecommitGateBlocks": 0,
+        "batchEvidencePrecommitGateRetries": 0,
+        "batchEvidencePrecommitGateOutputCapEvents": 0,
+        "batchEvidencePrecommitGateOutputCapRetries": 0,
+        "batchEvidencePrecommitGateOutputTokenBudget": 0,
+        "batchEvidencePostcommitGateSkips": 0,
+        "batchEvidenceCommitValidationCarryovers": 0,
+        "implementationPressureEvents": 0,
+        "actionOutputCaps": 14,
+        "actionOutputCapRelaxations": 0,
+        "convergenceCallsBlocked": 0,
+        "postEditProbeBatchCheckpoints": 0,
+        "postEditProbeCallsBlocked": 0,
+        "assumptionAuditCheckpoints": 0,
+        "abstractionBoundaryEscalations": 0,
+        "abstractionRepairVerificationCheckpoints": 0,
+        "abstractionRepairVerificationEvidence": 0,
+        "abstractionRepairVerificationGates": 0,
+        "abstractionRepairVerified": 0,
+        "abstractionRepairVerificationRejected": 0,
+        "residualStructureCheckpoints": 0,
+        "completionGateChecks": 0,
+        "completionGateContextCompactions": 0,
+        "completionGateControlMessagesDropped": 0,
+        "completionGateControlCharsDropped": 0,
+        "completionGateCachePrefixPreservations": 0,
+        "completionGateControlMessagesPreservedForCache": 0,
+        "completionGateControlCharsPreservedForCache": 0,
+        "completionGateOutputCapEvents": 0,
+        "completionGateOutputCapRetries": 0,
+        "completionGateOutputTokenBudget": 0,
+        "completionGateInvalidFailClosed": 0,
+        "completionArtifactConstraintAuditBlocks": 0,
+        "completionGateRecoveries": 0,
+        "completionRecoveryEvidenceUses": 0,
+        "completionRecoveryEvidenceCallsBlocked": 0,
+        "completionRecoveryPostEditVerificationUses": 0,
+        "completionRecoveryStrategyResets": 0,
+        "completionRecoveryResidualFactorizations": 0,
+        "completionRecoveryEditUses": 0,
+        "completionRecoveryUnsupportedEditsSkipped": 0,
+        "completionRecoveryCandidateSnapshots": 0,
+        "completionRecoverySnapshotAbsentPaths": 0,
+        "completionRecoveryIncumbentRestores": 0,
+        "completionRecoveryIncumbentRestoreFailures": 0,
+        "completionRecoveryExhaustions": 0,
+        "completionRecoveryTerminalRepairGraces": 0,
+        "completionRecoveryEvidenceThenEditWindows": 0,
+        "completionRecoveryDependentEditVerificationBlocks": 0,
+        "completionRecoveryEditsBlocked": 0,
+        "completionRecoveryNonEditCallsBlocked": 0,
+        "completionRecoveryEditDebtsUnpaid": 0,
+        "postEditEvidenceCheckpoints": 0,
+        "postEditEvidenceEscalations": 0,
+        "postEditEvidenceCallsBlocked": 0,
+        "revisionChurnEscalations": 0,
+        "revisionChurnEditsBlocked": 0,
+        "selfAdmittedVerificationGaps": 0,
+        "selfAdmittedCompletionGaps": 0
+      },
+      "budgets": {
+        "maxModelTurns": 500,
+        "maxToolCalls": 5000,
+        "maxWallTimeMs": null
+      },
+      "contextPolicy": {
+        "catalogContextWindow": null,
+        "operatingContextWindow": null,
+        "serverCompactionThreshold": null,
+        "serverCompactionArming": {
+          "armAtMaxObservedInputTokens": null,
+          "staysArmed": true
+        },
+        "retroactiveOpenAiReadCooling": true,
+        "catalogLookup": {
+          "outcome": "no window listed",
+          "window": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "trebell-native__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 1
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "1.0": [
+                "sparql-university__9dpm3HQ"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 3,
+        "passed": 3,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 1
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 6,
+        "writtenNetworkCode": 0,
+        "externalHosts": [
+          "www.npmjs.com",
+          "university.org",
+          "www.w3.org"
+        ],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 0,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 10,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 35,
+            "snippet": "bash -lc mkdir -p /tmp/sparqltest && cd /tmp/sparqltest && npm init -y >/dev/null 2>&1 && timeout 60 npm install sparqljs --no-audit --no-fund 2>&1 | tail -n 20; ls",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "network-like"
+            ],
+            "hosts": [
+              "university.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 45,
+            "snippet": "bash -lc cat > /tmp/sparqltest/check.js <<'JS'\nconst fs=require('fs');\nconst N3=require('n3');\nconst {Parser}=N3;\nconst ttl=fs.readFileSync('/app/university_graph.ttl','utf8');\nconst parser=new Parser();\nconst quads=parser.parse(ttl);\nconso",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "network-like"
+            ],
+            "hosts": [
+              "university.org",
+              "www.w3.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 50,
+            "snippet": "bash -lc cat > /tmp/sparqltest/parse.js <<'JS'\nconst {Parser}=require('sparqljs');\nconst fs=require('fs');\nconst q=fs.readFileSync('/tmp/sparqltest/candidate.sparql','utf8');\ntry{\n const p=new Parser();\n const parsed=p.parse(q);\n console.lo",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "network-like"
+            ],
+            "hosts": [
+              "university.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 55,
+            "snippet": "bash -lc cat > /tmp/sparqltest/emulate.js <<'JS'\nconst fs=require('fs');\nconst N3=require('n3');\nconst ttl=fs.readFileSync('/app/university_graph.ttl','utf8');\nconst quads=new N3.Parser().parse(ttl);\nconst NS='http://university.org/ontology",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 30,
+            "snippet": "bash -lc apt-get update -qq && apt-get install -y -qq python3 python3-pip 2>&1 | tail -n 20; python3 --version; pip3 --version",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-sparql-university-20261030T144321Z/sparql-university__9dpm3HQ/agent/trebell-native-events.jsonl",
+            "line": 40,
+            "snippet": "bash -lc cd /tmp/sparqltest && timeout 60 npm install n3 --no-audit --no-fund 2>&1 | tail -n 5",
+            "networkFailureSeen": false
+          }
+        ]
+      }
+    }
+  ]
+}

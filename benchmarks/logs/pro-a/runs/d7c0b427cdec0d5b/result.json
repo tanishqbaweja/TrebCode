@@ -1,0 +1,39 @@
+{
+    "id": "908626d1-6715-49dc-8ece-a9019b7ecda3",
+    "started_at": "2026-10-31T20:53:14.647735",
+    "updated_at": "2026-10-31T21:03:42.935905",
+    "finished_at": "2026-10-31T21:03:42.935905",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "reverse-engineer-kvstore-binary__r9rkVhM"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 1456523,
+        "n_cache_tokens": 1273580,
+        "n_output_tokens": 26705,
+        "cost_usd": null
+    }
+}

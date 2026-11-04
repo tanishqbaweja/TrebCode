@@ -1,0 +1,684 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [359 kB]
+Fetched 9398 kB in 7s (1415 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+Suggested packages:
+  libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+  libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql
+The following NEW packages will be installed:
+  curl libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+0 upgraded, 13 newly installed, 0 to remove and 49 not upgraded.
+Need to get 1837 kB of archives.
+After this operation, 4546 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main amd64 libbrotli1 amd64 1.0.9-2+deb12u1 [275 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg-10+deb12u1 [20.5 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-2 amd64 2.1.28+dfsg-10+deb12u1 [59.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 libldap-2.5-0 amd64 2.5.13+dfsg-5 [183 kB]
+Get:5 http://deb.debian.org/debian bookworm/main amd64 libnghttp2-14 amd64 1.52.0-1+deb12u3 [72.4 kB]
+Get:6 http://deb.debian.org/debian bookworm/main amd64 libpsl5 amd64 0.21.2-1 [58.7 kB]
+Get:7 http://deb.debian.org/debian bookworm/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b2 [60.8 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main amd64 libssh2-1 amd64 1.10.0-3+deb12u1 [176 kB]
+Get:9 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:10 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main amd64 libldap-common all 2.5.13+dfsg-5 [29.3 kB]
+Get:12 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules amd64 2.1.28+dfsg-10+deb12u1 [66.9 kB]
+Get:13 http://deb.debian.org/debian bookworm/main amd64 publicsuffix all 20230209.2326-1 [126 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 1837 kB in 27s (68.5 kB/s)
+Selecting previously unselected package libbrotli1:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 7590 files and directories currently installed.)
+Preparing to unpack .../00-libbrotli1_1.0.9-2+deb12u1_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../01-libsasl2-modules-db_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../02-libsasl2-2_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libldap-2.5-0:amd64.
+Preparing to unpack .../03-libldap-2.5-0_2.5.13+dfsg-5_amd64.deb ...
+Unpacking libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../04-libnghttp2-14_1.52.0-1+deb12u3_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:amd64.
+Preparing to unpack .../05-libpsl5_0.21.2-1_amd64.deb ...
+Unpacking libpsl5:amd64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../06-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:amd64.
+Preparing to unpack .../07-libssh2-1_1.10.0-3+deb12u1_amd64.deb ...
+Unpacking libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl4:amd64.
+Preparing to unpack .../08-libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../09-curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../10-libldap-common_2.5.13+dfsg-5_all.deb ...
+Unpacking libldap-common (2.5.13+dfsg-5) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../11-libsasl2-modules_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../12-publicsuffix_20230209.2326-1_all.deb ...
+Unpacking publicsuffix (20230209.2326-1) ...
+Setting up libpsl5:amd64 (0.21.2-1) ...
+Setting up libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Setting up libldap-common (2.5.13+dfsg-5) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Setting up publicsuffix (20230209.2326-1) ...
+Setting up libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u9) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 57ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 105ms
+Installed 5 packages in 13ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 103 items
+
+../tests/test_outputs.py ..............F..F.F..FF.F.F......FF........... [ 45%]
+....F...........F..FFF...........F....F.................                 [100%]
+
+=================================== FAILURES ===================================
+____________ TestHashChainComputation.test_hash_chain_final_result _____________
+
+self = <test_outputs.TestHashChainComputation object at 0x72e0055fde50>
+
+    def test_hash_chain_final_result(self):
+        """Verify the final hash (H2) is computed correctly."""
+        expected_h1, expected_h2 = compute_expected_hash_chain()
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == expected_h2, \
+            f"Hash chain computation incorrect.\n" \
+            f"Expected H2: {expected_h2}\n" \
+            f"Actual:      {actual_result}"
+E       AssertionError: Hash chain computation incorrect.
+E         Expected H2: 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         Actual:      cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:169: AssertionError
+__________ TestHashChainComputation.test_hash_chain_uses_correct_salt __________
+
+self = <test_outputs.TestHashChainComputation object at 0x72e005450b00>
+
+    def test_hash_chain_uses_correct_salt(self):
+        """Verify the computation uses the correct salt value."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+    
+        # Test with correct salt
+        correct_composite = h1 + h1[:16] + SALT
+        expected_h2 = hashlib.sha256(correct_composite.encode('utf-8')).hexdigest()
+    
+        # Test with wrong salt
+        wrong_composite = h1 + h1[:16] + "WRONG-SALT"
+        wrong_h2 = hashlib.sha256(wrong_composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == expected_h2, \
+            "Result does not match expected hash with correct salt"
+E       AssertionError: Result does not match expected hash with correct salt
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:207: AssertionError
+_________ TestHashChainComputation.test_hash_chain_concatenation_order _________
+
+self = <test_outputs.TestHashChainComputation object at 0x72e0053a89e0>
+
+    def test_hash_chain_concatenation_order(self):
+        """Verify the concatenation order is H1 + prefix + salt."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+    
+        # Correct order: H1 + H1[:16] + SALT
+        correct_composite = h1 + h1[:16] + SALT
+        expected_h2 = hashlib.sha256(correct_composite.encode('utf-8')).hexdigest()
+    
+        # Wrong order 1: prefix + H1 + SALT
+        wrong_order1 = h1[:16] + h1 + SALT
+        wrong_h2_1 = hashlib.sha256(wrong_order1.encode('utf-8')).hexdigest()
+    
+        # Wrong order 2: SALT + H1 + prefix
+        wrong_order2 = SALT + h1 + h1[:16]
+        wrong_h2_2 = hashlib.sha256(wrong_order2.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == expected_h2, \
+            "Concatenation order appears incorrect"
+E       AssertionError: Concatenation order appears incorrect
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:246: AssertionError
+__________ TestAlgorithmCorrectness.test_utf8_encoding_for_composite ___________
+
+self = <test_outputs.TestAlgorithmCorrectness object at 0x72e005450c30>
+
+    def test_utf8_encoding_for_composite(self):
+        """Verify UTF-8 encoding is used for the composite string."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+        composite = h1 + h1[:16] + SALT
+    
+        # UTF-8 encoding
+        utf8_h2 = hashlib.sha256(composite.encode('utf-8')).hexdigest()
+    
+        # ASCII encoding (should be same for this content)
+        ascii_h2 = hashlib.sha256(composite.encode('ascii')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+        # Both should match for ASCII-compatible content
+>       assert actual_result == utf8_h2 == ascii_h2, \
+            "Encoding mismatch in composite string hashing"
+E       AssertionError: Encoding mismatch in composite string hashing
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:299: AssertionError
+____________________ TestIntegration.test_complete_pipeline ____________________
+
+self = <test_outputs.TestIntegration object at 0x72e0055fe350>
+
+    def test_complete_pipeline(self):
+        """Test the complete hash chain computation pipeline."""
+        # 1. Verify input exists
+        assert os.path.exists(IMAGE_PATH), "Input image missing"
+    
+        # 2. Verify output exists
+        assert os.path.exists(RESULT_PATH), "Output file missing"
+    
+        # 3. Verify output format
+        content = get_result_content()
+        assert len(content) == 64, "Output length incorrect"
+        assert re.match(r'^[0-9a-f]+$', content), "Output format incorrect"
+    
+        # 4. Verify computation correctness
+        _, expected_h2 = compute_expected_hash_chain()
+>       assert content == expected_h2, "Hash computation incorrect"
+E       AssertionError: Hash computation incorrect
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:325: AssertionError
+_________ TestWrongImplementationDetection.test_wrong_prefix_length_8 __________
+
+self = <test_outputs.TestWrongImplementationDetection object at 0x72e0055fe710>
+
+    def test_wrong_prefix_length_8(self):
+        """Verify using 8-char prefix produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+    
+        # Wrong: 8 characters instead of 16
+        wrong_composite = h1 + h1[:8] + SALT
+        wrong_h2 = hashlib.sha256(wrong_composite.encode('utf-8')).hexdigest()
+    
+        # Correct: 16 characters
+        correct_composite = h1 + h1[:16] + SALT
+        correct_h2 = hashlib.sha256(correct_composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == correct_h2, \
+            "Result does not match correct implementation"
+E       AssertionError: Result does not match correct implementation
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:365: AssertionError
+___________ TestWrongImplementationDetection.test_wrong_h1_as_binary ___________
+
+self = <test_outputs.TestWrongImplementationDetection object at 0x72e005450d60>
+
+    def test_wrong_h1_as_binary(self):
+        """Verify using H1 as binary instead of hex string produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1_hex = hashlib.sha256(image_data).hexdigest()
+        h1_binary = hashlib.sha256(image_data).digest()
+    
+        # Wrong: using binary H1
+        wrong_composite = h1_binary + h1_binary[:16] + SALT.encode('utf-8')
+        wrong_h2 = hashlib.sha256(wrong_composite).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result != wrong_h2, \
+            "Result matches wrong implementation (binary H1)"
+E       AssertionError: Result matches wrong implementation (binary H1)
+E       assert 'cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5' != 'cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5'
+
+/tests/test_outputs.py:400: AssertionError
+______________ TestWrongImplementationDetection.test_h1_uppercase ______________
+
+self = <test_outputs.TestWrongImplementationDetection object at 0x72e0053bcaa0>
+
+    def test_h1_uppercase(self):
+        """Verify using uppercase H1 produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1_lower = hashlib.sha256(image_data).hexdigest()
+        h1_upper = h1_lower.upper()
+    
+        # Wrong: uppercase H1
+        wrong_composite = h1_upper + h1_upper[:16] + SALT
+        wrong_h2 = hashlib.sha256(wrong_composite.encode('utf-8')).hexdigest()
+    
+        # Correct
+        correct_composite = h1_lower + h1_lower[:16] + SALT
+        correct_h2 = hashlib.sha256(correct_composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == correct_h2, \
+            "Result does not match correct implementation"
+E       AssertionError: Result does not match correct implementation
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:520: AssertionError
+_____________ TestBoundaryConditions.test_prefix_exactly_16_chars ______________
+
+self = <test_outputs.TestBoundaryConditions object at 0x72e0055fe990>
+
+    def test_prefix_exactly_16_chars(self):
+        """Verify prefix is exactly 16 characters, not 15 or 17."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+    
+        # Test with 15 chars
+        composite_15 = h1 + h1[:15] + SALT
+        h2_15 = hashlib.sha256(composite_15.encode('utf-8')).hexdigest()
+    
+        # Test with 17 chars
+        composite_17 = h1 + h1[:17] + SALT
+        h2_17 = hashlib.sha256(composite_17.encode('utf-8')).hexdigest()
+    
+        # Test with correct 16 chars
+        composite_16 = h1 + h1[:16] + SALT
+        h2_16 = hashlib.sha256(composite_16.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == h2_16, "Result should match 16-char prefix"
+E       AssertionError: Result should match 16-char prefix
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:554: AssertionError
+_____ TestAdditionalEdgeCases.test_result_matches_independent_calculation ______
+
+self = <test_outputs.TestAdditionalEdgeCases object at 0x72e0055ff110>
+
+    def test_result_matches_independent_calculation(self):
+        """Verify result matches a completely independent calculation."""
+        # Read image
+        with open(IMAGE_PATH, 'rb') as f:
+            img_bytes = f.read()
+    
+        # Calculate H1 independently
+        import hashlib as hl
+        stage1 = hl.sha256()
+        stage1.update(img_bytes)
+        h1_result = stage1.hexdigest()
+    
+        # Calculate H2 independently
+        stage2_input = f"{h1_result}{h1_result[:16]}{SALT}"
+        stage2 = hl.sha256()
+        stage2.update(stage2_input.encode('utf-8'))
+        h2_result = stage2.hexdigest()
+    
+        # Compare with actual result
+        actual = get_result_content()
+>       assert actual == h2_result, \
+            f"Independent calculation mismatch:\nExpected: {h2_result}\nActual: {actual}"
+E       AssertionError: Independent calculation mismatch:
+E         Expected: 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         Actual: cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:752: AssertionError
+______ TestPrefixVariantDetection.test_wrong_first_8_bytes_binary_prefix _______
+
+self = <test_outputs.TestPrefixVariantDetection object at 0x72e005451cd0>
+
+    def test_wrong_first_8_bytes_binary_prefix(self):
+        """Verify using first 8 binary bytes produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1_hex = hashlib.sha256(image_data).hexdigest()
+        h1_bytes = hashlib.sha256(image_data).digest()
+    
+        # Wrong: first 8 bytes of binary digest (not first 16 hex chars)
+        # 8 binary bytes = 16 hex chars representation
+        wrong_prefix = h1_bytes[:8].hex()
+        wrong_composite = h1_hex + wrong_prefix + SALT
+        wrong_h2 = hashlib.sha256(wrong_composite.encode('utf-8')).hexdigest()
+    
+        # These should actually be the same for this case, but testing the concept
+        correct_composite = h1_hex + h1_hex[:16] + SALT
+        correct_h2 = hashlib.sha256(correct_composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+>       assert actual_result == correct_h2, "Result should match correct implementation"
+E       AssertionError: Result should match correct implementation
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:905: AssertionError
+___________ TestEncodingVariantDetection.test_wrong_latin1_encoding ____________
+
+self = <test_outputs.TestEncodingVariantDetection object at 0x72e0055ff890>
+
+    def test_wrong_latin1_encoding(self):
+        """Verify Latin-1 encoding produces same result for ASCII content."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+        composite = h1 + h1[:16] + SALT
+    
+        # For pure ASCII content, Latin-1 and UTF-8 should produce same result
+        utf8_h2 = hashlib.sha256(composite.encode('utf-8')).hexdigest()
+        latin1_h2 = hashlib.sha256(composite.encode('latin-1')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+        # Both should match for ASCII-only content
+>       assert actual_result == utf8_h2, "Result doesn't match UTF-8 encoding"
+E       AssertionError: Result doesn't match UTF-8 encoding
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:962: AssertionError
+________ TestEncodingVariantDetection.test_wrong_raw_bytes_no_encoding _________
+
+self = <test_outputs.TestEncodingVariantDetection object at 0x72e0055ff9d0>
+
+    def test_wrong_raw_bytes_no_encoding(self):
+        """Verify hashing composite as raw string (no explicit encoding) is wrong."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+        composite = h1 + h1[:16] + SALT
+    
+        # Correct: explicit UTF-8 encoding
+        correct_h2 = hashlib.sha256(composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+>       assert actual_result == correct_h2, "Result should use UTF-8 encoding"
+E       AssertionError: Result should use UTF-8 encoding
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:977: AssertionError
+____________ TestEncodingVariantDetection.test_wrong_utf16_encoding ____________
+
+self = <test_outputs.TestEncodingVariantDetection object at 0x72e005451f30>
+
+    def test_wrong_utf16_encoding(self):
+        """Verify UTF-16 encoding produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+        composite = h1 + h1[:16] + SALT
+    
+        # Wrong: UTF-16 encoding
+        wrong_h2 = hashlib.sha256(composite.encode('utf-16')).hexdigest()
+    
+        # Correct: UTF-8 encoding
+        correct_h2 = hashlib.sha256(composite.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == correct_h2, "Result should match UTF-8 encoding"
+E       AssertionError: Result should match UTF-8 encoding
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:995: AssertionError
+______________ TestHashChainVariants.test_wrong_triple_hash_chain ______________
+
+self = <test_outputs.TestHashChainVariants object at 0x72e00542c190>
+
+    def test_wrong_triple_hash_chain(self):
+        """Verify triple hash chain produces different result."""
+        with open(IMAGE_PATH, 'rb') as f:
+            image_data = f.read()
+    
+        h1 = hashlib.sha256(image_data).hexdigest()
+        composite = h1 + h1[:16] + SALT
+        h2 = hashlib.sha256(composite.encode('utf-8')).hexdigest()
+    
+        # Wrong: add a third stage
+        h3 = hashlib.sha256(h2.encode('utf-8')).hexdigest()
+    
+        actual_result = get_result_content().strip()
+    
+>       assert actual_result == h2, "Result should be H2 (two-stage)"
+E       AssertionError: Result should be H2 (two-stage)
+E       assert 'cf59f321a339...2d1cc786f0bb5' == '9f22e049187c...7c5480013299b'
+E         
+E         - 9f22e049187ccaa60a1705ec772222ff47fff6064f3cb01e47d7c5480013299b
+E         + cf59f321a33908bbf7acafa1dab01ad4903219fe1208573b8502d1cc786f0bb5
+
+/tests/test_outputs.py:1155: AssertionError
+_______________ TestRobustness.test_result_matches_byte_by_byte ________________
+
+self = <test_outputs.TestRobustness object at 0x72e00542c410>
+
+    def test_result_matches_byte_by_byte(self):
+        """Verify result matches expected hash byte by byte."""
+        _, expected_h2 = compute_expected_hash_chain()
+        actual_result = get_result_content()
+    
+        for i, (expected_char, actual_char) in enumerate(zip(expected_h2, actual_result)):
+>           assert expected_char == actual_char, \
+                f"Mismatch at position {i}: expected '{expected_char}', got '{actual_char}'"
+E           AssertionError: Mismatch at position 0: expected '9', got 'c'
+E           assert '9' == 'c'
+E             
+E             - c
+E             + 9
+
+/tests/test_outputs.py:1230: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestInputValidation::test_input_image_exists
+PASSED ../tests/test_outputs.py::TestInputValidation::test_input_image_readable
+PASSED ../tests/test_outputs.py::TestInputValidation::test_input_image_not_empty
+PASSED ../tests/test_outputs.py::TestInputValidation::test_input_image_is_valid_file
+PASSED ../tests/test_outputs.py::TestOutputFile::test_result_file_exists
+PASSED ../tests/test_outputs.py::TestOutputFile::test_result_file_not_empty
+PASSED ../tests/test_outputs.py::TestOutputFile::test_result_file_readable
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_length_exact
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_valid_hex_string
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_lowercase_hex
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_no_trailing_newline
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_no_leading_whitespace
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_no_trailing_whitespace
+PASSED ../tests/test_outputs.py::TestOutputFormat::test_result_single_line
+PASSED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_deterministic
+PASSED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_h1_is_sha256
+PASSED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_prefix_extraction
+PASSED ../tests/test_outputs.py::TestAlgorithmCorrectness::test_sha256_algorithm_used
+PASSED ../tests/test_outputs.py::TestAlgorithmCorrectness::test_image_read_as_binary
+PASSED ../tests/test_outputs.py::TestIntegration::test_no_side_effects
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_wrong_prefix_length_32
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_missing_h1_component
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_missing_prefix_component
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_missing_salt_component
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_wrong_salt_lowercase
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_wrong_salt_with_spaces
+PASSED ../tests/test_outputs.py::TestWrongImplementationDetection::test_double_hashing_h1
+PASSED ../tests/test_outputs.py::TestBoundaryConditions::test_output_not_63_chars
+PASSED ../tests/test_outputs.py::TestBoundaryConditions::test_output_not_65_chars
+PASSED ../tests/test_outputs.py::TestBoundaryConditions::test_h1_has_64_chars
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_image_file_has_reasonable_size
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_output_contains_only_hash
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_no_null_bytes_in_output
+PASSED ../tests/test_outputs.py::TestDataIntegrity::test_no_bom_in_output
+PASSED ../tests/test_outputs.py::TestCharacterLevelValidation::test_each_character_is_hex
+PASSED ../tests/test_outputs.py::TestCharacterLevelValidation::test_no_control_characters
+PASSED ../tests/test_outputs.py::TestCharacterLevelValidation::test_all_ascii_printable
+PASSED ../tests/test_outputs.py::TestCharacterLevelValidation::test_no_unicode_characters
+PASSED ../tests/test_outputs.py::TestCompositeStringConstruction::test_composite_length_correct
+PASSED ../tests/test_outputs.py::TestCompositeStringConstruction::test_composite_starts_with_h1
+PASSED ../tests/test_outputs.py::TestCompositeStringConstruction::test_composite_ends_with_salt
+PASSED ../tests/test_outputs.py::TestCompositeStringConstruction::test_composite_middle_is_prefix
+PASSED ../tests/test_outputs.py::TestAdditionalEdgeCases::test_salt_value_is_exact
+PASSED ../tests/test_outputs.py::TestAdditionalEdgeCases::test_output_is_deterministic_across_reads
+PASSED ../tests/test_outputs.py::TestAdditionalEdgeCases::test_h2_different_from_h1
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_not_md5_hash
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_not_sha1_hash
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_not_sha512_hash
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_not_sha384_hash
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_md5_produces_wrong_result
+PASSED ../tests/test_outputs.py::TestWrongHashAlgorithm::test_sha1_produces_wrong_result
+PASSED ../tests/test_outputs.py::TestPrefixVariantDetection::test_wrong_last_16_chars_prefix
+PASSED ../tests/test_outputs.py::TestPrefixVariantDetection::test_wrong_middle_16_chars_prefix
+PASSED ../tests/test_outputs.py::TestPrefixVariantDetection::test_wrong_no_prefix
+PASSED ../tests/test_outputs.py::TestPrefixVariantDetection::test_wrong_full_h1_as_prefix
+PASSED ../tests/test_outputs.py::TestEncodingVariantDetection::test_wrong_utf32_encoding
+PASSED ../tests/test_outputs.py::TestOutputFormatVariants::test_output_not_base64
+PASSED ../tests/test_outputs.py::TestOutputFormatVariants::test_output_not_json
+PASSED ../tests/test_outputs.py::TestOutputFormatVariants::test_output_not_xml
+PASSED ../tests/test_outputs.py::TestOutputFormatVariants::test_output_not_prefixed
+PASSED ../tests/test_outputs.py::TestOutputFormatVariants::test_output_not_uppercased
+PASSED ../tests/test_outputs.py::TestFileSystemProperties::test_output_file_is_regular_file
+PASSED ../tests/test_outputs.py::TestFileSystemProperties::test_output_file_size_exactly_64
+PASSED ../tests/test_outputs.py::TestFileSystemProperties::test_input_file_not_modified
+PASSED ../tests/test_outputs.py::TestFileSystemProperties::test_output_in_correct_directory
+PASSED ../tests/test_outputs.py::TestHashChainVariants::test_wrong_single_hash_only
+PASSED ../tests/test_outputs.py::TestHashChainVariants::test_wrong_reversed_chain
+PASSED ../tests/test_outputs.py::TestHashChainVariants::test_wrong_h2_based_on_image
+PASSED ../tests/test_outputs.py::TestHashChainVariants::test_wrong_concatenate_hashes
+PASSED ../tests/test_outputs.py::TestRobustness::test_consistent_results_multiple_reads
+PASSED ../tests/test_outputs.py::TestRobustness::test_no_extra_content_after_hash
+PASSED ../tests/test_outputs.py::TestRobustness::test_no_hidden_characters
+PASSED ../tests/test_outputs.py::TestSecurityProperties::test_hash_has_sufficient_entropy
+PASSED ../tests/test_outputs.py::TestSecurityProperties::test_hash_not_all_zeros
+PASSED ../tests/test_outputs.py::TestSecurityProperties::test_hash_not_all_fs
+PASSED ../tests/test_outputs.py::TestSecurityProperties::test_hash_not_sequential
+PASSED ../tests/test_outputs.py::TestSecurityProperties::test_hash_not_repeated_pattern
+PASSED ../tests/test_outputs.py::TestSaltVariations::test_wrong_empty_salt
+PASSED ../tests/test_outputs.py::TestSaltVariations::test_wrong_double_salt
+PASSED ../tests/test_outputs.py::TestSaltVariations::test_wrong_salt_at_beginning
+PASSED ../tests/test_outputs.py::TestSaltVariations::test_wrong_salt_in_middle
+PASSED ../tests/test_outputs.py::TestSaltVariations::test_wrong_salt_partial
+PASSED ../tests/test_outputs.py::TestSpecialCharacters::test_no_carriage_return
+PASSED ../tests/test_outputs.py::TestSpecialCharacters::test_no_tab_character
+PASSED ../tests/test_outputs.py::TestSpecialCharacters::test_no_space_character
+PASSED ../tests/test_outputs.py::TestSpecialCharacters::test_no_quotes
+PASSED ../tests/test_outputs.py::TestSpecialCharacters::test_pure_alphanumeric
+FAILED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_final_result
+FAILED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_uses_correct_salt
+FAILED ../tests/test_outputs.py::TestHashChainComputation::test_hash_chain_concatenation_order
+FAILED ../tests/test_outputs.py::TestAlgorithmCorrectness::test_utf8_encoding_for_composite
+FAILED ../tests/test_outputs.py::TestIntegration::test_complete_pipeline - As...
+FAILED ../tests/test_outputs.py::TestWrongImplementationDetection::test_wrong_prefix_length_8
+FAILED ../tests/test_outputs.py::TestWrongImplementationDetection::test_wrong_h1_as_binary
+FAILED ../tests/test_outputs.py::TestWrongImplementationDetection::test_h1_uppercase
+FAILED ../tests/test_outputs.py::TestBoundaryConditions::test_prefix_exactly_16_chars
+FAILED ../tests/test_outputs.py::TestAdditionalEdgeCases::test_result_matches_independent_calculation
+FAILED ../tests/test_outputs.py::TestPrefixVariantDetection::test_wrong_first_8_bytes_binary_prefix
+FAILED ../tests/test_outputs.py::TestEncodingVariantDetection::test_wrong_latin1_encoding
+FAILED ../tests/test_outputs.py::TestEncodingVariantDetection::test_wrong_raw_bytes_no_encoding
+FAILED ../tests/test_outputs.py::TestEncodingVariantDetection::test_wrong_utf16_encoding
+FAILED ../tests/test_outputs.py::TestHashChainVariants::test_wrong_triple_hash_chain
+FAILED ../tests/test_outputs.py::TestRobustness::test_result_matches_byte_by_byte
+======================== 16 failed, 87 passed in 0.38s =========================

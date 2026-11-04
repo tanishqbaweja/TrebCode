@@ -1,0 +1,90 @@
+Get:1 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:2 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:3 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:7 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:8 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:9 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:10 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:11 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Fetched 33.6 MB in 2min 8s (263 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+curl is already the newest version (8.5.0-2ubuntu10.16).
+0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 37ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 82ms
+Installed 5 packages in 11ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 30 items
+
+../tests/test_outputs.py ..............................                  [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_apache_running_on_port_9090
+PASSED ../tests/test_outputs.py::test_correct_http_status_code
+PASSED ../tests/test_outputs.py::test_access_log_exists
+PASSED ../tests/test_outputs.py::test_access_log_format_timestamp
+PASSED ../tests/test_outputs.py::test_access_log_format_http_method
+PASSED ../tests/test_outputs.py::test_access_log_format_status_code
+PASSED ../tests/test_outputs.py::test_access_log_format_ip_in_brackets
+PASSED ../tests/test_outputs.py::test_access_log_complete_format
+PASSED ../tests/test_outputs.py::test_head_method
+PASSED ../tests/test_outputs.py::test_404_not_found
+PASSED ../tests/test_outputs.py::test_404_logged
+PASSED ../tests/test_outputs.py::test_config_file_exists
+PASSED ../tests/test_outputs.py::test_config_file_content
+PASSED ../tests/test_outputs.py::test_log_format_string
+PASSED ../tests/test_outputs.py::test_site_enabled
+PASSED ../tests/test_outputs.py::test_document_root_exists
+PASSED ../tests/test_outputs.py::test_index_file_exists
+PASSED ../tests/test_outputs.py::test_index_file_content
+PASSED ../tests/test_outputs.py::test_multiple_requests_logged
+PASSED ../tests/test_outputs.py::test_concurrent_requests
+PASSED ../tests/test_outputs.py::test_referer_header_logged
+PASSED ../tests/test_outputs.py::test_no_referer_logged_as_dash
+PASSED ../tests/test_outputs.py::test_additional_test_files_accessible
+PASSED ../tests/test_outputs.py::test_log_file_permissions
+PASSED ../tests/test_outputs.py::test_port_listening
+PASSED ../tests/test_outputs.py::test_apache_process_running
+PASSED ../tests/test_outputs.py::test_large_file_handling
+PASSED ../tests/test_outputs.py::test_special_characters_in_url
+PASSED ../tests/test_outputs.py::test_empty_request
+PASSED ../tests/test_outputs.py::test_log_file_grows
+============================= 30 passed in 34.24s ==============================

@@ -1,0 +1,26 @@
+Running command: for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do [ -s "$f" ] && { echo present; exit 0; }; done; echo missing
+Command outputs captured
+Running command: set -euo pipefail; mkdir -p /etc/ssl/certs; mv /tmp/trebell-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt; chmod 0644 /etc/ssl/certs/ca-certificates.crt
+Command outputs captured
+The image has no CA bundle; wrote certifi 2026.07.22's (9cc2a774b519) to /etc/ssl/certs/ca-certificates.crt
+Running command: set -euo pipefail; rm -rf /installed-agent/muse; mkdir -p /installed-agent/muse/bin
+Command outputs captured
+Running command: set -euo pipefail; printf '%s\n' 1.4.14-R7309.1 > /installed-agent/muse/bin/.muse-version; chown -R 0:0 /installed-agent/muse; chmod 0755 /installed-agent/muse /installed-agent/muse/bin /installed-agent/muse/bin/muse /installed-agent/muse/bin/muse-bin-1.4.14-R7309.1 /installed-agent/muse/bin/.muse-release-info.json; chmod 0644 /installed-agent/muse/bin/.muse-version; if command -v sha256sum >/dev/null 2>&1; then [ "$(sha256sum /installed-agent/muse/bin/muse | cut -d" " -f1)" = c6db294799a190ca380da274beb3b9c0e160e0da9681a3d364ce8b0e5fa3a4bc ] || { echo "checksum mismatch: /installed-agent/muse/bin/muse" >&2; exit 1; }; [ "$(sha256sum /installed-agent/muse/bin/muse-bin-1.4.14-R7309.1 | cut -d" " -f1)" = 0809aac7cb58d18f5022b6d05e02aa1974683c0ec430e5f04d25b60ed17de2da ] || { echo "checksum mismatch: /installed-agent/muse/bin/muse-bin-1.4.14-R7309.1" >&2; exit 1; }; [ "$(sha256sum /installed-agent/muse/bin/.muse-release-info.json | cut -d" " -f1)" = bff0073a555a496db1d12d341eade1c18cee56c36b0e31d909e085e00b1bb14c ] || { echo "checksum mismatch: /installed-agent/muse/bin/.muse-release-info.json" >&2; exit 1; }; fi; actual="$(MUSE_NO_AUTO_UPDATE=1 /installed-agent/muse/bin/muse --version)"; [ "$actual" = 'Muse Code 1.4.14 (1.4.14-R7309.1)' ] || { echo "Unexpected Muse Code build: $actual" >&2; exit 1; }
+Command outputs captured
+Running command: printf "uid=%s\nhome=%s\npwd=%s\n" "$UID" "$HOME" "$PWD"; if [ -n "$HOME" ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then echo home_writable=true; else echo home_writable=false; fi; for p in "${XDG_CONFIG_HOME:-$HOME/.config}/muse" "${XDG_DATA_HOME:-$HOME/.local/share}/muse" "$HOME/.muse" "$HOME/.agents" "$HOME/.claude" "$HOME/.codex" ${CODEX_HOME:+"$CODEX_HOME"}; do [ -e "$p" ] && printf "found=%s\n" "$p"; done; d="$PWD"; while [ -n "$d" ]; do for n in AGENTS.md CLAUDE.md .agents .claude/CLAUDE.md .claude/skills .codex/skills .muse/hooks.json; do [ -e "$d/$n" ] && printf "workspace=%s\n" "${d%/}/$n"; done; { [ -e "$d/.git" ] || [ "$d" = / ]; } && break; d="$(dirname "$d")"; done; echo workspace_screened=true; if command -v find >/dev/null 2>&1; then if command -v timeout >/dev/null 2>&1; then bound="timeout 10"; else bound=""; fi; nested="$($bound find "$PWD" -maxdepth 8 \( -name .git -o -name node_modules -o -name .venv -o -name venv -o -name __pycache__ -o -name .tox \) -prune -o -type f \( -name AGENTS.md -o -name CLAUDE.md \) -print 2>/dev/null)"; rc=$?; printf '%s\n' "$nested" | head -n 200 | while IFS= read -r f; do case "$f" in ""|"${PWD%/}/AGENTS.md"|"${PWD%/}/CLAUDE.md") ;; *) printf 'nested=%s\n' "$f";; esac; done; [ "$(printf '%s\n' "$nested" | grep -c .)" -gt 200 ] && echo nested_truncated=true; if [ "$rc" = 124 ]; then echo nested_screened=timeout; else echo nested_screened=true; fi; fi; true
+Command outputs captured
+Running command: chown 0 /logs/agent/muse-preflight.json && chmod 0644 /logs/agent/muse-preflight.json
+Command outputs captured
+Running command: chown 0 /installed-agent/muse/instruction.txt && chmod 0644 /installed-agent/muse/instruction.txt
+Command outputs captured
+Running command: chown 0 /installed-agent/muse
+Command outputs captured
+Running command: chown 0 /installed-agent/muse/key && chmod 0600 /installed-agent/muse/key
+Command outputs captured
+Running command: META_API_KEY="$(cat /installed-agent/muse/key)"; export META_API_KEY; rm -f /installed-agent/muse/key; export MUSE_NO_AUTO_UPDATE=1; /installed-agent/muse/bin/muse exec --json --yolo --disable-web-tools --model muse-spark-1.3-contributor --reasoning-effort high --contributor-mode on --session-id f6159019-6e0e-4044-a677-ceccd01e0301 --prompt-file /installed-agent/muse/instruction.txt < /dev/null > /logs/agent/muse-code.jsonl 2> /logs/agent/muse-code.stderr.log; status=$?; printf '%s\n' "$status" > /logs/agent/muse-code.exit; exit "$status"
+Command outputs captured
+Running command: rm -f /installed-agent/muse/key; mkdir -p /logs/agent/muse-sessions; if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/muse/sessions" ]; then cp -R "${XDG_DATA_HOME:-$HOME/.local/share}/muse/sessions"/. /logs/agent/muse-sessions/; fi
+Command outputs captured
+Running command: MUSE_NO_AUTO_UPDATE=1 /installed-agent/muse/bin/muse export --session f6159019-6e0e-4044-a677-ceccd01e0301 --out /logs/agent/muse-export.json < /dev/null > /dev/null 2>> /logs/agent/muse-export.stderr.log
+Command outputs captured
+Collecting main service artifacts

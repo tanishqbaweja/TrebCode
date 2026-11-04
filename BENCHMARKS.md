@@ -76,4 +76,4 @@ Input totals include cached input. Some Muse Code helper requests were cancelled
 | Pro B | 2026-11-02 12:00 |
 | Pro C | 2026-11-02 12:25 |
 
-The included data records task outcomes and usage totals; original trial logs are not included. Pro C's `recover-prod-db-password-from-git-history` grader accepted an empty file because its planted password failed its own format; both lanes passed, so that task does not distinguish their quality. Interpret the savings alongside these limitations and the reported quality losses.
+[Run logs and verifier outputs](benchmarks/logs/README.md) include 431 completed attempts covering all 178 tasks, with completed retries retained. Interrupted attempts and attempts without a completed reward record are excluded. Credential redactions and original/published checksums are recorded in the log manifest. Pro C's `recover-prod-db-password-from-git-history` grader accepted an empty file because its planted password failed its own format; both lanes passed, so that task does not distinguish their quality. Interpret the savings alongside these limitations and the reported quality losses.

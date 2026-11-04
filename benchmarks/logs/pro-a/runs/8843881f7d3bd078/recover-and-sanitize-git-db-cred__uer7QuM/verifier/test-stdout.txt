@@ -1,0 +1,132 @@
+Get:1 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:3 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:7 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:8 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:9 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Fetched 33.6 MB in 2min 23s (235 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libcurl4t64
+The following NEW packages will be installed:
+  curl libcurl4t64
+0 upgraded, 2 newly installed, 0 to remove and 60 not upgraded.
+Need to get 571 kB of archives.
+After this operation, 1487 kB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 libcurl4t64 amd64 8.5.0-2ubuntu10.16 [344 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.16 [226 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 571 kB in 3s (184 kB/s)
+Selecting previously unselected package libcurl4t64:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9806 files and directories currently installed.)
+Preparing to unpack .../libcurl4t64_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../curl_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.16) ...
+Setting up libcurl4t64:amd64 (8.5.0-2ubuntu10.16) ...
+Setting up curl (8.5.0-2ubuntu10.16) ...
+Processing triggers for libc-bin (2.39-0ubuntu8.4) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 153ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 308ms
+Installed 5 packages in 33ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 31 items
+
+../tests/test_outputs.py ..............................F                 [100%]
+
+=================================== FAILURES ===================================
+__________________ TestEdgeCases.test_working_directory_clean __________________
+
+self = <test_outputs.TestEdgeCases object at 0x796573d6d0d0>
+
+    def test_working_directory_clean(self):
+        """Test that working directory has no untracked credential files"""
+        os.chdir(REPO_PATH)
+    
+        sensitive_files = ['config.ini', 'secrets.enc', 'temp_notes.txt']
+    
+        for filename in sensitive_files:
+            filepath = os.path.join(REPO_PATH, filename)
+>           assert not os.path.exists(filepath), \
+                f"Sensitive file {filename} exists in working directory"
+E           AssertionError: Sensitive file temp_notes.txt exists in working directory
+E           assert not True
+E            +  where True = <function exists at 0x7965748d7560>('/app/repo/temp_notes.txt')
+E            +    where <function exists at 0x7965748d7560> = <module 'posixpath' (frozen)>.exists
+E            +      where <module 'posixpath' (frozen)> = os.path
+
+/tests/test_outputs.py:471: AssertionError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_file_exists
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_file_not_empty
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_format_valid
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_value_correct
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_not_decoy
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_no_trailing_newline
+PASSED ../tests/test_outputs.py::TestCredentialRecovery::test_credential_single_line
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_credential_in_git_log
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_credential_in_reflog
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_reflog_cleared
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_credential_in_loose_objects
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_credential_in_pack_files
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_stash_entries
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_filter_branch_refs
+PASSED ../tests/test_outputs.py::TestGitHistorySanitization::test_no_head_references_with_credential
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_repository_valid
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_main_branch_exists
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_feature_auth_branch_exists
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_backup_config_branch_exists
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_all_branches_accessible
+PASSED ../tests/test_outputs.py::TestRepositoryIntegrity::test_readme_exists
+PASSED ../tests/test_outputs.py::TestCompleteSanitization::test_grep_git_directory
+PASSED ../tests/test_outputs.py::TestCompleteSanitization::test_find_strings_no_credential
+PASSED ../tests/test_outputs.py::TestCompleteSanitization::test_no_unreachable_objects_with_credential
+PASSED ../tests/test_outputs.py::TestCompleteSanitization::test_base64_encoded_credential_removed
+PASSED ../tests/test_outputs.py::TestCompleteSanitization::test_git_log_count_zero
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_credential_exact_match
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_config_ini_in_any_branch
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_backup_credentials_in_any_branch
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_secrets_enc_in_feature_branch
+FAILED ../tests/test_outputs.py::TestEdgeCases::test_working_directory_clean
+========================= 1 failed, 30 passed in 0.43s =========================

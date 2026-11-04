@@ -1,0 +1,212 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [360 kB]
+Fetched 9398 kB in 37s (256 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+Suggested packages:
+  libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+  libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql
+The following NEW packages will be installed:
+  curl libbrotli1 libcurl4 libldap-2.5-0 libldap-common libnghttp2-14 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db libssh2-1
+  publicsuffix
+0 upgraded, 13 newly installed, 0 to remove and 49 not upgraded.
+Need to get 1837 kB of archives.
+After this operation, 4546 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main amd64 libbrotli1 amd64 1.0.9-2+deb12u1 [275 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg-10+deb12u1 [20.5 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-2 amd64 2.1.28+dfsg-10+deb12u1 [59.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 libldap-2.5-0 amd64 2.5.13+dfsg-5 [183 kB]
+Get:5 http://deb.debian.org/debian bookworm/main amd64 libnghttp2-14 amd64 1.52.0-1+deb12u3 [72.4 kB]
+Get:6 http://deb.debian.org/debian bookworm/main amd64 libpsl5 amd64 0.21.2-1 [58.7 kB]
+Get:7 http://deb.debian.org/debian bookworm/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b2 [60.8 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main amd64 libssh2-1 amd64 1.10.0-3+deb12u1 [176 kB]
+Get:9 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:10 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main amd64 libldap-common all 2.5.13+dfsg-5 [29.3 kB]
+Get:12 http://deb.debian.org/debian-security bookworm-security/main amd64 libsasl2-modules amd64 2.1.28+dfsg-10+deb12u1 [66.9 kB]
+Get:13 http://deb.debian.org/debian bookworm/main amd64 publicsuffix all 20230209.2326-1 [126 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 1837 kB in 27s (67.6 kB/s)
+Selecting previously unselected package libbrotli1:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 7590 files and directories currently installed.)
+Preparing to unpack .../00-libbrotli1_1.0.9-2+deb12u1_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../01-libsasl2-modules-db_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../02-libsasl2-2_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package libldap-2.5-0:amd64.
+Preparing to unpack .../03-libldap-2.5-0_2.5.13+dfsg-5_amd64.deb ...
+Unpacking libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../04-libnghttp2-14_1.52.0-1+deb12u3_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:amd64.
+Preparing to unpack .../05-libpsl5_0.21.2-1_amd64.deb ...
+Unpacking libpsl5:amd64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../06-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:amd64.
+Preparing to unpack .../07-libssh2-1_1.10.0-3+deb12u1_amd64.deb ...
+Unpacking libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl4:amd64.
+Preparing to unpack .../08-libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../09-curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../10-libldap-common_2.5.13+dfsg-5_all.deb ...
+Unpacking libldap-common (2.5.13+dfsg-5) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../11-libsasl2-modules_2.1.28+dfsg-10+deb12u1_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../12-publicsuffix_20230209.2326-1_all.deb ...
+Unpacking publicsuffix (20230209.2326-1) ...
+Setting up libpsl5:amd64 (0.21.2-1) ...
+Setting up libbrotli1:amd64 (1.0.9-2+deb12u1) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+Setting up libldap-common (2.5.13+dfsg-5) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg-10+deb12u1) ...
+Setting up libssh2-1:amd64 (1.10.0-3+deb12u1) ...
+Setting up publicsuffix (20230209.2326-1) ...
+Setting up libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u9) ...
+/tests/test.sh: line 15: /root/.local/bin/env: No such file or directory
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 113ms
+   Building app @ file:///app
+      Built app @ file:///app
+Downloading pygments (1.2MiB)
+ Downloaded pygments
+Prepared 6 packages in 135ms
+Installed 6 packages in 12ms
+ + app==0.1.0 (from file:///app)
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+Resolved 12 packages in 283ms
+   Building app @ file:///app
+      Built app @ file:///app
+Downloading scipy (33.7MiB)
+Downloading numpy (15.9MiB)
+Downloading pandas (11.4MiB)
+ Downloaded pandas
+ Downloaded numpy
+ Downloaded scipy
+Prepared 6 packages in 2.38s
+Uninstalled 1 package in 0.45ms
+Installed 6 packages in 94ms
+ ~ app==0.1.0 (from file:///app)
+ + numpy==2.5.4
+ + pandas==3.1.0
+ + python-dateutil==4.0.0
+ + scipy==1.18.1
+ + tzdata==2026.6
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 14 items
+
+../tests/test_outputs.py .....F....F...                                  [100%]
+
+=================================== FAILURES ===================================
+_______________________ test_case_insensitive_detection ________________________
+
+    def test_case_insensitive_detection():
+        path = '/app/templates/test_case_mix.j2'
+        write_template(path, '{{ CoNfIg }}')
+        subprocess.run(['python', '/app/validate_template.py', path], check=True)
+        with open(path, 'r') as f:
+>           assert 'REJECTED' in f.read()
+E           AssertionError: assert 'REJECTED' in '{{ CoNfIg }}'
+E            +  where '{{ CoNfIg }}' = <built-in method read of _io.TextIOWrapper object at 0x719f875c1540>()
+E            +    where <built-in method read of _io.TextIOWrapper object at 0x719f875c1540> = <_io.TextIOWrapper name='/app/templates/test_case_mix.j2' mode='r' encoding='utf-8'>.read
+
+/tests/test_outputs.py:104: AssertionError
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_case_mix.j2
+_____________________________ test_file_not_found ______________________________
+
+    def test_file_not_found():
+        result = subprocess.run(
+            ['python', '/app/validate_template.py', '/nonexistent/template.j2'],
+            capture_output=True
+        )
+        assert result.returncode != 0
+>       assert b"File not found" in result.stderr
+E       AssertionError: assert b'File not found' in b'Error: file not found: /nonexistent/template.j2\n'
+E        +  where b'Error: file not found: /nonexistent/template.j2\n' = CompletedProcess(args=['python', '/app/validate_template.py', '/nonexistent/template.j2'], returncode=1, stdout=b'', stderr=b'Error: file not found: /nonexistent/template.j2\n').stderr
+
+/tests/test_outputs.py:145: AssertionError
+==================================== PASSES ====================================
+_____________________________ test_empty_template ______________________________
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_empty.j2
+________________________ test_whitespace_only_template _________________________
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_whitespace.j2
+____________________________ test_safe_jinja_syntax ____________________________
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_safe_complex.j2
+_________________________ test_whitespace_obfuscation __________________________
+----------------------------- Captured stdout call -----------------------------
+Rejected: dangerous expressions found in /app/templates/test_space_obfuscate.j2
+_________________________ test_attribute_access_chains _________________________
+----------------------------- Captured stdout call -----------------------------
+Rejected: dangerous expressions found in /app/templates/test_chain.j2
+_______________________ test_function_call_in_expression _______________________
+----------------------------- Captured stdout call -----------------------------
+Rejected: dangerous expressions found in /app/templates/test_eval.j2
+____________________________ test_os_module_access _____________________________
+----------------------------- Captured stdout call -----------------------------
+Rejected: dangerous expressions found in /app/templates/test_os.j2
+___________________________ test_non_jinja_text_safe ___________________________
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_plain.txt
+________________________ test_commented_dangerous_code _________________________
+----------------------------- Captured stdout call -----------------------------
+Rejected: dangerous expressions found in /app/templates/test_commented.j2
+_______________________ test_extreme_nested_expressions ________________________
+----------------------------- Captured stdout call -----------------------------
+OK: template is safe: /app/templates/test_nested_safe.j2
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_malicious_templates_rejected
+PASSED ../tests/test_outputs.py::test_safe_templates_approved
+PASSED ../tests/test_outputs.py::test_empty_template
+PASSED ../tests/test_outputs.py::test_whitespace_only_template
+PASSED ../tests/test_outputs.py::test_safe_jinja_syntax
+PASSED ../tests/test_outputs.py::test_whitespace_obfuscation
+PASSED ../tests/test_outputs.py::test_attribute_access_chains
+PASSED ../tests/test_outputs.py::test_function_call_in_expression
+PASSED ../tests/test_outputs.py::test_os_module_access
+PASSED ../tests/test_outputs.py::test_non_jinja_text_safe
+PASSED ../tests/test_outputs.py::test_commented_dangerous_code
+PASSED ../tests/test_outputs.py::test_extreme_nested_expressions
+FAILED ../tests/test_outputs.py::test_case_insensitive_detection - AssertionE...
+FAILED ../tests/test_outputs.py::test_file_not_found - AssertionError: assert...
+========================= 2 failed, 12 passed in 0.49s =========================

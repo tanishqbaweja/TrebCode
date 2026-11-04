@@ -1,0 +1,70 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [359 kB]
+Fetched 9398 kB in 8s (1250 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+curl is already the newest version (7.88.1-10+deb12u15).
+0 upgraded, 0 newly installed, 0 to remove and 51 not upgraded.
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 12 packages in 75ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 10 packages in 247ms
+Installed 10 packages in 70ms
+ + icalendar==7.3.0
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+ + python-dateutil==3.0.0
+ + pytz==2026.6
+ + six==1.17.0
+ + tzdata==2026.6
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 14 items
+
+../tests/test_outputs.py ..............                                  [100%]
+
+==================================== PASSES ====================================
+__________________________ test_01_output_file_exists __________________________
+---------------------------- Captured stdout setup -----------------------------
+
+[Setup] Running user solution...
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_01_output_file_exists
+PASSED ../tests/test_outputs.py::test_02_ics_structure_headers
+PASSED ../tests/test_outputs.py::test_03_ics_event_properties
+PASSED ../tests/test_outputs.py::test_04_meeting_duration
+PASSED ../tests/test_outputs.py::test_05_timezone_utc_compliance
+PASSED ../tests/test_outputs.py::test_06_date_range_strict
+PASSED ../tests/test_outputs.py::test_07_no_weekend_scheduling
+PASSED ../tests/test_outputs.py::test_08_engineering_work_hours
+PASSED ../tests/test_outputs.py::test_09_engineering_lunch_break
+PASSED ../tests/test_outputs.py::test_10_design_work_hours
+PASSED ../tests/test_outputs.py::test_11_design_lunch_break
+PASSED ../tests/test_outputs.py::test_12_product_start_restriction
+PASSED ../tests/test_outputs.py::test_13_product_buffer_logic
+PASSED ../tests/test_outputs.py::test_14_global_overlap_check
+============================== 14 passed in 0.26s ==============================

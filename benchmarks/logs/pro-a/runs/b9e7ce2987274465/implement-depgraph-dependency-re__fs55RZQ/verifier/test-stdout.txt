@@ -1,0 +1,137 @@
+Looking in indexes: http://host.docker.internal:18090/pypi/simple
+Requirement already satisfied: pytest in /usr/local/lib/python3.13/site-packages (9.0.2)
+Requirement already satisfied: iniconfig>=1.0.1 in /usr/local/lib/python3.13/site-packages (from pytest) (2.3.0)
+Requirement already satisfied: packaging>=22 in /usr/local/lib/python3.13/site-packages (from pytest) (25.0)
+Requirement already satisfied: pluggy<2,>=1.5 in /usr/local/lib/python3.13/site-packages (from pytest) (1.6.0)
+Requirement already satisfied: pygments>=2.7.2 in /usr/local/lib/python3.13/site-packages (from pytest) (2.19.2)
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable.It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 24.3.1 -> 26.2.2
+[notice] To update, run: pip install --upgrade pip
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-9.0.2, pluggy-1.6.0
+rootdir: /tests
+plugins: anyio-4.12.0
+collected 13 items
+
+../tests/test_outputs.py ....F....F..F                                   [100%]
+
+=================================== FAILURES ===================================
+________________________ test_version_constraint_logic _________________________
+
+workspace = ('/tmp/tmprfmoz1fx/registry', '/tmp/tmprfmoz1fx/root_config.json')
+
+    def test_version_constraint_logic(workspace):
+        registry, config_path = workspace
+        create_manifest(registry, "A", "1.0.0")
+        create_manifest(registry, "A", "2.0.0")
+        create_manifest(registry, "A", "3.0.0")
+    
+        resolver = DependencyResolver(registry)
+    
+        create_config(config_path, {"A": "<2.0.0"})
+>       result = resolver.resolve(config_path)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+resolver.py:241: in resolve
+    visit(dep_name, [])
+resolver.py:215: in visit
+    check_constraints(pkg_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pkg_name = 'A'
+
+    def check_constraints(pkg_name: str):
+        manifest = self.registry.get(pkg_name)
+        if manifest is None:
+            return
+        for constraint in constraints.get(pkg_name, []):
+            if not satisfies(manifest["version"], constraint):
+>               raise DependencyConflictError(
+                    f"Package {pkg_name} version {manifest['version']} "
+                    f"does not satisfy constraint {constraint!r}"
+                )
+E               resolver.DependencyConflictError: Package A version 3.0.0 does not satisfy constraint '<2.0.0'
+
+resolver.py:204: DependencyConflictError
+_________________________ test_lockfile_output_format __________________________
+
+workspace = ('/tmp/tmppwnz5nip/registry', '/tmp/tmppwnz5nip/root_config.json')
+
+    def test_lockfile_output_format(workspace):
+        registry, config_path = workspace
+        create_manifest(registry, "A", "1.0.0")
+        create_config(config_path, {"A": ">=1.0.0"})
+    
+        resolver = DependencyResolver(registry)
+        resolver.resolve(config_path)
+    
+        assert os.path.exists('/app/lockfile.json')
+        with open('/app/lockfile.json') as f:
+            data = json.load(f)
+            assert isinstance(data, list)
+>           assert len(data) == 1
+E           AssertionError: assert 4 == 1
+E            +  where 4 = len([{'name': 'pkgC', 'version': '1.2.0'}, {'name': 'pkgB', 'version': '2.0.0'}, {'name': 'pkgD', 'version': '1.0.0'}, {'name': 'pkgA', 'version': '1.0.0'}])
+
+/tests/test_outputs.py:180: AssertionError
+____________________ test_multiple_constraints_intersection ____________________
+
+workspace = ('/tmp/tmp4b32jl6f/registry', '/tmp/tmp4b32jl6f/root_config.json')
+
+    def test_multiple_constraints_intersection(workspace):
+        registry, config_path = workspace
+        create_manifest(registry, "Target", "1.0.0")
+        create_manifest(registry, "Target", "2.0.0")
+        create_manifest(registry, "Target", "3.0.0")
+    
+        create_manifest(registry, "A", "1.0", {"Target": ">1.0"})
+        create_manifest(registry, "B", "1.0", {"Target": "<3.0"})
+    
+        create_config(config_path, {"A": ">=1.0", "B": ">=1.0"})
+    
+        resolver = DependencyResolver(registry)
+>       result = resolver.resolve(config_path)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:213: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+resolver.py:241: in resolve
+    visit(dep_name, [])
+resolver.py:234: in visit
+    check_constraints(dep_name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+pkg_name = 'Target'
+
+    def check_constraints(pkg_name: str):
+        manifest = self.registry.get(pkg_name)
+        if manifest is None:
+            return
+        for constraint in constraints.get(pkg_name, []):
+            if not satisfies(manifest["version"], constraint):
+>               raise DependencyConflictError(
+                    f"Package {pkg_name} version {manifest['version']} "
+                    f"does not satisfy constraint {constraint!r}"
+                )
+E               resolver.DependencyConflictError: Package Target version 3.0.0 does not satisfy constraint '<3.0'
+
+resolver.py:204: DependencyConflictError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_manifest_loading_and_decoding
+PASSED ../tests/test_outputs.py::test_linear_dependency_chain
+PASSED ../tests/test_outputs.py::test_complex_transitive_dependencies
+PASSED ../tests/test_outputs.py::test_diamond_dependency_compatibility
+PASSED ../tests/test_outputs.py::test_circular_dependency_detection
+PASSED ../tests/test_outputs.py::test_version_conflict_detection
+PASSED ../tests/test_outputs.py::test_missing_package_handling
+PASSED ../tests/test_outputs.py::test_topological_sort_order
+PASSED ../tests/test_outputs.py::test_empty_dependencies
+PASSED ../tests/test_outputs.py::test_self_dependency_error
+FAILED ../tests/test_outputs.py::test_version_constraint_logic - resolver.Dep...
+FAILED ../tests/test_outputs.py::test_lockfile_output_format - AssertionError...
+FAILED ../tests/test_outputs.py::test_multiple_constraints_intersection - res...
+========================= 3 failed, 10 passed in 0.09s =========================

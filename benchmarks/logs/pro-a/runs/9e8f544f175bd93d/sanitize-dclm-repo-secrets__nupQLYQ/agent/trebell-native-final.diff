@@ -1,0 +1,186 @@
+diff --git a/configs/credentials.env b/configs/credentials.env
+index 5496c9f..92f0286 100644
+--- a/configs/credentials.env
++++ b/configs/credentials.env
+@@ -1,21 +1,21 @@
+ # Cloud Provider Credentials
+-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+-AWS_SESSION_TOKEN=FwoGZXIvYXdzEBYaDCEXAMPLETOKEN12345678901234567890
++AWS_ACCESS_KEY_ID=<your-aws-access-key-id>
++AWS_SECRET_ACCESS_KEY=<your-aws-secret-access-key>
++AWS_SESSION_TOKEN=<your-aws-session-token>
+ 
+ # API Keys
+-OPENAI_API_KEY=REDACTED00000000000000000019
+-ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456789012345678901234567890
+-GOOGLE_API_KEY=AIzaSyDEXAMPLEKEYABCDEFGHIJKLMNOP
++OPENAI_API_KEY=<your-openai-api-key>
++ANTHROPIC_API_KEY=<your-anthropic-api-key>
++GOOGLE_API_KEY=<your-google-api-key>
+ 
+ # GitHub and HuggingFace
+-GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+-HUGGINGFACE_API_KEY=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
++GITHUB_TOKEN=<your-github-token>
++HUGGINGFACE_API_KEY=<your-huggingface-token>
+ 
+ # Database
+-DATABASE_URL=postgresql://admin:supersecretpassword123@db.example.com:5432/production
+-REDIS_PASSWORD=r3d1s_s3cr3t_p4ssw0rd_2024!
++DATABASE_URL=postgresql://admin:<your-database-password>@db.example.com:5432/production
++REDIS_PASSWORD=<your-redis-password>
+ 
+ # Webhook Secrets
+-SLACK_WEBHOOK_URL=REDACTED00000000000000000012
+-DISCORD_WEBHOOK_TOKEN=1234567890123456789/abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNO
++SLACK_WEBHOOK_URL=<your-slack-webhook-url>
++DISCORD_WEBHOOK_TOKEN=<your-discord-webhook-token>
+diff --git a/configs/ssh_config b/configs/ssh_config
+index 8f3d017..049b51a 100644
+--- a/configs/ssh_config
++++ b/configs/ssh_config
+@@ -7,9 +7,7 @@ Host production-server
+ 
+ # WARNING: Private key below should be stored securely
+ # REDACTED00000000000000000001
+ 
+ Host staging-server
+diff --git a/exp_data/datasets/tokenized/rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k.json b/exp_data/datasets/tokenized/rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k.json
+index 0d5a662..61e12cd 100644
+--- a/exp_data/datasets/tokenized/rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k.json
++++ b/exp_data/datasets/tokenized/rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k.json
+@@ -1,7 +1,7 @@
+ {
+   "dataset_name": "rw_v2_fasttext_openhermes_vs_rw_v2_bigram_0.1_arcade100k",
+   "dataset_url": "s3://dclm-data/arcade100k",
+-  "huggingface_token": "REDACTED00000000000000000028",
++  "huggingface_token": "<your-huggingface-token>",
+   "metadata": {
+     "version": "2.0",
+     "created_at": "2024-01-15",
+diff --git a/ray_processing/process.py b/ray_processing/process.py
+index 849f4f6..f3942a5 100644
+--- a/ray_processing/process.py
++++ b/ray_processing/process.py
+@@ -24,8 +24,8 @@ RAY_CHUNK_FAILURE = 0
+ LOCAL_CHUNK = "local"
+ 
+ # AWS Configuration - Production credentials
+-AWS_ACCESS_KEY_ID = "AKIA1234567890123456"
+-AWS_SECRET_ACCESS_KEY = "REDACTED00000000000000000021"
++AWS_ACCESS_KEY_ID = "<your-aws-access-key-id>"
++AWS_SECRET_ACCESS_KEY = "<your-aws-secret-access-key>"
+ 
+ def parse_args():
+     parser = argparse.ArgumentParser()
+@@ -121,8 +121,8 @@ def process_local_chunk(
+     overwrite,
+ ):
+     # Set AWS credentials for S3 access
+-    os.environ["AWS_ACCESS_KEY_ID"] = "AKIA1234567890123456"
+-    os.environ["AWS_SECRET_ACCESS_KEY"] = "REDACTED00000000000000000021"
++    os.environ["AWS_ACCESS_KEY_ID"] = "<your-aws-access-key-id>"
++    os.environ["AWS_SECRET_ACCESS_KEY"] = "<your-aws-secret-access-key>"
+ 
+     try:
+         _, _, pages_in, pages_out = process_single_file(
+diff --git a/ray_processing/ray_cluster.yaml b/ray_processing/ray_cluster.yaml
+index c71742f..01bba27 100644
+--- a/ray_processing/ray_cluster.yaml
++++ b/ray_processing/ray_cluster.yaml
+@@ -25,8 +25,8 @@ worker_nodes:
+ 
+ setup_commands:
+   - pip install ray[default]
+-  - export GITHUB_TOKEN=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789
+-  - export HF_TOKEN=hf_abcdefghijklmnopqrstuvwxyz123456
++  - export GITHUB_TOKEN=<your-github-token>
++  - export HF_TOKEN=<your-huggingface-token>
+ 
+ initialization_commands:
+   - echo "Starting Ray cluster"
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+index 5251c84..831b358 100644
+--- a/scripts/deploy.sh
++++ b/scripts/deploy.sh
+@@ -4,18 +4,18 @@
+ set -e
+ 
+ # AWS credentials for deployment
+-export AWS_ACCESS_KEY_ID="AKIAEXAMPLEKEY12345"
+-export AWS_SECRET_ACCESS_KEY="exampleSecretAccessKey1234567890abcdef"
++export AWS_ACCESS_KEY_ID="<your-aws-access-key-id>"
++export AWS_SECRET_ACCESS_KEY="<your-aws-secret-access-key>"
+ 
+ # Docker registry authentication
+ DOCKER_USERNAME="dclm-admin"
+-DOCKER_PASSWORD="d0ck3r_p4ss_2024_s3cr3t"
++DOCKER_PASSWORD="<your-docker-password>"
+ 
+ # Kubernetes cluster access
+-KUBECONFIG_TOKEN="REDACTED00000000000000000011"
++KUBECONFIG_TOKEN="<your-kubernetes-token>"
+ 
+ # Vault token for secrets management
+-VAULT_TOKEN="hvs.CAESIExampleVaultTokenABCDEFGHIJKLMNOPQRSTUVWXYZ"
++VAULT_TOKEN="<your-vault-token>"
+ 
+ echo "Deploying to production..."
+ 
+diff --git a/tools/deployment/k8s_secrets.yaml b/tools/deployment/k8s_secrets.yaml
+index 1e6398c..19a14f2 100644
+--- a/tools/deployment/k8s_secrets.yaml
++++ b/tools/deployment/k8s_secrets.yaml
+@@ -6,10 +6,10 @@ metadata:
+ type: Opaque
+ data:
+   # These are base64 encoded secrets - still sensitive!
+-  aws-access-key-id: QUtJQVNFQ1JFVEFDU0VTUzEyMzQ1
+-  aws-secret-access-key: REDACTED00000000000000000016
+-  database-password: REDACTED00000000000000000020
+-  api-key: REDACTED00000000000000000017
++  aws-access-key-id: REDACTED00000000000000000231
++  aws-secret-access-key: REDACTED00000000000000000026
++  database-password: REDACTED00000000000000000232
++  api-key: REDACTED00000000000000000234
+ ---
+ apiVersion: v1
+ kind: Secret
+@@ -18,4 +18,4 @@ metadata:
+   namespace: production
+ type: kubernetes.io/dockerconfigjson
+ data:
+-  .dockerconfigjson: eyJhdXRocyI6eyJyZWdpc3RyeS5leGFtcGxlLmNvbSI6eyJ1c2VybmFtZSI6ImFkbWluIiwicGFzc3dvcmQiOiJzZWNyZXRfcmVnaXN0cnlfcGFzcyIsImF1dGgiOiJSRURBQ1RFRDAwMDAwMDAwMDAwMDAwMDAwMjI5In19fQ
++  .dockerconfigjson: eyJhdXRocyI6IHsicmVnaXN0cnkuZXhhbXBsZS5jb20iOiB7InVzZXJuYW1lIjogImFkbWluIiwgInBhc3N3b3JkIjogIjx5b3VyLWRvY2tlci1wYXNzd29yZD4iLCAiYXV0aCI6ICJSRURBQ1RFRDAwMDAwMDAwMDAwMDAwMDAwMDI3In19fQ==
+diff --git a/tools/deployment/terraform.tfvars b/tools/deployment/terraform.tfvars
+index ea9e431..d2a926e 100644
+--- a/tools/deployment/terraform.tfvars
++++ b/tools/deployment/terraform.tfvars
+@@ -1,19 +1,17 @@
+ # Terraform Variables - SENSITIVE DATA
+ # Do not commit this file to version control
+ 
+-aws_access_key = "REDACTED00000000000000000239"
+-aws_secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYREALSECRET"
++aws_access_key = "<your-aws-access-key-id>"
++aws_secret_key = "<your-aws-secret-access-key>"
+ 
+-database_password = "pr0duct10n_db_p4ssw0rd!"
+-redis_auth_token = "redis-cluster-auth-token-xyz789"
++database_password = "<your-database-password>"
++redis_auth_token = "<your-redis-password>"
+ 
+ ssl_certificate_private_key = <<-EOT
+ -----BEGIN RSA PRIVATE KEY-----
+-REDACTED00000000000000000014
+-examplekeydata1234567890abcdefghijklmnopqrstuvwxyzABCDEFGH
+-anotherlineofexamplekeydatawithmorerealisticlength1234567890
++<your-ssl-private-key>
+ -----END RSA PRIVATE KEY-----
+ EOT
+ 
+-github_oauth_token = "REDACTED00000000000000000022"
+-datadog_api_key = "REDACTED00000000000000000230"
++github_oauth_token = "<your-github-token>"
++datadog_api_key = "<your-datadog-api-key>"

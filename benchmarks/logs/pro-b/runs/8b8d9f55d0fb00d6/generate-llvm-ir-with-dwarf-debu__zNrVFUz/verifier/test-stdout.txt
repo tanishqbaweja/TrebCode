@@ -1,0 +1,92 @@
+Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+Ign:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages
+Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [360 kB]
+Fetched 9398 kB in 1min 8s (138 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libcurl4
+The following NEW packages will be installed:
+  curl libcurl4
+0 upgraded, 2 newly installed, 0 to remove and 36 not upgraded.
+Need to get 708 kB of archives.
+After this operation, 1361 kB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian bookworm/main amd64 libcurl4 amd64 7.88.1-10+deb12u15 [392 kB]
+Get:2 http://deb.debian.org/debian bookworm/main amd64 curl amd64 7.88.1-10+deb12u15 [316 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 708 kB in 1s (525 kB/s)
+Selecting previously unselected package libcurl4:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 14884 files and directories currently installed.)
+Preparing to unpack .../libcurl4_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../curl_7.88.1-10+deb12u15_amd64.deb ...
+Unpacking curl (7.88.1-10+deb12u15) ...
+Setting up libcurl4:amd64 (7.88.1-10+deb12u15) ...
+Setting up curl (7.88.1-10+deb12u15) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.13.1 interpreter at: /usr/local/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 7 packages in 48ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 85ms
+Installed 5 packages in 13ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.13.1, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 25 items
+
+../tests/test_outputs.py .........................                       [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestLLVMIRGeneration::test_ir_file_exists
+PASSED ../tests/test_outputs.py::TestLLVMIRGeneration::test_ir_file_not_empty
+PASSED ../tests/test_outputs.py::TestLLVMIRGeneration::test_ir_file_readable
+PASSED ../tests/test_outputs.py::TestDebugSymbols::test_debug_metadata_present
+PASSED ../tests/test_outputs.py::TestDebugSymbols::test_dwarf_compile_unit
+PASSED ../tests/test_outputs.py::TestDebugSymbols::test_dwarf_subprogram_for_functions
+PASSED ../tests/test_outputs.py::TestDebugSymbols::test_source_file_reference
+PASSED ../tests/test_outputs.py::TestDebugSymbols::test_line_number_info
+PASSED ../tests/test_outputs.py::TestIRContent::test_valid_llvm_ir_format
+PASSED ../tests/test_outputs.py::TestIRContent::test_add_function_present
+PASSED ../tests/test_outputs.py::TestIRContent::test_multiply_function_present
+PASSED ../tests/test_outputs.py::TestIRContent::test_factorial_function_present
+PASSED ../tests/test_outputs.py::TestIRContent::test_pyinit_function_present
+PASSED ../tests/test_outputs.py::TestIRContent::test_python_api_types
+PASSED ../tests/test_outputs.py::TestIRContent::test_module_definition_struct
+PASSED ../tests/test_outputs.py::TestIRRecompilation::test_llc_compilation_to_object
+PASSED ../tests/test_outputs.py::TestIRRecompilation::test_object_file_not_empty
+PASSED ../tests/test_outputs.py::TestIRRecompilation::test_clang_linkage_to_shared_library
+PASSED ../tests/test_outputs.py::TestIRRecompilation::test_shared_library_not_empty
+PASSED ../tests/test_outputs.py::TestDebugInfoIntegrity::test_debug_info_version
+PASSED ../tests/test_outputs.py::TestDebugInfoIntegrity::test_function_debug_attachments
+PASSED ../tests/test_outputs.py::TestDebugInfoIntegrity::test_local_variable_debug_info
+PASSED ../tests/test_outputs.py::TestDebugInfoIntegrity::test_metadata_nodes_present
+PASSED ../tests/test_outputs.py::TestDebugInfoIntegrity::test_named_metadata_present
+PASSED ../tests/test_outputs.py::TestOptimizationLevel::test_no_optimization_hints
+============================== 25 passed in 0.11s ==============================

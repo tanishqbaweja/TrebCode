@@ -1,0 +1,215 @@
+{
+  "schema": "trebell-muse-usage/1",
+  "session_id": "30021d88-67c3-40b8-aaa8-18db7a69e379",
+  "exit_status": 1,
+  "terminal": {
+    "terminal": "failed",
+    "reason": "transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts)"
+  },
+  "json_events": 565,
+  "source": "session-logs",
+  "input_tokens": 1395564,
+  "cached_tokens": 1231279,
+  "output_tokens": 45130,
+  "reasoning_tokens": 32681,
+  "usage_accounting_complete": false,
+  "unrecorded_children": 2,
+  "unrecorded_estimate": {
+    "input_tokens": 24330,
+    "cached_tokens": 21730,
+    "output_tokens": 964,
+    "reasoning_tokens": 639
+  },
+  "run_usage": {
+    "input_tokens": 1154313,
+    "cached_tokens": 1011713,
+    "output_tokens": 34148,
+    "reasoning_tokens": 24622
+  },
+  "run_usage_matches_main": true,
+  "session": {
+    "session_dir": "H:\\TrebellExp-muse-e\\.harbor-jobs\\terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-build-uci-chess-engine-to-beat-multiple-bots-20261031T105351Z\\build-uci-chess-engine-to-beat-m__oJ6giBu\\agent\\muse-sessions\\2026\\10\\31\\30021d88-67c3-40b8-aaa8-18db7a69e379",
+    "session_files": 1,
+    "total": {
+      "input_tokens": 1395564,
+      "cached_tokens": 1231279,
+      "output_tokens": 45130,
+      "reasoning_tokens": 32681
+    },
+    "by_role": {
+      "main": {
+        "input_tokens": 1154313,
+        "cached_tokens": 1011713,
+        "output_tokens": 34148,
+        "reasoning_tokens": 24622
+      },
+      "observers": {
+        "input_tokens": 241251,
+        "cached_tokens": 219566,
+        "output_tokens": 10982,
+        "reasoning_tokens": 8059
+      },
+      "subagents": {
+        "input_tokens": 0,
+        "cached_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0
+      }
+    },
+    "by_observer": {
+      "skill-reminder": {
+        "input_tokens": 232608,
+        "cached_tokens": 217405,
+        "output_tokens": 7797,
+        "reasoning_tokens": 5322
+      },
+      "todo-reminder": {
+        "input_tokens": 8643,
+        "cached_tokens": 2161,
+        "output_tokens": 3185,
+        "reasoning_tokens": 2737
+      }
+    },
+    "calls": {
+      "main": 19,
+      "observers": 16,
+      "subagents": 0
+    },
+    "usage_records": 35,
+    "duplicate_usage_records": 0,
+    "mirrored_usage_records": 0,
+    "mirror_mismatches": [],
+    "unreported_usage_records": 0,
+    "cached_over_input_records": 0,
+    "model_completed_main": {
+      "input_tokens": 1154313,
+      "cached_tokens": 1011713,
+      "output_tokens": 34148,
+      "reasoning_tokens": 24622
+    },
+    "models": [
+      "muse-spark-1.3-contributor"
+    ],
+    "provider_ids": [
+      "meta"
+    ],
+    "builds": [
+      "1.4.14 (dec7d7497f)"
+    ],
+    "active_tools": [
+      "workflow",
+      "read_file",
+      "search",
+      "write_file",
+      "edit_file",
+      "read_memory",
+      "add_memory",
+      "edit_memory",
+      "work_stop",
+      "work_list",
+      "bash",
+      "bash_input",
+      "monitor",
+      "cron_create",
+      "cron_delete",
+      "cron_list",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "report_progress",
+      "image_generation",
+      "subagent_spawn",
+      "subagent_status",
+      "subagent_send_message",
+      "subagent_wait",
+      "subagent_read_result",
+      "subagent_cancel",
+      "read_skill",
+      "work_status",
+      "snooze_reminder",
+      "write_todos"
+    ],
+    "reminder_roster": [
+      {
+        "id": "skill-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "low",
+        "blocking": null
+      },
+      {
+        "id": "todo-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "medium",
+        "blocking": null
+      },
+      {
+        "id": "goal-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      },
+      {
+        "id": "verify-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      }
+    ],
+    "reminder_runs": 18,
+    "subagents": 0,
+    "unrecorded_children": [
+      {
+        "kind": "reminder",
+        "agent": "skill-reminder",
+        "child_session_id": "01a191a2-5a37-72f1-a806-da0a99c05e6f",
+        "state": "failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))"
+      },
+      {
+        "kind": "reminder",
+        "agent": "todo-reminder",
+        "child_session_id": "01a191a2-5a9d-7343-993c-1b2437892396",
+        "state": "failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))"
+      }
+    ],
+    "unrecorded_estimate": {
+      "input_tokens": 24330,
+      "cached_tokens": 21730,
+      "output_tokens": 964,
+      "reasoning_tokens": 639
+    },
+    "unrecorded_estimated_runs": 2,
+    "user_input_calls": 0,
+    "in_flight_model_calls": 0,
+    "rate_limit_events": 0,
+    "provider_retries": {
+      "retries": 3,
+      "rate_limited": 0,
+      "network_retries": 3,
+      "retry_wait_ms": 1750,
+      "by_kind": {
+        "transport": 3
+      },
+      "main_run": {
+        "retries": 3,
+        "rate_limited": 0,
+        "network_retries": 3,
+        "retry_wait_ms": 1750,
+        "by_kind": {
+          "transport": 3
+        }
+      },
+      "unlogged_reminder_runs": 18,
+      "lower_bound": true
+    }
+  },
+  "models": [
+    "muse-spark-1.3-contributor"
+  ],
+  "model_confirmed": true,
+  "accepted_models": [],
+  "rate_limit_lines": 0,
+  "problems": [
+    "2 linked child run(s) left no usage record, so the cost is a lower bound: skill-reminder (failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))) x1, todo-reminder (failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))) x1"
+  ],
+  "key_found_in_logs": []
+}

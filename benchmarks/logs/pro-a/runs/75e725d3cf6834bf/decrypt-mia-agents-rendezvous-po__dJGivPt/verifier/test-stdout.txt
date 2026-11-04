@@ -1,0 +1,170 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0
+rootdir: /tests
+collected 10 items
+
+../tests/test_outputs.py ......FFF.                                      [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_centroid_calculation ___________________________
+
+mission_instance = <rescue.RescueMission object at 0x7c23b0c662d0>
+
+    def test_centroid_calculation(mission_instance):
+        """Verify centroid calculation."""
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1, 2]):
+            with patch.object(mission_instance, 'decrypt_message') as mock_decrypt:
+                mock_decrypt.side_effect = [
+                    "Coordinates: 10.0, 20.0",
+                    "Coordinates: 30.0, 40.0"
+                ]
+    
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x7c23b0c662d0>, wordlist = None
+output_path = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(self, wordlist=None, output_path=None, *args, **kwargs):
+        """Calculate the rendezvous point as the centroid of missing agents.
+    
+        Decrypts each MIA agent distress signal, extracts coordinates, and
+        averages latitude and longitude. Saves the result to solution.txt.
+    
+        Args:
+            wordlist: Optional wordlist path override.
+            output_path: Optional output file path override.
+    
+        Returns:
+            The formatted rendezvous string "Lat: XX.XXXX, Lon: XX.XXXX",
+            or a descriptive message when no coordinates are available.
+        """
+        if args:
+            # Allow positional (wordlist, output_path) overrides.
+            if wordlist is None and len(args) >= 1:
+                wordlist = args[0]
+            if output_path is None and len(args) >= 2:
+                output_path = args[1]
+        for key in ("wordlist_path", "wordlist_file"):
+            if key in kwargs and wordlist is None:
+                wordlist = kwargs[key]
+        for key in ("output_file", "solution_path", "solution_file", "path"):
+            if key in kwargs and output_path is None:
+                output_path = kwargs[key]
+>       wpath = self._resolve(wordlist, self.wordlist, self.wordlist_path,
+                                                       ^^^^^^^^^^^^^^^^^^
+                              "/app/wordlist.txt")
+E       AttributeError: 'RescueMission' object has no attribute 'wordlist_path'
+
+rescue.py:271: AttributeError
+______________________________ test_no_mia_agents ______________________________
+
+mission_instance = <rescue.RescueMission object at 0x7c23b0c66690>
+
+    def test_no_mia_agents(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[]):
+>           result = mission_instance.calculate_rendezvous()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:113: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x7c23b0c66690>, wordlist = None
+output_path = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(self, wordlist=None, output_path=None, *args, **kwargs):
+        """Calculate the rendezvous point as the centroid of missing agents.
+    
+        Decrypts each MIA agent distress signal, extracts coordinates, and
+        averages latitude and longitude. Saves the result to solution.txt.
+    
+        Args:
+            wordlist: Optional wordlist path override.
+            output_path: Optional output file path override.
+    
+        Returns:
+            The formatted rendezvous string "Lat: XX.XXXX, Lon: XX.XXXX",
+            or a descriptive message when no coordinates are available.
+        """
+        if args:
+            # Allow positional (wordlist, output_path) overrides.
+            if wordlist is None and len(args) >= 1:
+                wordlist = args[0]
+            if output_path is None and len(args) >= 2:
+                output_path = args[1]
+        for key in ("wordlist_path", "wordlist_file"):
+            if key in kwargs and wordlist is None:
+                wordlist = kwargs[key]
+        for key in ("output_file", "solution_path", "solution_file", "path"):
+            if key in kwargs and output_path is None:
+                output_path = kwargs[key]
+>       wpath = self._resolve(wordlist, self.wordlist, self.wordlist_path,
+                                                       ^^^^^^^^^^^^^^^^^^
+                              "/app/wordlist.txt")
+E       AttributeError: 'RescueMission' object has no attribute 'wordlist_path'
+
+rescue.py:271: AttributeError
+____________________________ test_malformed_message ____________________________
+
+mission_instance = <rescue.RescueMission object at 0x7c23b0c660c0>
+
+    def test_malformed_message(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1]):
+            with patch.object(mission_instance, 'decrypt_message', return_value="Help me!"):
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x7c23b0c660c0>, wordlist = None
+output_path = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(self, wordlist=None, output_path=None, *args, **kwargs):
+        """Calculate the rendezvous point as the centroid of missing agents.
+    
+        Decrypts each MIA agent distress signal, extracts coordinates, and
+        averages latitude and longitude. Saves the result to solution.txt.
+    
+        Args:
+            wordlist: Optional wordlist path override.
+            output_path: Optional output file path override.
+    
+        Returns:
+            The formatted rendezvous string "Lat: XX.XXXX, Lon: XX.XXXX",
+            or a descriptive message when no coordinates are available.
+        """
+        if args:
+            # Allow positional (wordlist, output_path) overrides.
+            if wordlist is None and len(args) >= 1:
+                wordlist = args[0]
+            if output_path is None and len(args) >= 2:
+                output_path = args[1]
+        for key in ("wordlist_path", "wordlist_file"):
+            if key in kwargs and wordlist is None:
+                wordlist = kwargs[key]
+        for key in ("output_file", "solution_path", "solution_file", "path"):
+            if key in kwargs and output_path is None:
+                output_path = kwargs[key]
+>       wpath = self._resolve(wordlist, self.wordlist, self.wordlist_path,
+                                                       ^^^^^^^^^^^^^^^^^^
+                              "/app/wordlist.txt")
+E       AttributeError: 'RescueMission' object has no attribute 'wordlist_path'
+
+rescue.py:271: AttributeError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_class_structure
+PASSED ../tests/test_outputs.py::test_imports
+PASSED ../tests/test_outputs.py::test_docstrings
+PASSED ../tests/test_outputs.py::test_password_cracking
+PASSED ../tests/test_outputs.py::test_decryption_logic
+PASSED ../tests/test_outputs.py::test_coordinate_extraction
+PASSED ../tests/test_outputs.py::test_end_to_end
+FAILED ../tests/test_outputs.py::test_centroid_calculation - AttributeError: ...
+FAILED ../tests/test_outputs.py::test_no_mia_agents - AttributeError: 'Rescue...
+FAILED ../tests/test_outputs.py::test_malformed_message - AttributeError: 'Re...
+========================= 3 failed, 7 passed in 5.93s ==========================

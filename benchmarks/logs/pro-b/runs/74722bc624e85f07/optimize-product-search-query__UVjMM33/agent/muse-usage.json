@@ -1,0 +1,208 @@
+{
+  "schema": "trebell-muse-usage/1",
+  "session_id": "e8f780c3-1bbe-488f-827d-136dee5b388f",
+  "exit_status": 0,
+  "terminal": {
+    "terminal": "completed",
+    "reason": null
+  },
+  "json_events": 297,
+  "source": "session-logs",
+  "input_tokens": 423832,
+  "cached_tokens": 321341,
+  "output_tokens": 10775,
+  "reasoning_tokens": 7713,
+  "usage_accounting_complete": true,
+  "unrecorded_children": 0,
+  "unrecorded_estimate": {
+    "input_tokens": 0,
+    "cached_tokens": 0,
+    "output_tokens": 0,
+    "reasoning_tokens": 0
+  },
+  "run_usage": {
+    "input_tokens": 279521,
+    "cached_tokens": 216983,
+    "output_tokens": 2715,
+    "reasoning_tokens": 1357
+  },
+  "run_usage_matches_main": true,
+  "session": {
+    "session_dir": "H:\\TrebellExp-muse-k\\.harbor-jobs\\terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-optimize-product-search-query-20261101T003414Z\\optimize-product-search-query__UVjMM33\\agent\\muse-sessions\\2026\\11\\01\\e8f780c3-1bbe-488f-827d-136dee5b388f",
+    "session_files": 3,
+    "total": {
+      "input_tokens": 423832,
+      "cached_tokens": 321341,
+      "output_tokens": 10775,
+      "reasoning_tokens": 7713
+    },
+    "by_role": {
+      "main": {
+        "input_tokens": 279521,
+        "cached_tokens": 216983,
+        "output_tokens": 2715,
+        "reasoning_tokens": 1357
+      },
+      "observers": {
+        "input_tokens": 144311,
+        "cached_tokens": 104358,
+        "output_tokens": 8060,
+        "reasoning_tokens": 6356
+      },
+      "subagents": {
+        "input_tokens": 0,
+        "cached_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0
+      }
+    },
+    "by_observer": {
+      "skill-reminder": {
+        "input_tokens": 124836,
+        "cached_tokens": 104358,
+        "output_tokens": 3596,
+        "reasoning_tokens": 2401
+      },
+      "todo-reminder": {
+        "input_tokens": 4177,
+        "cached_tokens": 0,
+        "output_tokens": 437,
+        "reasoning_tokens": 312
+      },
+      "goal-reminder": {
+        "input_tokens": 7881,
+        "cached_tokens": 0,
+        "output_tokens": 434,
+        "reasoning_tokens": 298
+      },
+      "verify-reminder": {
+        "input_tokens": 7417,
+        "cached_tokens": 0,
+        "output_tokens": 3593,
+        "reasoning_tokens": 3345
+      }
+    },
+    "calls": {
+      "main": 9,
+      "observers": 10,
+      "subagents": 0
+    },
+    "usage_records": 19,
+    "duplicate_usage_records": 0,
+    "mirrored_usage_records": 2,
+    "mirror_mismatches": [],
+    "unreported_usage_records": 0,
+    "cached_over_input_records": 0,
+    "model_completed_main": {
+      "input_tokens": 279521,
+      "cached_tokens": 216983,
+      "output_tokens": 2715,
+      "reasoning_tokens": 1357
+    },
+    "models": [
+      "muse-spark-1.3-contributor"
+    ],
+    "provider_ids": [
+      "meta"
+    ],
+    "builds": [
+      "1.4.14 (dec7d7497f)"
+    ],
+    "active_tools": [
+      "workflow",
+      "read_file",
+      "search",
+      "write_file",
+      "edit_file",
+      "read_memory",
+      "add_memory",
+      "edit_memory",
+      "work_stop",
+      "work_list",
+      "bash",
+      "bash_input",
+      "monitor",
+      "cron_create",
+      "cron_delete",
+      "cron_list",
+      "get_goal",
+      "create_goal",
+      "update_goal",
+      "report_progress",
+      "image_generation",
+      "subagent_spawn",
+      "subagent_status",
+      "subagent_send_message",
+      "subagent_wait",
+      "subagent_read_result",
+      "subagent_cancel",
+      "read_skill",
+      "work_status",
+      "snooze_reminder",
+      "write_todos"
+    ],
+    "reminder_roster": [
+      {
+        "id": "skill-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "low",
+        "blocking": null
+      },
+      {
+        "id": "todo-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "medium",
+        "blocking": null
+      },
+      {
+        "id": "goal-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      },
+      {
+        "id": "verify-reminder",
+        "model": "same-as-main",
+        "reasoning_effort": "high",
+        "blocking": true
+      }
+    ],
+    "reminder_runs": 10,
+    "subagents": 0,
+    "unrecorded_children": [],
+    "unrecorded_estimate": {
+      "input_tokens": 0,
+      "cached_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_tokens": 0
+    },
+    "unrecorded_estimated_runs": 0,
+    "user_input_calls": 0,
+    "in_flight_model_calls": 0,
+    "rate_limit_events": 0,
+    "provider_retries": {
+      "retries": 0,
+      "rate_limited": 0,
+      "network_retries": 0,
+      "retry_wait_ms": 0,
+      "by_kind": {},
+      "main_run": {
+        "retries": 0,
+        "rate_limited": 0,
+        "network_retries": 0,
+        "retry_wait_ms": 0,
+        "by_kind": {}
+      },
+      "unlogged_reminder_runs": 8,
+      "lower_bound": true
+    }
+  },
+  "models": [
+    "muse-spark-1.3-contributor"
+  ],
+  "model_confirmed": true,
+  "accepted_models": [],
+  "rate_limit_lines": 0,
+  "problems": [],
+  "key_found_in_logs": []
+}

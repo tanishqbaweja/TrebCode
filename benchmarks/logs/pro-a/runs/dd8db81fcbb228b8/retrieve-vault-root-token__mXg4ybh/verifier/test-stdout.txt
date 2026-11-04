@@ -1,0 +1,153 @@
+WARNING: Skipping /usr/lib/python3.12/dist-packages/asciinema-2.4.0.dist-info due to invalid metadata entry 'name'
+WARNING: Skipping /usr/lib/python3.12/dist-packages/asciinema-2.4.0.dist-info due to invalid metadata entry 'name'
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /tests
+collecting ... collected 70 items
+
+../tests/test_outputs.py::TestFileExistence::test_01_result_file_exists PASSED [  1%]
+../tests/test_outputs.py::TestFileExistence::test_02_result_file_not_empty PASSED [  2%]
+../tests/test_outputs.py::TestFileExistence::test_03_result_file_readable PASSED [  4%]
+../tests/test_outputs.py::TestFileExistence::test_04_result_file_single_line PASSED [  5%]
+../tests/test_outputs.py::TestFileExistence::test_05_result_file_no_leading_whitespace PASSED [  7%]
+../tests/test_outputs.py::TestFileExistence::test_06_result_file_no_trailing_newline_multiple PASSED [  8%]
+../tests/test_outputs.py::TestFileExistence::test_07_result_file_size_reasonable PASSED [ 10%]
+../tests/test_outputs.py::TestFileExistence::test_08_result_file_no_null_bytes PASSED [ 11%]
+../tests/test_outputs.py::TestFileExistence::test_09_result_file_utf8_valid PASSED [ 12%]
+../tests/test_outputs.py::TestFileExistence::test_10_result_file_no_bom PASSED [ 14%]
+../tests/test_outputs.py::TestTokenFormat::test_11_token_not_empty_string PASSED [ 15%]
+../tests/test_outputs.py::TestTokenFormat::test_12_token_matches_vault_pattern_hvs PASSED [ 17%]
+../tests/test_outputs.py::TestTokenFormat::test_13_token_matches_vault_pattern_s PASSED [ 18%]
+../tests/test_outputs.py::TestTokenFormat::test_14_token_valid_characters_only PASSED [ 20%]
+../tests/test_outputs.py::TestTokenFormat::test_15_token_minimum_length PASSED [ 21%]
+../tests/test_outputs.py::TestTokenFormat::test_16_token_maximum_length PASSED [ 22%]
+../tests/test_outputs.py::TestTokenFormat::test_17_token_has_valid_prefix PASSED [ 24%]
+../tests/test_outputs.py::TestTokenFormat::test_18_token_not_placeholder PASSED [ 25%]
+../tests/test_outputs.py::TestTokenFormat::test_19_token_no_spaces PASSED [ 27%]
+../tests/test_outputs.py::TestTokenFormat::test_20_token_no_quotes PASSED [ 28%]
+../tests/test_outputs.py::TestTokenFormat::test_21_token_case_sensitive_check PASSED [ 30%]
+../tests/test_outputs.py::TestTokenFormat::test_22_token_entropy_check PASSED [ 31%]
+../tests/test_outputs.py::TestDecoyRejection::test_23_token_not_decoy_fake123 PASSED [ 32%]
+../tests/test_outputs.py::TestDecoyRejection::test_24_token_not_decoy_faketoken PASSED [ 34%]
+../tests/test_outputs.py::TestDecoyRejection::test_25_token_not_decoy_oldtoken PASSED [ 35%]
+../tests/test_outputs.py::TestDecoyRejection::test_26_token_not_decoy_12345abc PASSED [ 37%]
+../tests/test_outputs.py::TestDecoyRejection::test_27_token_not_decoy_misleading PASSED [ 38%]
+../tests/test_outputs.py::TestDecoyRejection::test_28_token_not_decoy_deprecated PASSED [ 40%]
+../tests/test_outputs.py::TestDecoyRejection::test_29_token_not_decoy_notreal PASSED [ 41%]
+../tests/test_outputs.py::TestDecoyRejection::test_30_token_not_simple_root PASSED [ 42%]
+../tests/test_outputs.py::TestDecoyRejection::test_31_token_not_any_decoy PASSED [ 44%]
+../tests/test_outputs.py::TestDecoyRejection::test_32_token_not_from_backup_files PASSED [ 45%]
+../tests/test_outputs.py::TestVaultAuthentication::test_33_vault_health_check PASSED [ 47%]
+../tests/test_outputs.py::TestVaultAuthentication::test_34_vault_initialized PASSED [ 48%]
+../tests/test_outputs.py::TestVaultAuthentication::test_35_vault_unsealed PASSED [ 50%]
+../tests/test_outputs.py::TestVaultAuthentication::test_36_vault_seal_status PASSED [ 51%]
+../tests/test_outputs.py::TestVaultAuthentication::test_37_vault_token_lookup_self PASSED [ 52%]
+../tests/test_outputs.py::TestVaultAuthentication::test_38_vault_token_policies PASSED [ 54%]
+../tests/test_outputs.py::TestVaultAuthentication::test_39_vault_capabilities_self PASSED [ 55%]
+../tests/test_outputs.py::TestVaultAuthentication::test_40_vault_root_capabilities PASSED [ 57%]
+../tests/test_outputs.py::TestVaultAuthentication::test_41_vault_list_auth_methods PASSED [ 58%]
+../tests/test_outputs.py::TestVaultAuthentication::test_42_vault_list_secrets_engines PASSED [ 60%]
+../tests/test_outputs.py::TestVaultAuthentication::test_43_vault_read_sys_config PASSED [ 61%]
+../tests/test_outputs.py::TestVaultAuthentication::test_44_vault_no_permission_denied PASSED [ 62%]
+../tests/test_outputs.py::TestSecretOperations::test_45_read_test_secret PASSED [ 64%]
+../tests/test_outputs.py::TestSecretOperations::test_46_read_config_secret PASSED [ 65%]
+../tests/test_outputs.py::TestSecretOperations::test_47_verify_test_secret_value PASSED [ 67%]
+../tests/test_outputs.py::TestSecretOperations::test_48_verify_config_api_key PASSED [ 68%]
+../tests/test_outputs.py::TestSecretOperations::test_49_verify_config_db_pass PASSED [ 70%]
+../tests/test_outputs.py::TestSecretOperations::test_50_write_new_secret PASSED [ 71%]
+../tests/test_outputs.py::TestSecretOperations::test_51_read_written_secret PASSED [ 72%]
+../tests/test_outputs.py::TestSecretOperations::test_52_delete_secret PASSED [ 74%]
+../tests/test_outputs.py::TestSecretOperations::test_53_list_secrets PASSED [ 75%]
+../tests/test_outputs.py::TestSecretOperations::test_54_secret_metadata PASSED [ 77%]
+../tests/test_outputs.py::TestExactToken::test_55_token_exact_match PASSED [ 78%]
+../tests/test_outputs.py::TestExactToken::test_56_token_hash_match PASSED [ 80%]
+../tests/test_outputs.py::TestExactToken::test_57_token_length_exact PASSED [ 81%]
+../tests/test_outputs.py::TestExactToken::test_58_token_prefix_exact PASSED [ 82%]
+../tests/test_outputs.py::TestExactToken::test_59_token_suffix_exact PASSED [ 84%]
+../tests/test_outputs.py::TestExactToken::test_60_token_middle_chars PASSED [ 85%]
+../tests/test_outputs.py::TestEdgeCases::test_61_multiple_reads_consistent PASSED [ 87%]
+../tests/test_outputs.py::TestEdgeCases::test_62_token_after_vault_restart_resilient PASSED [ 88%]
+../tests/test_outputs.py::TestEdgeCases::test_63_concurrent_requests PASSED [ 90%]
+../tests/test_outputs.py::TestEdgeCases::test_64_token_special_endpoints PASSED [ 91%]
+../tests/test_outputs.py::TestEdgeCases::test_65_token_not_expired PASSED [ 92%]
+../tests/test_outputs.py::TestIntegration::test_66_full_secret_workflow PASSED [ 94%]
+../tests/test_outputs.py::TestIntegration::test_67_policy_management PASSED [ 95%]
+../tests/test_outputs.py::TestIntegration::test_68_audit_device_listing PASSED [ 97%]
+../tests/test_outputs.py::TestIntegration::test_69_token_can_create_child PASSED [ 98%]
+../tests/test_outputs.py::TestIntegration::test_70_final_validation PASSED [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestFileExistence::test_01_result_file_exists
+PASSED ../tests/test_outputs.py::TestFileExistence::test_02_result_file_not_empty
+PASSED ../tests/test_outputs.py::TestFileExistence::test_03_result_file_readable
+PASSED ../tests/test_outputs.py::TestFileExistence::test_04_result_file_single_line
+PASSED ../tests/test_outputs.py::TestFileExistence::test_05_result_file_no_leading_whitespace
+PASSED ../tests/test_outputs.py::TestFileExistence::test_06_result_file_no_trailing_newline_multiple
+PASSED ../tests/test_outputs.py::TestFileExistence::test_07_result_file_size_reasonable
+PASSED ../tests/test_outputs.py::TestFileExistence::test_08_result_file_no_null_bytes
+PASSED ../tests/test_outputs.py::TestFileExistence::test_09_result_file_utf8_valid
+PASSED ../tests/test_outputs.py::TestFileExistence::test_10_result_file_no_bom
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_11_token_not_empty_string
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_12_token_matches_vault_pattern_hvs
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_13_token_matches_vault_pattern_s
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_14_token_valid_characters_only
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_15_token_minimum_length
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_16_token_maximum_length
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_17_token_has_valid_prefix
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_18_token_not_placeholder
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_19_token_no_spaces
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_20_token_no_quotes
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_21_token_case_sensitive_check
+PASSED ../tests/test_outputs.py::TestTokenFormat::test_22_token_entropy_check
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_23_token_not_decoy_fake123
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_24_token_not_decoy_faketoken
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_25_token_not_decoy_oldtoken
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_26_token_not_decoy_12345abc
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_27_token_not_decoy_misleading
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_28_token_not_decoy_deprecated
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_29_token_not_decoy_notreal
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_30_token_not_simple_root
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_31_token_not_any_decoy
+PASSED ../tests/test_outputs.py::TestDecoyRejection::test_32_token_not_from_backup_files
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_33_vault_health_check
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_34_vault_initialized
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_35_vault_unsealed
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_36_vault_seal_status
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_37_vault_token_lookup_self
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_38_vault_token_policies
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_39_vault_capabilities_self
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_40_vault_root_capabilities
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_41_vault_list_auth_methods
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_42_vault_list_secrets_engines
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_43_vault_read_sys_config
+PASSED ../tests/test_outputs.py::TestVaultAuthentication::test_44_vault_no_permission_denied
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_45_read_test_secret
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_46_read_config_secret
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_47_verify_test_secret_value
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_48_verify_config_api_key
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_49_verify_config_db_pass
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_50_write_new_secret
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_51_read_written_secret
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_52_delete_secret
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_53_list_secrets
+PASSED ../tests/test_outputs.py::TestSecretOperations::test_54_secret_metadata
+PASSED ../tests/test_outputs.py::TestExactToken::test_55_token_exact_match
+PASSED ../tests/test_outputs.py::TestExactToken::test_56_token_hash_match
+PASSED ../tests/test_outputs.py::TestExactToken::test_57_token_length_exact
+PASSED ../tests/test_outputs.py::TestExactToken::test_58_token_prefix_exact
+PASSED ../tests/test_outputs.py::TestExactToken::test_59_token_suffix_exact
+PASSED ../tests/test_outputs.py::TestExactToken::test_60_token_middle_chars
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_61_multiple_reads_consistent
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_62_token_after_vault_restart_resilient
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_63_concurrent_requests
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_64_token_special_endpoints
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_65_token_not_expired
+PASSED ../tests/test_outputs.py::TestIntegration::test_66_full_secret_workflow
+PASSED ../tests/test_outputs.py::TestIntegration::test_67_policy_management
+PASSED ../tests/test_outputs.py::TestIntegration::test_68_audit_device_listing
+PASSED ../tests/test_outputs.py::TestIntegration::test_69_token_can_create_child
+PASSED ../tests/test_outputs.py::TestIntegration::test_70_final_validation
+============================== 70 passed in 0.66s ==============================

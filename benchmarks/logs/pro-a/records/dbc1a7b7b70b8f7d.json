@@ -1,0 +1,434 @@
+{
+  "pairId": "terminal-bench-pro-pair-muse-spark-1-3-contributor-high-default-implement-depgraph-dependency-resolver-20261031T151310Z",
+  "dataset": "terminal-bench-pro@1.0",
+  "task": "implement-depgraph-dependency-resolver",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks",
+  "localTaskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\implement-depgraph-dependency-resolver",
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-31T15:13:12.879Z",
+    "completed": true,
+    "local": true,
+    "qualifiedTask": "implement-depgraph-dependency-resolver",
+    "taskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\implement-depgraph-dependency-resolver",
+    "taskCount": 200,
+    "datasetVersion": "terminal-bench-pro@1.0",
+    "datasetContentHash": "9e8a53b6b7e770beaf22b60b415a5bea5483a72d641d2f93f2337e617d093b82",
+    "taskContentHash": "88b126ec8e52ca68f82771beae94bc6ad5adffd95d3d332a89a6d9676ce47c16",
+    "files": 10,
+    "finishedAt": "2026-10-31T15:13:12.901Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "47c89953d18ce94d759ec0744045ab32795a0f41",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "comparisonLanes": [
+    "muse-code"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "072fc7f788f6d478f6009119e0fb32fd2cdf2a6083496956feb72e4136d35838",
+  "nativeAdapterSha256": "f55f42d87fc73e76d33b3e2fd348e3fec3a8a9b5097b4cf51b7abc7dbe763951",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "072fc7f788f6d478f6009119e0fb32fd2cdf2a6083496956feb72e4136d35838",
+  "nativeMetaBundleNormalizedSha256": "b8f4c2032515a1a460bc2a04ebb3f3ed7b3a36c0a67f0a7eae0ffb3850277ac7",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124:t-bench-python-3-13",
+        "id": "sha256:18d34cc73a311cb821ad1168031c7ece07540c785eeb9ffa81e63c968c652daa",
+        "repoDigests": [
+          "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124@sha256:18d34cc73a311cb821ad1168031c7ece07540c785eeb9ffa81e63c968c652daa"
+        ]
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "musePinnedVersion": "1.4.14-R7309.1",
+  "museBuild": "Muse Code 1.4.14 (1.4.14-R7309.1)",
+  "museBinarySha256": "0809aac7cb58d18f5022b6d05e02aa1974683c0ec430e5f04d25b60ed17de2da",
+  "museLauncherSha256": "c6db294799a190ca380da274beb3b9c0e160e0da9681a3d364ce8b0e5fa3a4bc",
+  "museReleaseInfoSha256": "bff0073a555a496db1d12d341eade1c18cee56c36b0e31d909e085e00b1bb14c",
+  "museManifestSha256": "fd80486f6642fbc21760728a050e4d2f406f20370212108dd8fb93527abbb9b1",
+  "museAdapterSha256": "7a35fca9408306c29ff9119a34e0266401befdff1daedd25377b36f3207250e4",
+  "museUsageSha256": "908772bab5e724470a1bb854475153ed7e5d92d4623c0832b6b667967373c63f",
+  "museCommand": "muse exec --json --yolo --disable-web-tools --model muse-spark-1.3-contributor --reasoning-effort high --contributor-mode on --session-id <uuid4 per trial> --prompt-file /installed-agent/muse/instruction.txt",
+  "museEnvKeys": [
+    "META_API_KEY",
+    "MUSE_NO_AUTO_UPDATE"
+  ],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "muse-code",
+      "harness": "muse",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-implement-depgraph-dependency-resolver-20261031T151310Z",
+      "status": "finished",
+      "startedAt": "2026-10-31T15:13:12.908Z",
+      "finishedAt": "2026-10-31T15:16:33.078Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-implement-depgraph-dependency-resolver-20261031T151310Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-31T15:16:33.396Z",
+  "jobs": [
+    {
+      "harness": "muse",
+      "label": "muse-code",
+      "agent": "benchmarks.harbor.pinned_muse_agent:PinnedMuseAgent",
+      "jobName": "terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-implement-depgraph-dependency-resolver-20261031T151310Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 682252,
+      "cachedTokens": 536562,
+      "uncachedInputTokens": 145690,
+      "cacheHitPercent": 78.65,
+      "outputTokens": 19846,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.019611324,
+      "apiEquivalentCostAsReportedUsd": 0.019611324,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 682252,
+          "cachedInputTokens": 536562,
+          "uncachedInputTokens": 145690,
+          "outputTokens": 19846,
+          "reasoningTokens": 10129
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.014569,
+        "cachedInputUsd": 0.001073124,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0039692,
+        "totalUsd": 0.019611324,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 682252,
+            "cachedInputTokens": 536562,
+            "outputTokens": 19846,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.019611324
+          }
+        }
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "muse": {
+        "reasoningTokens": 10129,
+        "usageSource": "session-logs",
+        "usageRecords": 26,
+        "adapterMatchesSessionLogs": true,
+        "runUsageMatchesMain": true,
+        "models": [
+          "muse-spark-1.3-contributor"
+        ],
+        "modelConfirmed": true,
+        "contributorModelUsed": false,
+        "terminal": {
+          "terminal": "completed",
+          "reason": null
+        },
+        "exitStatus": 0,
+        "byRole": {
+          "main": {
+            "input_tokens": 509367,
+            "cached_tokens": 453693,
+            "output_tokens": 10804,
+            "reasoning_tokens": 3464
+          },
+          "observers": {
+            "input_tokens": 172885,
+            "cached_tokens": 82869,
+            "output_tokens": 9042,
+            "reasoning_tokens": 6665
+          },
+          "subagents": {
+            "input_tokens": 0,
+            "cached_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0
+          }
+        },
+        "calls": {
+          "main": 14,
+          "observers": 12,
+          "subagents": 0
+        },
+        "builds": [
+          "1.4.14 (dec7d7497f)"
+        ],
+        "activeTools": [
+          "workflow",
+          "read_file",
+          "search",
+          "write_file",
+          "edit_file",
+          "read_memory",
+          "add_memory",
+          "edit_memory",
+          "work_stop",
+          "work_list",
+          "bash",
+          "bash_input",
+          "monitor",
+          "cron_create",
+          "cron_delete",
+          "cron_list",
+          "get_goal",
+          "create_goal",
+          "update_goal",
+          "report_progress",
+          "image_generation",
+          "subagent_spawn",
+          "subagent_status",
+          "subagent_send_message",
+          "subagent_wait",
+          "subagent_read_result",
+          "subagent_cancel",
+          "read_skill",
+          "work_status",
+          "snooze_reminder",
+          "write_todos"
+        ],
+        "reminderRoster": [
+          {
+            "id": "skill-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "low",
+            "blocking": null
+          },
+          {
+            "id": "todo-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "medium",
+            "blocking": null
+          },
+          {
+            "id": "goal-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          },
+          {
+            "id": "verify-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          }
+        ],
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "unrecordedChildren": [],
+        "endOfRunReminders": null,
+        "inFlightModelCalls": 0,
+        "workspaceInstructions": [],
+        "workspaceRoot": "/app",
+        "nativeOnlyInstructions": [],
+        "nativeOnlyInstructionsTruncated": false,
+        "apiEquivalentCostWithEstimateUsd": null,
+        "keyFoundInLogs": [],
+        "problems": []
+      },
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "byKind": {},
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0,
+          "byKind": {}
+        },
+        "unloggedReminderRuns": 10,
+        "lowerBound": true
+      },
+      "reward": 0,
+      "taskChecksum": "2aa5bda62b54eadd6d1c929995aaaa6e4fb9b4d21ca0c40266e6e6f2f6d080fc",
+      "agentVersion": "1.4.14-R7309.1",
+      "setupMs": 19125,
+      "agentExecutionMs": 152717,
+      "verifierMs": 2135,
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "muse-code__muse-spark-1.3-contributor__adhoc": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 0
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "0.0": [
+                "implement-depgraph-dependency-re__Kweqqdi"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 0,
+        "passed": 0,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 0
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 3,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 0,
+        "writtenNetworkCode": 0,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 1,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 6,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "verifier-path"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-h/.harbor-jobs/terminal-bench-pro-muse-code-muse-spark-1-3-contributor-high-implement-depgraph-dependency-resolver-20261031T151310Z/implement-depgraph-dependency-re__Kweqqdi/agent/muse-sessions/2026/10/31/7d4dbcad-ae8e-45eb-8c29-b80059383cdf/session.jsonl",
+            "line": 497,
+            "snippet": "cd /app && python3 -m pytest tests/test_outputs.py -v 2>&1 | tail -n 30",
+            "source": "muse"
+          }
+        ]
+      }
+    }
+  ]
+}

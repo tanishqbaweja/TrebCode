@@ -1,0 +1,39 @@
+{
+    "id": "f98686c8-09f5-44ac-a405-e4bfdb7c768b",
+    "started_at": "2026-11-02T08:35:07.247127",
+    "updated_at": "2026-11-02T08:39:26.372300",
+    "finished_at": "2026-11-02T08:39:26.372300",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "trebell-native__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "reverse-engineer-physics-simulat__x9EUqYE"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 255680,
+        "n_cache_tokens": 223436,
+        "n_output_tokens": 14080,
+        "cost_usd": null
+    }
+}

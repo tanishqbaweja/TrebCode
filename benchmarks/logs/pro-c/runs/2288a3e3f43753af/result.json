@@ -1,0 +1,39 @@
+{
+    "id": "f7c40417-e914-4626-8f00-611f37f43da4",
+    "started_at": "2026-11-02T12:23:41.001551",
+    "updated_at": "2026-11-02T12:25:36.811975",
+    "finished_at": "2026-11-02T12:25:36.811975",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "trebell-native__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "sparql-asian-senior-researchers__jb3qcpr"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 45903,
+        "n_cache_tokens": 36420,
+        "n_output_tokens": 4718,
+        "cost_usd": null
+    }
+}

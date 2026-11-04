@@ -1,0 +1,547 @@
+{
+  "pairId": "tb2-pair-muse-spark-1-3-contributor-high-default-extract-moves-from-video-20261030T184019Z",
+  "dataset": "terminal-bench/terminal-bench-2@1",
+  "task": "extract-moves-from-video",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": null,
+  "localTaskPath": null,
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-30T18:40:23.282Z",
+    "completed": true,
+    "qualifiedTask": "terminal-bench/extract-moves-from-video",
+    "taskCount": 89,
+    "datasetVersion": "1.0.0",
+    "datasetRevision": "1",
+    "datasetContentHash": "sha256:c6fc2e2382c1dbae99b2d5ecd2f4f4a60c3c01e0d84642d69b4afd92e99d078b",
+    "attempts": 1,
+    "finishedAt": "2026-10-30T18:40:27.874Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "8fe540b20ec8a6c0d76dfd8241718d21ade8e963",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "comparisonLanes": [
+    "muse-code"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeAdapterSha256": "aab42d5f0e5ceecaa3cbf78e5d96dc9c94c7a8b4dcd787d7d29e72fbe102246c",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeMetaBundleNormalizedSha256": "1bfec0e973ad831538616deafe267a999e513a1891a4b59e33b46cefc0ddb850",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "task.toml docker_image",
+        "image": "alexgshaw/extract-moves-from-video:20251031",
+        "id": "sha256:14a9dcca7d08ce53c5a0ed9fbd663a996ef28f207c199ed69d9ccf6064f8b184",
+        "repoDigests": [
+          "alexgshaw/extract-moves-from-video@sha256:14a9dcca7d08ce53c5a0ed9fbd663a996ef28f207c199ed69d9ccf6064f8b184"
+        ]
+      },
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "ubuntu:24.04",
+        "id": null,
+        "repoDigests": null
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "musePinnedVersion": "1.4.14-R7309.1",
+  "museBuild": "Muse Code 1.4.14 (1.4.14-R7309.1)",
+  "museBinarySha256": "0809aac7cb58d18f5022b6d05e02aa1974683c0ec430e5f04d25b60ed17de2da",
+  "museLauncherSha256": "c6db294799a190ca380da274beb3b9c0e160e0da9681a3d364ce8b0e5fa3a4bc",
+  "museReleaseInfoSha256": "bff0073a555a496db1d12d341eade1c18cee56c36b0e31d909e085e00b1bb14c",
+  "museManifestSha256": "fd80486f6642fbc21760728a050e4d2f406f20370212108dd8fb93527abbb9b1",
+  "museAdapterSha256": "7a35fca9408306c29ff9119a34e0266401befdff1daedd25377b36f3207250e4",
+  "museUsageSha256": "908772bab5e724470a1bb854475153ed7e5d92d4623c0832b6b667967373c63f",
+  "museCommand": "muse exec --json --yolo --disable-web-tools --model muse-spark-1.3-contributor --reasoning-effort high --contributor-mode on --session-id <uuid4 per trial> --prompt-file /installed-agent/muse/instruction.txt",
+  "museEnvKeys": [
+    "META_API_KEY",
+    "MUSE_NO_AUTO_UPDATE"
+  ],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "muse-code",
+      "harness": "muse",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z",
+      "status": "failed",
+      "startedAt": "2026-10-30T18:40:27.893Z",
+      "finishedAt": "2026-10-30T19:09:09.953Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-30T19:09:10.163Z",
+  "jobs": [
+    {
+      "harness": "muse",
+      "label": "muse-code",
+      "agent": "benchmarks.harbor.pinned_muse_agent:PinnedMuseAgent",
+      "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 1,
+      "inputTokens": 1134580,
+      "cachedTokens": 1024597,
+      "uncachedInputTokens": 109983,
+      "cacheHitPercent": 90.31,
+      "outputTokens": 15001,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.016047694,
+      "apiEquivalentCostAsReportedUsd": 0.016047694,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 1134580,
+          "cachedInputTokens": 1024597,
+          "uncachedInputTokens": 109983,
+          "outputTokens": 15001,
+          "reasoningTokens": 8865
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0109983,
+        "cachedInputUsd": 0.002049194,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0030002,
+        "totalUsd": 0.016047694,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 1134580,
+            "cachedInputTokens": 1024597,
+            "outputTokens": 15001,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.016047694
+          }
+        }
+      },
+      "usageAccountingComplete": false,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": true,
+      "muse": {
+        "reasoningTokens": 8865,
+        "usageSource": "session-logs",
+        "usageRecords": 42,
+        "adapterMatchesSessionLogs": true,
+        "runUsageMatchesMain": true,
+        "models": [
+          "muse-spark-1.3-contributor"
+        ],
+        "modelConfirmed": true,
+        "contributorModelUsed": false,
+        "terminal": {
+          "terminal": "failed",
+          "reason": "transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts)"
+        },
+        "exitStatus": 1,
+        "byRole": {
+          "main": {
+            "input_tokens": 857292,
+            "cached_tokens": 811303,
+            "output_tokens": 4056,
+            "reasoning_tokens": 1380
+          },
+          "observers": {
+            "input_tokens": 277288,
+            "cached_tokens": 213294,
+            "output_tokens": 10945,
+            "reasoning_tokens": 7485
+          },
+          "subagents": {
+            "input_tokens": 0,
+            "cached_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0
+          }
+        },
+        "calls": {
+          "main": 24,
+          "observers": 18,
+          "subagents": 0
+        },
+        "builds": [
+          "1.4.14 (dec7d7497f)"
+        ],
+        "activeTools": [
+          "workflow",
+          "read_file",
+          "search",
+          "write_file",
+          "edit_file",
+          "read_memory",
+          "add_memory",
+          "edit_memory",
+          "work_stop",
+          "work_list",
+          "bash",
+          "bash_input",
+          "monitor",
+          "cron_create",
+          "cron_delete",
+          "cron_list",
+          "get_goal",
+          "create_goal",
+          "update_goal",
+          "report_progress",
+          "image_generation",
+          "subagent_spawn",
+          "subagent_status",
+          "subagent_send_message",
+          "subagent_wait",
+          "subagent_read_result",
+          "subagent_cancel",
+          "read_skill",
+          "work_status",
+          "snooze_reminder",
+          "write_todos"
+        ],
+        "reminderRoster": [
+          {
+            "id": "skill-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "low",
+            "blocking": null
+          },
+          {
+            "id": "todo-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "medium",
+            "blocking": null
+          },
+          {
+            "id": "goal-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          },
+          {
+            "id": "verify-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          }
+        ],
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "unrecordedChildren": [
+          {
+            "kind": "reminder",
+            "agent": "skill-reminder",
+            "childSessionId": "01a18e36-f489-7243-9f1e-01e27c8e8587",
+            "state": "failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))"
+          },
+          {
+            "kind": "reminder",
+            "agent": "todo-reminder",
+            "childSessionId": "01a18e36-f4f1-7e01-a668-b74465327fba",
+            "state": "failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))"
+          }
+        ],
+        "endOfRunReminders": null,
+        "inFlightModelCalls": 0,
+        "workspaceInstructions": [],
+        "workspaceRoot": "/app",
+        "nativeOnlyInstructions": [],
+        "nativeOnlyInstructionsTruncated": false,
+        "apiEquivalentCostWithEstimateUsd": 0.016839508,
+        "keyFoundInLogs": [
+          "muse-code.jsonl",
+          "muse-export.json",
+          "muse-sessions\\.msp-view-g6\\fdcb1369-0b8e-416b-a931-e59190ba6c43\\journal-00000000.bin",
+          "muse-sessions\\2026\\10\\30\\fdcb1369-0b8e-416b-a931-e59190ba6c43\\session.jsonl",
+          "muse-sessions\\2026\\10\\30\\fdcb1369-0b8e-416b-a931-e59190ba6c43\\tool-outputs\\.spool\\call_01a18e1dc8ab77d996d2d64bfdbd18d0-bash.txt.tmp"
+        ],
+        "problems": [
+          "2 linked child run(s) left no usage record, so the cost is a lower bound: skill-reminder (failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))) x1, todo-reminder (failed (model failed: transport error: error sending request for url (https://api.meta.ai/v1/responses) (after 4 provider attempts))) x1"
+        ]
+      },
+      "providerRetries": {
+        "retries": 3,
+        "rateLimited": 0,
+        "networkRetries": 3,
+        "retryWaitMs": 1750,
+        "endedInRateLimitWait": false,
+        "byKind": {
+          "transport": 3
+        },
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "mainRun": {
+          "retries": 3,
+          "rateLimited": 0,
+          "networkRetries": 3,
+          "retryWaitMs": 1750,
+          "byKind": {
+            "transport": 3
+          }
+        },
+        "unloggedReminderRuns": 20,
+        "lowerBound": true
+      },
+      "reward": 0,
+      "taskChecksum": "4ce580cd8bb8c7d62760e5980d0b0c2c0e8125e55aecb86169ac23dffd0cc1f8",
+      "agentVersion": "1.4.14-R7309.1",
+      "setupMs": 25726,
+      "agentExecutionMs": 1673576,
+      "verifierMs": 9504,
+      "exceptionType": "NonZeroAgentExitCodeError",
+      "exceptionMessage": "[sealed until comparison completes]",
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "muse-code__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+          "n_trials": 1,
+          "n_errors": 1,
+          "metrics": [
+            {
+              "mean": 0
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "0.0": [
+                "extract-moves-from-video__fkrAYFi"
+              ]
+            }
+          },
+          "exception_stats": {
+            "NonZeroAgentExitCodeError": [
+              "extract-moves-from-video__fkrAYFi"
+            ]
+          }
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 0,
+        "passed": 0,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 0
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 7,
+        "writtenNetworkCode": 0,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 2,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 3,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 20,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "verifier-path"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 254,
+            "snippet": "ls /usr/bin/ | tail -n 200; echo ---; ls /installed-agent/ 2>&1; ls /home/ 2>&1; apt list --installed 2>/dev/null | head -n 50",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "verifier-path"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 289,
+            "snippet": "ls /bin/ 2>&1 | head -n 100; echo ===; command -v curl wget python3 pip apt-get; echo exit:$?; ls /installed-agent/ -R 2>&1 | head -n 50; ls /home/ubuntu 2>&1 | head",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 324,
+            "snippet": "apt-get update 2>&1 | head -n 30",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "remote-shell"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 407,
+            "snippet": "perl -e 'print $];' 2>&1; echo; perl -MLWP::Simple -e 'print \"LWP ok\\n\"' 2>&1; echo ---; bash -c 'exec 3<>/dev/tcp/8.8.8.8/53 && echo TCP-OK' 2>&1; echo ---; getent hosts www.youtube.com 2>&1; cat /etc/resolv.conf 2>&1",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 578,
+            "snippet": "apt-get install -y curl python3 python3-pip ffmpeg 2>&1 | tail -n 20",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 674,
+            "snippet": "command -v curl python3 ffmpeg; echo ---; dpkg -l curl python3 ffmpeg 2>&1 | head",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 708,
+            "snippet": "sleep 90; echo tick2; command -v curl python3; dpkg -l curl 2>&1 | head -3",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-b/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-extract-moves-from-video-20261030T184019Z/extract-moves-from-video__fkrAYFi/agent/muse-sessions/2026/10/30/fdcb1369-0b8e-416b-a931-e59190ba6c43/session.jsonl",
+            "line": 1009,
+            "snippet": "sleep 240; echo tick6; du -sh /var/cache/apt/archives/ 2>&1; ps aux | grep -E \"apt|dpkg\" | grep -v grep; command -v curl python3",
+            "source": "muse"
+          }
+        ]
+      }
+    }
+  ]
+}

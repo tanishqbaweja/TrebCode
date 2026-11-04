@@ -1,0 +1,551 @@
+{
+  "pairId": "tb2-pair-muse-spark-1-3-contributor-high-default-protein-assembly-20261030T200625Z",
+  "dataset": "terminal-bench/terminal-bench-2@1",
+  "task": "protein-assembly",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": null,
+  "localTaskPath": null,
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-30T20:06:25.934Z",
+    "completed": true,
+    "qualifiedTask": "terminal-bench/protein-assembly",
+    "taskCount": 89,
+    "datasetVersion": "1.0.0",
+    "datasetRevision": "1",
+    "datasetContentHash": "sha256:c6fc2e2382c1dbae99b2d5ecd2f4f4a60c3c01e0d84642d69b4afd92e99d078b",
+    "attempts": 1,
+    "finishedAt": "2026-10-30T20:06:30.482Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeContextPolicy": {
+    "catalogContextWindow": null,
+    "operatingContextWindow": null,
+    "serverCompactionThreshold": null,
+    "serverCompactionArming": {
+      "armAtMaxObservedInputTokens": null,
+      "staysArmed": true
+    },
+    "retroactiveOpenAiReadCooling": true,
+    "catalogLookup": {
+      "outcome": "no window listed",
+      "window": null,
+      "status": null,
+      "reason": null
+    }
+  },
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "8fe540b20ec8a6c0d76dfd8241718d21ade8e963",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "nativePinnedNodeVersion": "22.23.3",
+  "nativePinnedNodeTarballSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+  "comparisonLanes": [
+    "native-meta"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeAdapterSha256": "aab42d5f0e5ceecaa3cbf78e5d96dc9c94c7a8b4dcd787d7d29e72fbe102246c",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeMetaBundleNormalizedSha256": "1bfec0e973ad831538616deafe267a999e513a1891a4b59e33b46cefc0ddb850",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "task.toml docker_image",
+        "image": "alexgshaw/protein-assembly:20251031",
+        "id": "sha256:94de701b57e7ecfdbada6044f8534876e4b58874f8f313184dadc4d7533e0818",
+        "repoDigests": [
+          "alexgshaw/protein-assembly@sha256:94de701b57e7ecfdbada6044f8534876e4b58874f8f313184dadc4d7533e0818"
+        ]
+      },
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "python:3.13-slim-bookworm",
+        "id": null,
+        "repoDigests": null
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "native-meta",
+      "harness": "native",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z",
+      "status": "finished",
+      "startedAt": "2026-10-30T20:06:30.496Z",
+      "finishedAt": "2026-10-30T20:21:02.751Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-30T20:21:02.916Z",
+  "jobs": [
+    {
+      "harness": "native",
+      "label": "native-meta",
+      "agent": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+      "jobName": "tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 1702475,
+      "cachedTokens": 1622809,
+      "uncachedInputTokens": 79666,
+      "cacheHitPercent": 95.32,
+      "outputTokens": 38768,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.018965818000000002,
+      "apiEquivalentCostAsReportedUsd": 0.018965818000000002,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 1702475,
+          "cachedInputTokens": 1622809,
+          "uncachedInputTokens": 79666,
+          "outputTokens": 38768,
+          "reasoningTokens": 0
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0079666,
+        "cachedInputUsd": 0.003245618,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0077536,
+        "totalUsd": 0.018965818000000002,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 1702475,
+            "cachedInputTokens": 1622809,
+            "outputTokens": 38768,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.018965818000000002
+          }
+        },
+        "usageAccountingComplete": true,
+        "unaccountedProviderRequests": 0,
+        "totalUsdIsLowerBound": false
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0
+        },
+        "lowerBound": false
+      },
+      "wireModels": [
+        "muse-spark-1.3-contributor"
+      ],
+      "cachedOverInputRecords": 0,
+      "reward": 1,
+      "taskChecksum": "48ec5102d0579c625f7a5f650403f74810a84fddd887df75f2901aa059ff9946",
+      "agentVersion": "trebell-native-harbor/1",
+      "setupMs": 6121,
+      "agentExecutionMs": 711334,
+      "verifierMs": 143194,
+      "modelTurns": 41,
+      "toolCalls": 42,
+      "providerRequests": 41,
+      "effectiveServiceTiers": [
+        "auto"
+      ],
+      "reasoningContext": "current_turn",
+      "effectiveReasoningContexts": [],
+      "reasoningOutputTokens": 22969,
+      "cacheWriteInputTokens": 0,
+      "cacheCarryover": {
+        "transitions": 40,
+        "priorRequestInputTokens": 1623892,
+        "knownCachedPriorTokens": 1546664,
+        "retainedKnownCachedTokens": 1546664,
+        "lostKnownCachedTokens": 0,
+        "percent": 100
+      },
+      "strategy": {
+        "firstEditAtMs": 692491,
+        "editCount": 1,
+        "convergenceCheckpoints": 0,
+        "deliverableCheckpoints": 0,
+        "deliverableEscalations": 0,
+        "persistentArtifactSemanticAudits": 0,
+        "globalConstraintPlanningCheckpoints": 0,
+        "globalConstraintCommitBlocks": 0,
+        "globalConstraintCommitAudits": 0,
+        "batchEvidenceClosureAuditRequests": 0,
+        "batchEvidenceClosureAuditCompletions": 0,
+        "batchEvidenceClosureAuditBlocks": 0,
+        "batchEvidencePrecommitGateRequests": 0,
+        "batchEvidencePrecommitGateChecks": 0,
+        "batchEvidencePrecommitGateBlocks": 0,
+        "batchEvidencePrecommitGateRetries": 0,
+        "batchEvidencePrecommitGateOutputCapEvents": 0,
+        "batchEvidencePrecommitGateOutputCapRetries": 0,
+        "batchEvidencePrecommitGateOutputTokenBudget": 0,
+        "batchEvidencePostcommitGateSkips": 0,
+        "batchEvidenceCommitValidationCarryovers": 0,
+        "implementationPressureEvents": 0,
+        "actionOutputCaps": 41,
+        "actionOutputCapRelaxations": 0,
+        "convergenceCallsBlocked": 0,
+        "postEditProbeBatchCheckpoints": 0,
+        "postEditProbeCallsBlocked": 0,
+        "assumptionAuditCheckpoints": 0,
+        "abstractionBoundaryEscalations": 0,
+        "abstractionRepairVerificationCheckpoints": 0,
+        "abstractionRepairVerificationEvidence": 0,
+        "abstractionRepairVerificationGates": 0,
+        "abstractionRepairVerified": 0,
+        "abstractionRepairVerificationRejected": 0,
+        "residualStructureCheckpoints": 0,
+        "completionGateChecks": 0,
+        "completionGateContextCompactions": 0,
+        "completionGateControlMessagesDropped": 0,
+        "completionGateControlCharsDropped": 0,
+        "completionGateCachePrefixPreservations": 0,
+        "completionGateControlMessagesPreservedForCache": 0,
+        "completionGateControlCharsPreservedForCache": 0,
+        "completionGateOutputCapEvents": 0,
+        "completionGateOutputCapRetries": 0,
+        "completionGateOutputTokenBudget": 0,
+        "completionGateInvalidFailClosed": 0,
+        "completionArtifactConstraintAuditBlocks": 0,
+        "completionGateRecoveries": 0,
+        "completionRecoveryEvidenceUses": 0,
+        "completionRecoveryEvidenceCallsBlocked": 0,
+        "completionRecoveryPostEditVerificationUses": 0,
+        "completionRecoveryStrategyResets": 0,
+        "completionRecoveryResidualFactorizations": 0,
+        "completionRecoveryEditUses": 0,
+        "completionRecoveryUnsupportedEditsSkipped": 0,
+        "completionRecoveryCandidateSnapshots": 0,
+        "completionRecoverySnapshotAbsentPaths": 0,
+        "completionRecoveryIncumbentRestores": 0,
+        "completionRecoveryIncumbentRestoreFailures": 0,
+        "completionRecoveryExhaustions": 0,
+        "completionRecoveryTerminalRepairGraces": 0,
+        "completionRecoveryEvidenceThenEditWindows": 0,
+        "completionRecoveryDependentEditVerificationBlocks": 0,
+        "completionRecoveryEditsBlocked": 0,
+        "completionRecoveryNonEditCallsBlocked": 0,
+        "completionRecoveryEditDebtsUnpaid": 0,
+        "postEditEvidenceCheckpoints": 0,
+        "postEditEvidenceEscalations": 0,
+        "postEditEvidenceCallsBlocked": 0,
+        "revisionChurnEscalations": 0,
+        "revisionChurnEditsBlocked": 0,
+        "selfAdmittedVerificationGaps": 0,
+        "selfAdmittedCompletionGaps": 0
+      },
+      "budgets": {
+        "maxModelTurns": 500,
+        "maxToolCalls": 5000,
+        "maxWallTimeMs": null
+      },
+      "contextPolicy": {
+        "catalogContextWindow": null,
+        "operatingContextWindow": null,
+        "serverCompactionThreshold": null,
+        "serverCompactionArming": {
+          "armAtMaxObservedInputTokens": null,
+          "staysArmed": true
+        },
+        "retroactiveOpenAiReadCooling": true,
+        "catalogLookup": {
+          "outcome": "no window listed",
+          "window": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "trebell-native__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 1
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "1.0": [
+                "protein-assembly__Momvdfq"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 1
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 30,
+        "writtenNetworkCode": 0,
+        "externalHosts": [
+          "data.rcsb.org",
+          "www.fpbase.org",
+          "fpbase.org",
+          "api.fpbase.org",
+          "www.rcsb.org",
+          "rest.uniprot.org",
+          "files.rcsb.org",
+          "search.rcsb.org",
+          "blast.ncbi.nlm.nih.gov",
+          "www.w3.org",
+          "www.ncbi.nlm.nih.gov",
+          "use.fontawesome.com",
+          "eutils.ncbi.nlm.nih.gov"
+        ],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 0,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 37,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 24,
+            "snippet": "bash -lc for id in $(cat /app/pdb_ids.txt); do echo -n \"$id: \"; curl -s \"https://data.rcsb.org/rest/v1/core/entry/$id\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('struct',{}).get('title','?')[:120])\"; done",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 35,
+            "snippet": "bash -lc python3 -c \"import urllib.request, json; print(urllib.request.urlopen('https://data.rcsb.org/rest/v1/core/entry/2IB5', timeout=20).read()[:500])\"",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 40,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request, json\nids=open('/app/pdb_ids.txt').read().split()\nfor pid in ids:\n    try:\n        url=f'https://data.rcsb.org/rest/v1/core/entry/{pid}'\n        data=json.loads(urllib.request.urlopen(url, time",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "www.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 55,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request\nids=open('/app/pdb_ids.txt').read().split()\nfor pid in ids:\n    try:\n        url=f'https://www.rcsb.org/fasta/entry/{pid}'\n        req=urllib.request.Request(url, headers={'User-Agent':'Mozilla",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "www.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 60,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request\nfor pid in ['5WJ2','2H5Q','3KZY']:\n    url=f'https://www.rcsb.org/fasta/entry/{pid}'\n    req=urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0'})\n    data=urllib.request.urlopen(re",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 65,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request, json\nfor pid in ['5WJ2','2H5Q','3KZY']:\n    url=f'https://data.rcsb.org/rest/v1/core/polymer_entity/{pid}/1'\n    data=json.loads(urllib.request.urlopen(url, timeout=20).read())\n    print('====",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 70,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request, json\nfor pid, entid in [('5WJ2','1'),('2H5Q','1')]:\n    url=f'https://data.rcsb.org/rest/v1/core/polymer_entity/{pid}/{entid}'\n    data=json.loads(urllib.request.urlopen(url, timeout=20).read(",
+            "networkFailureSeen": false
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "python-http"
+            ],
+            "hosts": [
+              "data.rcsb.org"
+            ],
+            "file": "H:/TrebellExp-muse-c/.harbor-jobs/tb2-native-meta-muse-spark-1-3-contributor-high-protein-assembly-20261030T200625Z/protein-assembly__Momvdfq/agent/trebell-native-events.jsonl",
+            "line": 75,
+            "snippet": "bash -lc python3 << 'PY'\nimport urllib.request, json\nfor pid in ['5WJ2','2H5Q']:\n    url=f'https://data.rcsb.org/rest/v1/core/polymer_entity/{pid}/1'\n    data=json.loads(urllib.request.urlopen(url, timeout=20).read())\n    align=data.get('rc",
+            "networkFailureSeen": false
+          }
+        ]
+      }
+    }
+  ]
+}

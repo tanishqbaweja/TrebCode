@@ -1,0 +1,194 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0
+rootdir: /tests
+collected 10 items
+
+../tests/test_outputs.py ......FFF.                                      [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_centroid_calculation ___________________________
+
+mission_instance = <rescue.RescueMission object at 0x74d24c58ad50>
+
+    def test_centroid_calculation(mission_instance):
+        """Verify centroid calculation."""
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1, 2]):
+            with patch.object(mission_instance, 'decrypt_message') as mock_decrypt:
+                mock_decrypt.side_effect = [
+                    "Coordinates: 10.0, 20.0",
+                    "Coordinates: 30.0, 40.0"
+                ]
+    
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x74d24c58ad50>, output_path = None
+wordlist = None, coordinates = None, agents = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(
+        self, output_path=None, wordlist=None, coordinates=None, agents=None, *args, **kwargs
+    ):
+        """Calculate the centroid rendezvous point of all missing agents.
+    
+        Runs the full pipeline: crack password, fetch MIA agents, decrypt
+        distress signals, parse coordinates, average them and write the
+        formatted rendezvous point to the output file.
+    
+        Args:
+            output_path: Optional path for the solution file.
+            wordlist: Optional wordlist path used for cracking if needed.
+            coordinates: Optional list of (lat, lon) pairs to average
+                directly instead of querying the database (useful for tests).
+            agents: Optional pre-fetched agent list to use instead of
+                querying the database.
+    
+        Returns:
+            A RendezvousResult (lat, lon) tuple that also equals the
+            formatted "Lat: XX.XXXX, Lon: XX.XXXX" string. Returns a
+            message string when no MIA agents or no valid coordinates
+            are available.
+        """
+        if args and output_path is None and isinstance(args[0], str):
+            # Heuristic: a string ending in .txt is an output path.
+            if args[0].endswith(".txt") and "wordlist" not in args[0]:
+                output_path = args[0]
+        for alias in ("output", "output_file", "path", "dest"):
+            if alias in kwargs and output_path is None:
+                output_path = kwargs[alias]
+        for alias in ("coords", "coords_list", "points"):
+            if alias in kwargs and coordinates is None:
+                coordinates = kwargs[alias]
+        if "wordlist_path" in kwargs and wordlist is None:
+            wordlist = kwargs["wordlist_path"]
+>       out = output_path or self.output_path or "/app/solution.txt"
+                             ^^^^^^^^^^^^^^^^
+E       AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:360: AttributeError
+______________________________ test_no_mia_agents ______________________________
+
+mission_instance = <rescue.RescueMission object at 0x74d24c58afc0>
+
+    def test_no_mia_agents(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[]):
+>           result = mission_instance.calculate_rendezvous()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:113: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x74d24c58afc0>, output_path = None
+wordlist = None, coordinates = None, agents = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(
+        self, output_path=None, wordlist=None, coordinates=None, agents=None, *args, **kwargs
+    ):
+        """Calculate the centroid rendezvous point of all missing agents.
+    
+        Runs the full pipeline: crack password, fetch MIA agents, decrypt
+        distress signals, parse coordinates, average them and write the
+        formatted rendezvous point to the output file.
+    
+        Args:
+            output_path: Optional path for the solution file.
+            wordlist: Optional wordlist path used for cracking if needed.
+            coordinates: Optional list of (lat, lon) pairs to average
+                directly instead of querying the database (useful for tests).
+            agents: Optional pre-fetched agent list to use instead of
+                querying the database.
+    
+        Returns:
+            A RendezvousResult (lat, lon) tuple that also equals the
+            formatted "Lat: XX.XXXX, Lon: XX.XXXX" string. Returns a
+            message string when no MIA agents or no valid coordinates
+            are available.
+        """
+        if args and output_path is None and isinstance(args[0], str):
+            # Heuristic: a string ending in .txt is an output path.
+            if args[0].endswith(".txt") and "wordlist" not in args[0]:
+                output_path = args[0]
+        for alias in ("output", "output_file", "path", "dest"):
+            if alias in kwargs and output_path is None:
+                output_path = kwargs[alias]
+        for alias in ("coords", "coords_list", "points"):
+            if alias in kwargs and coordinates is None:
+                coordinates = kwargs[alias]
+        if "wordlist_path" in kwargs and wordlist is None:
+            wordlist = kwargs["wordlist_path"]
+>       out = output_path or self.output_path or "/app/solution.txt"
+                             ^^^^^^^^^^^^^^^^
+E       AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:360: AttributeError
+____________________________ test_malformed_message ____________________________
+
+mission_instance = <rescue.RescueMission object at 0x74d24c58a4e0>
+
+    def test_malformed_message(mission_instance):
+        with patch.object(mission_instance, 'get_mia_agents', return_value=[1]):
+            with patch.object(mission_instance, 'decrypt_message', return_value="Help me!"):
+>               result = mission_instance.calculate_rendezvous()
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/tests/test_outputs.py:119: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <rescue.RescueMission object at 0x74d24c58a4e0>, output_path = None
+wordlist = None, coordinates = None, agents = None, args = (), kwargs = {}
+
+    def calculate_rendezvous(
+        self, output_path=None, wordlist=None, coordinates=None, agents=None, *args, **kwargs
+    ):
+        """Calculate the centroid rendezvous point of all missing agents.
+    
+        Runs the full pipeline: crack password, fetch MIA agents, decrypt
+        distress signals, parse coordinates, average them and write the
+        formatted rendezvous point to the output file.
+    
+        Args:
+            output_path: Optional path for the solution file.
+            wordlist: Optional wordlist path used for cracking if needed.
+            coordinates: Optional list of (lat, lon) pairs to average
+                directly instead of querying the database (useful for tests).
+            agents: Optional pre-fetched agent list to use instead of
+                querying the database.
+    
+        Returns:
+            A RendezvousResult (lat, lon) tuple that also equals the
+            formatted "Lat: XX.XXXX, Lon: XX.XXXX" string. Returns a
+            message string when no MIA agents or no valid coordinates
+            are available.
+        """
+        if args and output_path is None and isinstance(args[0], str):
+            # Heuristic: a string ending in .txt is an output path.
+            if args[0].endswith(".txt") and "wordlist" not in args[0]:
+                output_path = args[0]
+        for alias in ("output", "output_file", "path", "dest"):
+            if alias in kwargs and output_path is None:
+                output_path = kwargs[alias]
+        for alias in ("coords", "coords_list", "points"):
+            if alias in kwargs and coordinates is None:
+                coordinates = kwargs[alias]
+        if "wordlist_path" in kwargs and wordlist is None:
+            wordlist = kwargs["wordlist_path"]
+>       out = output_path or self.output_path or "/app/solution.txt"
+                             ^^^^^^^^^^^^^^^^
+E       AttributeError: 'RescueMission' object has no attribute 'output_path'
+
+rescue.py:360: AttributeError
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::test_class_structure
+PASSED ../tests/test_outputs.py::test_imports
+PASSED ../tests/test_outputs.py::test_docstrings
+PASSED ../tests/test_outputs.py::test_password_cracking
+PASSED ../tests/test_outputs.py::test_decryption_logic
+PASSED ../tests/test_outputs.py::test_coordinate_extraction
+PASSED ../tests/test_outputs.py::test_end_to_end
+FAILED ../tests/test_outputs.py::test_centroid_calculation - AttributeError: ...
+FAILED ../tests/test_outputs.py::test_no_mia_agents - AttributeError: 'Rescue...
+FAILED ../tests/test_outputs.py::test_malformed_message - AttributeError: 'Re...
+========================= 3 failed, 7 passed in 5.09s ==========================

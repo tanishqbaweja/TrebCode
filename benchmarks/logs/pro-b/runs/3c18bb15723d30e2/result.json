@@ -1,0 +1,39 @@
+{
+    "id": "b1fb18a6-233f-478c-9b1c-f7b0b689645d",
+    "started_at": "2026-11-02T08:15:14.492009",
+    "updated_at": "2026-11-02T08:20:58.960587",
+    "finished_at": "2026-11-02T08:20:58.960587",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "recover-git-history-secrets__oVpGuer"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 659486,
+        "n_cache_tokens": 490128,
+        "n_output_tokens": 19950,
+        "cost_usd": null
+    }
+}

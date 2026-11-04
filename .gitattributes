@@ -11,3 +11,6 @@
 *.png binary
 *.ico binary
 *.icns binary
+
+# Keep benchmark artifact bytes stable for the published checksums.
+benchmarks/logs/** -text

@@ -1,0 +1,39 @@
+{
+    "id": "d93d01b0-c0e0-42f5-95eb-39922932b587",
+    "started_at": "2026-10-31T19:31:22.981610",
+    "updated_at": "2026-10-31T19:38:45.994104",
+    "finished_at": "2026-10-31T19:38:45.994104",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 0,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "muse-code__muse-spark-1.3-contributor__adhoc": {
+                "n_trials": 1,
+                "n_errors": 0,
+                "metrics": [
+                    {
+                        "mean": 1.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "1.0": [
+                            "polyglot-text-stats-script__5R83vUv"
+                        ]
+                    }
+                },
+                "exception_stats": {}
+            }
+        },
+        "n_input_tokens": 1313064,
+        "n_cache_tokens": 1145700,
+        "n_output_tokens": 35457,
+        "cost_usd": null
+    }
+}

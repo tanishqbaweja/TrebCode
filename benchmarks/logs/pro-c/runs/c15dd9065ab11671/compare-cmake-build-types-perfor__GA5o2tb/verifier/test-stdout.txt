@@ -1,0 +1,117 @@
+Get:1 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:2 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+Get:3 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [2122 kB]
+Get:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+Get:7 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [55.6 kB]
+Get:8 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1550 kB]
+Get:9 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1412 kB]
+Get:10 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+Get:11 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+Get:12 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+Get:13 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2172 kB]
+Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1741 kB]
+Get:15 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [61.7 kB]
+Get:16 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [2240 kB]
+Get:17 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+Get:18 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [36.0 kB]
+Get:19 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [669 B]
+Fetched 33.6 MB in 1min 31s (371 kB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following NEW packages will be installed:
+  curl
+0 upgraded, 1 newly installed, 0 to remove and 53 not upgraded.
+Need to get 226 kB of archives.
+After this operation, 537 kB of additional disk space will be used.
+Get:1 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 curl amd64 8.5.0-2ubuntu10.16 [226 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 226 kB in 2s (103 kB/s)
+Selecting previously unselected package curl.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 15814 files and directories currently installed.)
+Preparing to unpack .../curl_8.5.0-2ubuntu10.16_amd64.deb ...
+Unpacking curl (8.5.0-2ubuntu10.16) ...
+Setting up curl (8.5.0-2ubuntu10.16) ...
+downloading uv 0.7.13 x86_64-unknown-linux-gnu
+no checksums to verify
+installing to /root/.local/bin
+  uv
+  uvx
+everything's installed!
+
+To add $HOME/.local/bin to your PATH, either restart your shell or run:
+
+    source $HOME/.local/bin/env (sh, bash, zsh)
+    source $HOME/.local/bin/env.fish (fish)
+Initialized project `app`
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+Resolved 7 packages in 54ms
+Downloading pygments (1.2MiB)
+ Downloading pygments
+Prepared 5 packages in 93ms
+Installed 5 packages in 11ms
+ + iniconfig==2.3.1
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==8.4.1
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.4.1, pluggy-1.7.0
+rootdir: /tests
+collected 46 items
+
+../tests/test_outputs.py ..............................................  [100%]
+
+==================================== PASSES ====================================
+=========================== short test summary info ============================
+PASSED ../tests/test_outputs.py::TestResultsFileExistence::test_results_file_exists
+PASSED ../tests/test_outputs.py::TestResultsFileExistence::test_results_file_is_regular_file
+PASSED ../tests/test_outputs.py::TestResultsFileExistence::test_results_file_is_readable
+PASSED ../tests/test_outputs.py::TestResultsFileExistence::test_results_file_not_empty
+PASSED ../tests/test_outputs.py::TestBuildDirectories::test_all_build_directories_exist
+PASSED ../tests/test_outputs.py::TestBuildDirectories::test_build_directory_names_are_lowercase
+PASSED ../tests/test_outputs.py::TestBuildExecutables::test_all_executables_exist
+PASSED ../tests/test_outputs.py::TestBuildExecutables::test_all_executables_are_files
+PASSED ../tests/test_outputs.py::TestBuildExecutables::test_all_executables_are_executable
+PASSED ../tests/test_outputs.py::TestBuildExecutables::test_executables_are_not_symlinks
+PASSED ../tests/test_outputs.py::TestBuildExecutables::test_executables_have_reasonable_size
+PASSED ../tests/test_outputs.py::TestMarkdownTitle::test_title_is_first_line
+PASSED ../tests/test_outputs.py::TestMarkdownTitle::test_title_has_single_hash
+PASSED ../tests/test_outputs.py::TestMarkdownTitle::test_second_line_is_empty
+PASSED ../tests/test_outputs.py::TestMarkdownTableHeader::test_table_header_exact_format
+PASSED ../tests/test_outputs.py::TestMarkdownTableHeader::test_table_separator_format
+PASSED ../tests/test_outputs.py::TestMarkdownTableHeader::test_header_column_count
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_table_has_four_data_rows
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_all_build_types_present
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_alphabetical_order_of_build_types
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_binary_size_is_integer
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_execution_time_has_three_decimal_places
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_execution_time_is_positive
+PASSED ../tests/test_outputs.py::TestMarkdownTableData::test_execution_time_reasonable_range
+PASSED ../tests/test_outputs.py::TestSizeAnalysisSection::test_size_analysis_section_exists
+PASSED ../tests/test_outputs.py::TestSizeAnalysisSection::test_size_analysis_uses_h2
+PASSED ../tests/test_outputs.py::TestSizeAnalysisSection::test_smallest_binary_mentioned
+PASSED ../tests/test_outputs.py::TestSizeAnalysisSection::test_size_reduction_percentage_format
+PASSED ../tests/test_outputs.py::TestPerformanceAnalysisSection::test_performance_analysis_section_exists
+PASSED ../tests/test_outputs.py::TestPerformanceAnalysisSection::test_performance_analysis_uses_h2
+PASSED ../tests/test_outputs.py::TestPerformanceAnalysisSection::test_fastest_build_mentioned
+PASSED ../tests/test_outputs.py::TestPerformanceAnalysisSection::test_speedup_percentage_format
+PASSED ../tests/test_outputs.py::TestSectionOrder::test_empty_lines_before_size_analysis
+PASSED ../tests/test_outputs.py::TestSectionOrder::test_size_analysis_before_performance_analysis
+PASSED ../tests/test_outputs.py::TestDataConsistency::test_binary_sizes_match_actual_files
+PASSED ../tests/test_outputs.py::TestDataConsistency::test_debug_larger_than_release
+PASSED ../tests/test_outputs.py::TestDataConsistency::test_minsizerel_is_smallest_or_close
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_trailing_whitespace_in_data_rows
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_extra_columns
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_execution_time_not_truncated
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_no_scientific_notation
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_percentage_values_are_valid
+PASSED ../tests/test_outputs.py::TestEdgeCases::test_build_type_names_case_sensitive
+PASSED ../tests/test_outputs.py::TestCompleteOutput::test_complete_file_structure
+PASSED ../tests/test_outputs.py::TestCompleteOutput::test_minimum_line_count
+PASSED ../tests/test_outputs.py::TestCompleteOutput::test_no_placeholder_text
+============================== 46 passed in 0.08s ==============================

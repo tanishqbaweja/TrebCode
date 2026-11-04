@@ -1,0 +1,522 @@
+{
+  "pairId": "tb2-pair-muse-spark-1-3-contributor-high-default-configure-git-webserver-20261031T011002Z",
+  "dataset": "terminal-bench/terminal-bench-2@1",
+  "task": "configure-git-webserver",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": null,
+  "localTaskPath": null,
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-10-31T01:10:05.469Z",
+    "completed": true,
+    "qualifiedTask": "terminal-bench/configure-git-webserver",
+    "taskCount": 89,
+    "datasetVersion": "1.0.0",
+    "datasetRevision": "1",
+    "datasetContentHash": "sha256:c6fc2e2382c1dbae99b2d5ecd2f4f4a60c3c01e0d84642d69b4afd92e99d078b",
+    "attempts": 1,
+    "finishedAt": "2026-10-31T01:10:09.470Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "8fe540b20ec8a6c0d76dfd8241718d21ade8e963",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "comparisonLanes": [
+    "muse-code"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeAdapterSha256": "aab42d5f0e5ceecaa3cbf78e5d96dc9c94c7a8b4dcd787d7d29e72fbe102246c",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "24df18d334d1f47931e38f0793d290338186f5df316d3f5712df96e4fb379c62",
+  "nativeMetaBundleNormalizedSha256": "1bfec0e973ad831538616deafe267a999e513a1891a4b59e33b46cefc0ddb850",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "task.toml docker_image",
+        "image": "alexgshaw/configure-git-webserver:20251031",
+        "id": "sha256:9e48389b917fd4650dda1f64406bd7198bbf20dc1c6b0e5c4d81a3c16369f88c",
+        "repoDigests": [
+          "alexgshaw/configure-git-webserver@sha256:9e48389b917fd4650dda1f64406bd7198bbf20dc1c6b0e5c4d81a3c16369f88c"
+        ]
+      },
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "ubuntu:24.04",
+        "id": null,
+        "repoDigests": null
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "musePinnedVersion": "1.4.14-R7309.1",
+  "museBuild": "Muse Code 1.4.14 (1.4.14-R7309.1)",
+  "museBinarySha256": "0809aac7cb58d18f5022b6d05e02aa1974683c0ec430e5f04d25b60ed17de2da",
+  "museLauncherSha256": "c6db294799a190ca380da274beb3b9c0e160e0da9681a3d364ce8b0e5fa3a4bc",
+  "museReleaseInfoSha256": "bff0073a555a496db1d12d341eade1c18cee56c36b0e31d909e085e00b1bb14c",
+  "museManifestSha256": "fd80486f6642fbc21760728a050e4d2f406f20370212108dd8fb93527abbb9b1",
+  "museAdapterSha256": "7a35fca9408306c29ff9119a34e0266401befdff1daedd25377b36f3207250e4",
+  "museUsageSha256": "908772bab5e724470a1bb854475153ed7e5d92d4623c0832b6b667967373c63f",
+  "museCommand": "muse exec --json --yolo --disable-web-tools --model muse-spark-1.3-contributor --reasoning-effort high --contributor-mode on --session-id <uuid4 per trial> --prompt-file /installed-agent/muse/instruction.txt",
+  "museEnvKeys": [
+    "META_API_KEY",
+    "MUSE_NO_AUTO_UPDATE"
+  ],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "muse-code",
+      "harness": "muse",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z",
+      "status": "finished",
+      "startedAt": "2026-10-31T01:10:09.487Z",
+      "finishedAt": "2026-10-31T01:17:04.803Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-10-31T01:17:05.101Z",
+  "jobs": [
+    {
+      "harness": "muse",
+      "label": "muse-code",
+      "agent": "benchmarks.harbor.pinned_muse_agent:PinnedMuseAgent",
+      "jobName": "tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 1344587,
+      "cachedTokens": 1187729,
+      "uncachedInputTokens": 156858,
+      "cacheHitPercent": 88.33,
+      "outputTokens": 22043,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.022469858000000002,
+      "apiEquivalentCostAsReportedUsd": 0.022469858000000002,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 1344587,
+          "cachedInputTokens": 1187729,
+          "uncachedInputTokens": 156858,
+          "outputTokens": 22043,
+          "reasoningTokens": 13827
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0156858,
+        "cachedInputUsd": 0.002375458,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.0044086,
+        "totalUsd": 0.022469858000000002,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 1344587,
+            "cachedInputTokens": 1187729,
+            "outputTokens": 22043,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.022469858000000002
+          }
+        }
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "muse": {
+        "reasoningTokens": 13827,
+        "usageSource": "session-logs",
+        "usageRecords": 40,
+        "adapterMatchesSessionLogs": true,
+        "runUsageMatchesMain": true,
+        "models": [
+          "muse-spark-1.3-contributor"
+        ],
+        "modelConfirmed": true,
+        "contributorModelUsed": false,
+        "terminal": {
+          "terminal": "completed",
+          "reason": null
+        },
+        "exitStatus": 0,
+        "byRole": {
+          "main": {
+            "input_tokens": 1117372,
+            "cached_tokens": 1055015,
+            "output_tokens": 9140,
+            "reasoning_tokens": 4090
+          },
+          "observers": {
+            "input_tokens": 227215,
+            "cached_tokens": 132714,
+            "output_tokens": 12903,
+            "reasoning_tokens": 9737
+          },
+          "subagents": {
+            "input_tokens": 0,
+            "cached_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_tokens": 0
+          }
+        },
+        "calls": {
+          "main": 24,
+          "observers": 16,
+          "subagents": 0
+        },
+        "builds": [
+          "1.4.14 (dec7d7497f)"
+        ],
+        "activeTools": [
+          "workflow",
+          "read_file",
+          "search",
+          "write_file",
+          "edit_file",
+          "read_memory",
+          "add_memory",
+          "edit_memory",
+          "work_stop",
+          "work_list",
+          "bash",
+          "bash_input",
+          "monitor",
+          "cron_create",
+          "cron_delete",
+          "cron_list",
+          "get_goal",
+          "create_goal",
+          "update_goal",
+          "report_progress",
+          "image_generation",
+          "subagent_spawn",
+          "subagent_status",
+          "subagent_send_message",
+          "subagent_wait",
+          "subagent_read_result",
+          "subagent_cancel",
+          "read_skill",
+          "work_status",
+          "snooze_reminder",
+          "write_todos"
+        ],
+        "reminderRoster": [
+          {
+            "id": "skill-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "low",
+            "blocking": null
+          },
+          {
+            "id": "todo-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "medium",
+            "blocking": null
+          },
+          {
+            "id": "goal-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          },
+          {
+            "id": "verify-reminder",
+            "model": "same-as-main",
+            "reasoning_effort": "high",
+            "blocking": true
+          }
+        ],
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "unrecordedChildren": [],
+        "endOfRunReminders": null,
+        "inFlightModelCalls": 0,
+        "workspaceInstructions": [],
+        "workspaceRoot": "/app",
+        "nativeOnlyInstructions": [],
+        "nativeOnlyInstructionsTruncated": false,
+        "apiEquivalentCostWithEstimateUsd": null,
+        "keyFoundInLogs": [],
+        "problems": []
+      },
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "byKind": {},
+        "rateLimitLines": 0,
+        "rateLimitEvents": 0,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0,
+          "byKind": {}
+        },
+        "unloggedReminderRuns": 14,
+        "lowerBound": true
+      },
+      "reward": 0,
+      "taskChecksum": "cf2c66b79368e4f5be614393e3766c1256c718ceff86aba9517bf7a12751c014",
+      "agentVersion": "1.4.14-R7309.1",
+      "setupMs": 29035,
+      "agentExecutionMs": 337343,
+      "verifierMs": 37396,
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "muse-code__muse-spark-1.3-contributor__terminal-bench/terminal-bench-2": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 0
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "0.0": [
+                "configure-git-webserver__95zLsCR"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 0
+      },
+      "integrity": {
+        "status": "review",
+        "logs": 3,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 10,
+        "writtenNetworkCode": 1,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 2,
+        "verifierPathReads": 0,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 18,
+        "hostedToolsOffered": [],
+        "evidence": [
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "git-network",
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1477,
+            "snippet": "git --git-dir=/git/server update-ref -d refs/heads/master; rm -f /srv/www/hello.html; git --git-dir=/git/server branch -a; ls -la /srv/www/; echo \"--- reset done, now exact user flow ---\"; rm -rf /tmp/final-check && git clone /git/server /t",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "git-history"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1526,
+            "snippet": "curl -s http://localhost:8080/hello.html | od -c | head -3; git --git-dir=/git/server update-ref -d refs/heads/master; rm -f /srv/www/hello.html; chmod -R a+rwX /git/server /srv/www; echo \"--- pristine state ---\"; git --git-dir=/git/server ",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "package-install"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 224,
+            "snippet": "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git openssh-server python3 curl iproute2",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 935,
+            "snippet": "git --version; python3 --version; /usr/sbin/sshd -V 2>&1 | head; curl --version | head -1; ss -tln 2>&1 | head",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1197,
+            "snippet": "setsid -f python3 -m http.server 8080 --directory /srv/www --bind 0.0.0.0 </dev/null >>/tmp/webserver-8080.log 2>&1; sleep 2; cat /tmp/webserver-8080.log; ss -tlnp | head -20; curl -s -o /dev/null -w \"%{http_code}\\n\" http://localhost:8080/",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "cli-fetch",
+              "git-network"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1266,
+            "snippet": "rm -rf /tmp/e2e && mkdir -p /tmp/e2e && git clone /git/server /tmp/e2e/work && cd /tmp/e2e/work && git config user.email \"test@test\" && git config user.name \"test\" && echo \"hello world\" > hello.html && git add hello.html && git commit -m \"a",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "remote-shell"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1313,
+            "snippet": "ls ~/.ssh/ 2>&1; [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N \"\" -f ~/.ssh/id_ed25519; cat ~/.ssh/id_ed25519.pub; mkdir -p ~/.ssh && cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && mkdir -p",
+            "source": "muse"
+          },
+          {
+            "kind": "command",
+            "kinds": [
+              "git-network",
+              "remote-shell"
+            ],
+            "hosts": [],
+            "file": "H:/TrebellExp-muse-d/.harbor-jobs/tb2-muse-code-muse-spark-1-3-contributor-high-configure-git-webserver-20261031T011002Z/configure-git-webserver__95zLsCR/agent/muse-sessions/2026/10/31/081c9f80-0e16-41f8-9a99-ba7461052c39/session.jsonl",
+            "line": 1350,
+            "snippet": "rm -rf /tmp/e2e-ssh && git clone -c StrictHostKeyChecking=no -c UserKnownHostsFile=/dev/null root@localhost:/git/server /tmp/e2e-ssh 2>&1; ls -la /tmp/e2e-ssh/; cat /tmp/e2e-ssh/hello.html",
+            "source": "muse"
+          }
+        ]
+      }
+    }
+  ]
+}

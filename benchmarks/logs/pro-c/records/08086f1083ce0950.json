@@ -1,0 +1,427 @@
+{
+  "pairId": "terminal-bench-pro-pair-muse-spark-1-3-contributor-high-default-secure-postgres-schema-migration-20261102T062620Z",
+  "dataset": "terminal-bench-pro@1.0",
+  "task": "secure-postgres-schema-migration",
+  "model": "muse-spark-1.3-contributor",
+  "reasoningEffort": "high",
+  "serviceTier": "default",
+  "hostedWebSearch": "disabled",
+  "setupTimeoutMultiplier": 3,
+  "agentTimeoutMultiplier": 1,
+  "verifierDownloadCache": "http://host.docker.internal:18090",
+  "localTaskRoot": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks",
+  "localTaskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\secure-postgres-schema-migration",
+  "datasetMembershipPreflight": {
+    "startedAt": "2026-11-02T06:26:20.936Z",
+    "completed": true,
+    "local": true,
+    "qualifiedTask": "secure-postgres-schema-migration",
+    "taskPath": "H:\\temp\\claude\\H--Github-Repositories-Trebell\\894cd178-4403-4810-ae68-58b76b729160\\scratchpad\\tbpro\\tasks\\secure-postgres-schema-migration",
+    "taskCount": 200,
+    "datasetVersion": "terminal-bench-pro@1.0",
+    "datasetContentHash": "9e8a53b6b7e770beaf22b60b415a5bea5483a72d641d2f93f2337e617d093b82",
+    "taskContentHash": "95086b3794aff758e50b348939f2fa28f8faa8e9c03d5e8b026a429816b092a3",
+    "files": 8,
+    "finishedAt": "2026-11-02T06:26:20.954Z"
+  },
+  "taskCachePrewarm": null,
+  "networkPolicyPreflight": {
+    "completed": true,
+    "taskTomlFound": true,
+    "noNetworkSections": [],
+    "egressControlSupported": null
+  },
+  "dockerImagePrewarm": null,
+  "nativeGateSnapshotArtifacts": [],
+  "usesBaseAgentTimeout": true,
+  "timeoutComparability": "benchmark-base",
+  "sameModel": true,
+  "sameReasoningEffort": true,
+  "sameServiceTier": true,
+  "sameHostedWebSearchPolicy": true,
+  "sequential": true,
+  "parallel": false,
+  "codexAuthMode": "both",
+  "codexInstallMode": "pinned",
+  "nativeReasoningContext": null,
+  "nativeEnvironmentRetention": "harbor-default",
+  "nativeContextPolicy": {
+    "catalogContextWindow": null,
+    "operatingContextWindow": null,
+    "serverCompactionThreshold": null,
+    "serverCompactionArming": {
+      "armAtMaxObservedInputTokens": null,
+      "staysArmed": true
+    },
+    "retroactiveOpenAiReadCooling": true,
+    "catalogLookup": {
+      "outcome": "no window listed",
+      "window": null,
+      "status": null,
+      "reason": null
+    }
+  },
+  "nativeExperiment": null,
+  "nativeExperimentSwitches": {},
+  "nativeReadoutRefusal": null,
+  "sourceGitHead": "945b5dec527ec564440f83d3d474330b8b9ddab1",
+  "sourceTrackedDirty": false,
+  "sourceTrackedChanges": [],
+  "sourceTrackedDiffSha256": null,
+  "nativePinnedNodeVersion": "22.23.3",
+  "nativePinnedNodeTarballSha256": "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af",
+  "comparisonLanes": [
+    "native-meta"
+  ],
+  "configuredComparisonLanes": [
+    "native-meta",
+    "muse-code"
+  ],
+  "nativeBundleSha256": "b117030ee91f465881624dfb6fc852e8b490347ca1536836615a0773ba771039",
+  "nativeAdapterSha256": "f55f42d87fc73e76d33b3e2fd348e3fec3a8a9b5097b4cf51b7abc7dbe763951",
+  "agentTimeoutStopSha256": "777eed31a79cfbcd28e7113a3ed9461b0bd313b3833e533a958c326f42dc5ada",
+  "caBundleSha256": "4423b0a4c38fc26490d467feb2196cf38a1af6a2867669f81e24abfe2abecb6d",
+  "pricingSnapshot": {
+    "model": "muse-spark-1.3-contributor",
+    "mode": "contributor",
+    "currency": "USD",
+    "perTokens": 1000000,
+    "rates": {
+      "input": 0.1,
+      "cachedInput": 0.002,
+      "output": 0.2
+    },
+    "longContextPremium": false,
+    "cacheWritePrice": null,
+    "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+    "verifiedAt": "2026-10-30"
+  },
+  "comparison": "meta",
+  "nativeMetaBundleSha256": "b117030ee91f465881624dfb6fc852e8b490347ca1536836615a0773ba771039",
+  "nativeMetaBundleNormalizedSha256": "9105cd8a525e1d7d426932140837c8f1afbf9c2bfca9093070d2895d278ae455",
+  "taskImages": {
+    "taskTomlFound": true,
+    "images": [
+      {
+        "role": "agent",
+        "source": "environment/Dockerfile FROM",
+        "image": "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124:t-bench-ubuntu-24-04",
+        "id": "sha256:8f1842fa67bef3818a97d89bc1dbcdc70898c73a533b92867bda39898c19f4fc",
+        "repoDigests": [
+          "skylensage-registry.cn-hangzhou.cr.aliyuncs.com/instances/1124@sha256:8f1842fa67bef3818a97d89bc1dbcdc70898c73a533b92867bda39898c19f4fc"
+        ]
+      }
+    ]
+  },
+  "metaResponseModelAliases": [],
+  "complete": true,
+  "infrastructureInterrupted": false,
+  "infrastructureComparable": true,
+  "activeHarness": null,
+  "activeJobName": null,
+  "activeLanes": [],
+  "lanes": [
+    {
+      "label": "native-meta",
+      "harness": "native",
+      "authMode": "api",
+      "serviceTier": "default",
+      "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-secure-postgres-schema-migration-20261102T062620Z",
+      "status": "finished",
+      "startedAt": "2026-11-02T06:26:20.960Z",
+      "finishedAt": "2026-11-02T06:30:52.468Z",
+      "runError": null,
+      "attempts": [
+        {
+          "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-secure-postgres-schema-migration-20261102T062620Z",
+          "status": "finished",
+          "runnerError": null,
+          "trialInfrastructureFailure": null
+        }
+      ],
+      "retryReason": null,
+      "retryCleanup": null,
+      "infrastructureFailureReason": null
+    }
+  ],
+  "updatedAt": "2026-11-02T06:30:52.599Z",
+  "jobs": [
+    {
+      "harness": "native",
+      "label": "native-meta",
+      "agent": "benchmarks.harbor.trebell_native_agent:TrebellNativeAgent",
+      "jobName": "terminal-bench-pro-native-meta-muse-spark-1-3-contributor-high-secure-postgres-schema-migration-20261102T062620Z",
+      "runError": null,
+      "runnerError": null,
+      "drainError": null,
+      "authMode": "api",
+      "serviceTier": "default",
+      "infrastructureFailureReason": null,
+      "completed": 1,
+      "errors": 0,
+      "inputTokens": 109844,
+      "cachedTokens": 96475,
+      "uncachedInputTokens": 13369,
+      "cacheHitPercent": 87.83,
+      "outputTokens": 7365,
+      "costUsd": null,
+      "apiEquivalentCostUsd": 0.00300285,
+      "apiEquivalentCostAsReportedUsd": 0.00300285,
+      "apiEquivalentCostBreakdown": {
+        "model": "muse-spark-1.3-contributor",
+        "pricing": {
+          "model": "muse-spark-1.3-contributor",
+          "mode": "contributor",
+          "currency": "USD",
+          "perTokens": 1000000,
+          "rates": {
+            "input": 0.1,
+            "cachedInput": 0.002,
+            "output": 0.2
+          },
+          "longContextPremium": false,
+          "cacheWritePrice": null,
+          "source": "https://dev.meta.ai/docs/pricing-rate-limits",
+          "verifiedAt": "2026-10-30"
+        },
+        "acceptedModels": [],
+        "usage": {
+          "inputTokens": 109844,
+          "cachedInputTokens": 96475,
+          "uncachedInputTokens": 13369,
+          "outputTokens": 7365,
+          "reasoningTokens": 0
+        },
+        "requestCount": 1,
+        "reasoningOutsideOutput": false,
+        "uncachedInputUsd": 0.0013369,
+        "cachedInputUsd": 0.00019295000000000003,
+        "cacheWriteInputUsd": 0,
+        "outputUsd": 0.001473,
+        "totalUsd": 0.00300285,
+        "inconsistentRecords": 0,
+        "byModel": {
+          "muse-spark-1.3-contributor": {
+            "inputTokens": 109844,
+            "cachedInputTokens": 96475,
+            "outputTokens": 7365,
+            "rates": {
+              "input": 0.1,
+              "cachedInput": 0.002,
+              "output": 0.2
+            },
+            "pricedAs": "muse-spark-1.3-contributor",
+            "totalUsd": 0.00300285
+          }
+        },
+        "usageAccountingComplete": true,
+        "unaccountedProviderRequests": 0,
+        "totalUsdIsLowerBound": false
+      },
+      "usageAccountingComplete": true,
+      "unaccountedProviderRequests": 0,
+      "apiEquivalentCostIsLowerBound": false,
+      "providerRetries": {
+        "retries": 0,
+        "rateLimited": 0,
+        "networkRetries": 0,
+        "retryWaitMs": 0,
+        "endedInRateLimitWait": false,
+        "mainRun": {
+          "retries": 0,
+          "rateLimited": 0,
+          "networkRetries": 0,
+          "retryWaitMs": 0
+        },
+        "lowerBound": false
+      },
+      "wireModels": [
+        "muse-spark-1.3-contributor"
+      ],
+      "cachedOverInputRecords": 0,
+      "reward": 0,
+      "taskChecksum": "595b50138f8bf4be2fde34a07f043bbfe8b5d51e86dbc85026b497e9e6baf71c",
+      "agentVersion": "trebell-native-harbor/1",
+      "setupMs": 8224,
+      "agentExecutionMs": 105080,
+      "verifierMs": 141500,
+      "modelTurns": 11,
+      "toolCalls": 11,
+      "providerRequests": 11,
+      "effectiveServiceTiers": [
+        "auto"
+      ],
+      "reasoningContext": "current_turn",
+      "effectiveReasoningContexts": [],
+      "reasoningOutputTokens": 3382,
+      "cacheWriteInputTokens": 0,
+      "cacheCarryover": {
+        "transitions": 10,
+        "priorRequestInputTokens": 95812,
+        "knownCachedPriorTokens": 83178,
+        "retainedKnownCachedTokens": 83178,
+        "lostKnownCachedTokens": 0,
+        "percent": 100
+      },
+      "strategy": {
+        "firstEditAtMs": 61552,
+        "editCount": 1,
+        "convergenceCheckpoints": 0,
+        "deliverableCheckpoints": 0,
+        "deliverableEscalations": 0,
+        "persistentArtifactSemanticAudits": 0,
+        "globalConstraintPlanningCheckpoints": 0,
+        "globalConstraintCommitBlocks": 0,
+        "globalConstraintCommitAudits": 0,
+        "batchEvidenceClosureAuditRequests": 0,
+        "batchEvidenceClosureAuditCompletions": 0,
+        "batchEvidenceClosureAuditBlocks": 0,
+        "batchEvidencePrecommitGateRequests": 0,
+        "batchEvidencePrecommitGateChecks": 0,
+        "batchEvidencePrecommitGateBlocks": 0,
+        "batchEvidencePrecommitGateRetries": 0,
+        "batchEvidencePrecommitGateOutputCapEvents": 0,
+        "batchEvidencePrecommitGateOutputCapRetries": 0,
+        "batchEvidencePrecommitGateOutputTokenBudget": 0,
+        "batchEvidencePostcommitGateSkips": 0,
+        "batchEvidenceCommitValidationCarryovers": 0,
+        "implementationPressureEvents": 0,
+        "actionOutputCaps": 11,
+        "actionOutputCapRelaxations": 0,
+        "convergenceCallsBlocked": 0,
+        "postEditProbeBatchCheckpoints": 0,
+        "postEditProbeCallsBlocked": 0,
+        "assumptionAuditCheckpoints": 0,
+        "abstractionBoundaryEscalations": 0,
+        "abstractionRepairVerificationCheckpoints": 0,
+        "abstractionRepairVerificationEvidence": 0,
+        "abstractionRepairVerificationGates": 0,
+        "abstractionRepairVerified": 0,
+        "abstractionRepairVerificationRejected": 0,
+        "residualStructureCheckpoints": 0,
+        "completionGateChecks": 0,
+        "completionGateContextCompactions": 0,
+        "completionGateControlMessagesDropped": 0,
+        "completionGateControlCharsDropped": 0,
+        "completionGateCachePrefixPreservations": 0,
+        "completionGateControlMessagesPreservedForCache": 0,
+        "completionGateControlCharsPreservedForCache": 0,
+        "completionGateOutputCapEvents": 0,
+        "completionGateOutputCapRetries": 0,
+        "completionGateOutputTokenBudget": 0,
+        "completionGateInvalidFailClosed": 0,
+        "completionArtifactConstraintAuditBlocks": 0,
+        "completionGateRecoveries": 0,
+        "completionRecoveryEvidenceUses": 0,
+        "completionRecoveryEvidenceCallsBlocked": 0,
+        "completionRecoveryPostEditVerificationUses": 0,
+        "completionRecoveryStrategyResets": 0,
+        "completionRecoveryResidualFactorizations": 0,
+        "completionRecoveryEditUses": 0,
+        "completionRecoveryUnsupportedEditsSkipped": 0,
+        "completionRecoveryCandidateSnapshots": 0,
+        "completionRecoverySnapshotAbsentPaths": 0,
+        "completionRecoveryIncumbentRestores": 0,
+        "completionRecoveryIncumbentRestoreFailures": 0,
+        "completionRecoveryExhaustions": 0,
+        "completionRecoveryTerminalRepairGraces": 0,
+        "completionRecoveryEvidenceThenEditWindows": 0,
+        "completionRecoveryDependentEditVerificationBlocks": 0,
+        "completionRecoveryEditsBlocked": 0,
+        "completionRecoveryNonEditCallsBlocked": 0,
+        "completionRecoveryEditDebtsUnpaid": 0,
+        "postEditEvidenceCheckpoints": 0,
+        "postEditEvidenceEscalations": 0,
+        "postEditEvidenceCallsBlocked": 0,
+        "revisionChurnEscalations": 0,
+        "revisionChurnEditsBlocked": 0,
+        "selfAdmittedVerificationGaps": 0,
+        "selfAdmittedCompletionGaps": 0
+      },
+      "budgets": {
+        "maxModelTurns": 500,
+        "maxToolCalls": 5000,
+        "maxWallTimeMs": null
+      },
+      "contextPolicy": {
+        "catalogContextWindow": null,
+        "operatingContextWindow": null,
+        "serverCompactionThreshold": null,
+        "serverCompactionArming": {
+          "armAtMaxObservedInputTokens": null,
+          "staysArmed": true
+        },
+        "retroactiveOpenAiReadCooling": true,
+        "catalogLookup": {
+          "outcome": "no window listed",
+          "window": null,
+          "status": null,
+          "reason": null
+        }
+      },
+      "exceptionType": null,
+      "exceptionMessage": null,
+      "recoveredFromTrialFiles": false,
+      "recoveredFromNativeEvents": false,
+      "recoveredFromCodexSessions": false,
+      "recoveredByRegrade": false,
+      "regradeTrialDir": null,
+      "evals": {
+        "trebell-native__muse-spark-1.3-contributor__adhoc": {
+          "n_trials": 1,
+          "n_errors": 0,
+          "metrics": [
+            {
+              "mean": 0
+            }
+          ],
+          "pass_at_k": {},
+          "reward_stats": {
+            "reward": {
+              "0.0": [
+                "secure-postgres-schema-migration__SsQSc6N"
+              ]
+            }
+          },
+          "exception_stats": {}
+        }
+      },
+      "verifierChecks": {
+        "trials": 1,
+        "tests": 0,
+        "passed": 0,
+        "failed": 0,
+        "pending": 0,
+        "skipped": 0,
+        "other": 0,
+        "rewardTrials": 1,
+        "officialReward": 0
+      },
+      "integrity": {
+        "status": "clean",
+        "logs": 1,
+        "hostedWebCalls": 0,
+        "hostedWebTools": [],
+        "hostedWebAttempts": 0,
+        "networkCommands": 0,
+        "writtenNetworkCode": 0,
+        "externalHosts": [],
+        "upstreamLeaks": 0,
+        "gitHistoryCommands": 0,
+        "verifierPathReads": 0,
+        "projectCopyReads": 0,
+        "userInputRequests": 0,
+        "unknownTools": [],
+        "sourceControlNetworkCalls": 0,
+        "experimentSwitches": [],
+        "unloggedCommands": 0,
+        "unauditedCommands": 0,
+        "truncatedCommands": 0,
+        "partialCommands": 0,
+        "auditedCommands": 9,
+        "hostedToolsOffered": [],
+        "evidence": []
+      }
+    }
+  ]
+}
