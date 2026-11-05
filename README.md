@@ -2,6 +2,8 @@
 
 A desktop AI coding workspace for building software, running commands and tests, reviewing changes, and checking results in a browser.
 
+This project is participating in the **Meta Global AI Developer Hackathon 2026**.
+
 Trebell Native owns the model and tool loop, with an emphasis on verified engineering results per dollar. The workspace also supports external coding harnesses, including Codex, Claude Code, OpenCode, and capability-gated integrations.
 
 ![Trebell Code workspace](docs/assets/trebell-code-workspace.png)
